@@ -14,7 +14,11 @@
 # `rg-fleet-shared` is created by bootstrap/fleet; referenced by id.
 
 resource "azapi_resource" "acr" {
-  type      = "Microsoft.ContainerRegistry/registries@2023-07-01"
+  # Preview API version is required: `softDeletePolicy`,
+  # `azureADAuthenticationAsArmPolicy`, and `anonymousPullEnabled` are not
+  # exposed in stable schemas as of azapi 2.9. Re-evaluate when the
+  # 2024-xx-xx stable api-version that absorbs these graduates.
+  type      = "Microsoft.ContainerRegistry/registries@2023-11-01-preview"
   name      = local.derived.acr_name
   parent_id = local.derived.fleet_shared_rg_id
   location  = local.derived.acr_location
