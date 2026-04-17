@@ -32,7 +32,7 @@ terraform {
 
 provider "azapi" {
   tenant_id       = local.fleet.tenant_id
-  subscription_id = local._fleet_doc.acr.subscription_id
+  subscription_id = local.fleet_doc.acr.subscription_id
   # Operator runs `az login` (interactive) before `terraform apply`.
   use_cli = true
 }

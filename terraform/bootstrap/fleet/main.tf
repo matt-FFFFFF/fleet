@@ -30,35 +30,31 @@
 # -----------------------------------------------------------------------------
 
 locals {
-  _fleet_yaml_path = "${path.module}/../../../clusters/_fleet.yaml"
-  _fleet_doc       = yamldecode(file(local._fleet_yaml_path))
+  fleet_yaml_path = "${path.module}/../../../clusters/_fleet.yaml"
+  fleet_doc       = yamldecode(file(local.fleet_yaml_path))
 
-  fleet        = local._fleet_doc.fleet
-  environments = local._fleet_doc.environments
-  aad          = local._fleet_doc.aad
-  observ       = local._fleet_doc.observability
-  dns          = local._fleet_doc.dns
+  fleet = local.fleet_doc.fleet
 
   # Derived names (see docs/naming.md; must match terraform/config-loader/load.sh).
   derived = {
     state_storage_account = coalesce(
-      try(local._fleet_doc.state.storage_account_name_override, ""),
+      try(local.fleet_doc.state.storage_account_name_override, ""),
       substr("st${local.fleet.name}tfstate", 0, 24),
     )
-    state_resource_group = local._fleet_doc.state.resource_group
-    state_container      = local._fleet_doc.state.containers.fleet
-    state_subscription   = local._fleet_doc.state.subscription_id
+    state_resource_group = local.fleet_doc.state.resource_group
+    state_container      = local.fleet_doc.state.containers.fleet
+    state_subscription   = local.fleet_doc.state.subscription_id
 
     acr_name = coalesce(
-      try(local._fleet_doc.acr.name_override, ""),
+      try(local.fleet_doc.acr.name_override, ""),
       "acr${local.fleet.name}shared",
     )
-    acr_resource_group  = local._fleet_doc.acr.resource_group
-    acr_subscription_id = local._fleet_doc.acr.subscription_id
-    acr_location        = local._fleet_doc.acr.location
+    acr_resource_group  = local.fleet_doc.acr.resource_group
+    acr_subscription_id = local.fleet_doc.acr.subscription_id
+    acr_location        = local.fleet_doc.acr.location
 
     fleet_kv_name = coalesce(
-      try(local._fleet_doc.keyvault.name_override, ""),
+      try(local.fleet_doc.keyvault.name_override, ""),
       substr("kv-${local.fleet.name}-fleet", 0, 24),
     )
 

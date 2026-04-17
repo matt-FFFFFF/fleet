@@ -44,11 +44,6 @@ variable "team_template_repo" {
   default = "team-repo-template"
 }
 
-variable "fleet_repo" {
-  type    = string
-  default = "fleet"
-}
-
 provider "github" { owner = var.github_org }
 
 resource "github_repository" "team" {

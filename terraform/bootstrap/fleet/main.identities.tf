@@ -26,7 +26,7 @@ resource "azapi_resource" "uami_fleet_stage0" {
   parent_id = azapi_resource.rg_fleet_shared.id
   location  = local.derived.acr_location
 
-  body                   = { properties = {} }
+  body                   = {}
   response_export_values = ["properties.clientId", "properties.principalId"]
 }
 
@@ -36,7 +36,7 @@ resource "azapi_resource" "uami_fleet_meta" {
   parent_id = azapi_resource.rg_fleet_shared.id
   location  = local.derived.acr_location
 
-  body                   = { properties = {} }
+  body                   = {}
   response_export_values = ["properties.clientId", "properties.principalId"]
 }
 
@@ -74,12 +74,14 @@ resource "azapi_resource" "fic_meta" {
 #
 # Built-in role GUIDs (subscription-scope resource IDs):
 #   Contributor                          b24988ac-6180-42a0-ab88-20f7382dd24c
-#   User Access Administrator            18d7d88d-d35e-4fb5-a5c3-7773c20a72d9
 #   Storage Blob Data Contributor        ba92f5b4-2d11-453d-a403-e96b0029c9fe
+#
+# User Access Administrator (18d7d88d-d35e-4fb5-a5c3-7773c20a72d9) is not
+# used by bootstrap/fleet; reintroduce when Stage 0 starts delegating RBAC
+# assignments to the fleet-meta identity.
 
 locals {
   role_contributor    = "b24988ac-6180-42a0-ab88-20f7382dd24c"
-  role_uaa            = "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9"
   role_blob_data_ctrb = "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
 }
 

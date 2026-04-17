@@ -1,0 +1,52 @@
+name: tflint
+
+# Runs tflint recursively across the repo with the shared .tflint.hcl
+# config. Catches unused declarations, naming-convention drift, missing
+# provider version pins, and deprecated syntax without needing Azure or
+# GitHub credentials (no terraform plan).
+#
+# Template-side workflow: init-fleet.sh keeps this file in the adopter
+# repo because the discipline is useful there too. If you disagree,
+# delete the workflow after init or add it to init-fleet.sh's cleanup
+# list.
+
+on:
+  pull_request:
+    paths:
+      - 'terraform/**'
+      - 'init/**'
+      - '.tflint.hcl'
+      - '.github/workflows/tflint.yaml'
+  push:
+    branches: [main]
+    paths:
+      - 'terraform/**'
+      - 'init/**'
+      - '.tflint.hcl'
+
+jobs:
+  tflint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup tflint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.61.0
+
+      - name: Cache tflint plugins
+        uses: actions/cache@v4
+        with:
+          path: ~/.tflint.d/plugins
+          # Key on the config file — changes to rulesets/plugins bust the
+          # cache automatically.
+          key: tflint-${{ runner.os }}-${{ hashFiles('.tflint.hcl') }}
+          restore-keys: |
+            tflint-${{ runner.os }}-
+
+      - name: Install plugins
+        run: tflint --init --config=$PWD/.tflint.hcl
+
+      - name: Run tflint (recursive)
+        run: tflint --recursive --config=$PWD/.tflint.hcl --color

@@ -27,12 +27,7 @@ variable "fleet_repo_visibility" {
   default     = "private"
 }
 
-variable "gh_repo_module_source" {
-  description = <<-EOT
-    Source of the org-maintained GH-repo Terraform module. Left as a
-    placeholder for Phase 1 — the module wiring is stubbed (see
-    main.github.tf). Replace with the published module path when known.
-  EOT
-  type        = string
-  default     = "PLACEHOLDER: github.com/<org>/terraform-github-repo//module"
-}
+# NOTE: `gh_repo_module_source` was declared here in an earlier draft as a
+# placeholder for the org-maintained GH-repo module. Removed because tflint
+# flagged it as unused and we prefer not to carry dead inputs. Reintroduce
+# when the module wiring in main.github.tf is actually swapped in.

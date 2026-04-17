@@ -114,6 +114,9 @@ Last updated: 2026-04-17 · template-init pivoted to Terraform module.
 - [x] `.github/workflows/status-check.yaml` — enforces STATUS
       discipline on PRs touching tracked paths (template-side only;
       removed by `init-fleet.sh` for adopters).
+- [x] `.github/workflows/tflint.yaml` + `.tflint.hcl` — recursive
+      tflint on every PR; `terraform_unused_declarations` and
+      `terraform_naming_convention` enforced. Kept in adopter repos.
 
 ## §11 Operator UX
 
