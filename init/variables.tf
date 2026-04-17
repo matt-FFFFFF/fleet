@@ -53,6 +53,27 @@ variable "github_repo" {
   }
 }
 
+variable "codeowners_owner" {
+  description = <<-EOT
+    CODEOWNERS owner for the default (`*`) rule. One of:
+      - `<org>/<team>`  — e.g. `acme/platform-engineers` (org-owned repo with a team)
+      - `<user>`        — e.g. `octocat`                 (personal or fallback)
+    Leave empty to default to `@${"$"}{github_org}`, which resolves for both
+    user-owned and org-owned repos without requiring a pre-existing team.
+  EOT
+  type        = string
+  default     = ""
+  validation {
+    # Either empty (fall back to github_org) or a valid org/team or user.
+    # Team form: `<org>/<team>`; user form: `<user>`.
+    condition = (
+      var.codeowners_owner == "" ||
+      can(regex("^[A-Za-z0-9]+(-[A-Za-z0-9]+)*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$", var.codeowners_owner))
+    )
+    error_message = "codeowners_owner must be empty, `<user>`, or `<org>/<team>` (alnum/hyphen segments)."
+  }
+}
+
 variable "team_template_repo" {
   description = "Name of the team template repo on GitHub."
   type        = string

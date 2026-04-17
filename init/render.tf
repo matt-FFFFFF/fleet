@@ -22,6 +22,10 @@ locals {
     sub_nonprod        = var.sub_nonprod
     sub_prod           = var.sub_prod
     dns_fleet_root     = var.dns_fleet_root
+    # CODEOWNERS default-rule owner. Empty input falls back to the org/user
+    # itself (guaranteed to resolve); adopters can override with a team spec
+    # like `acme/platform-engineers`.
+    codeowners_owner = var.codeowners_owner != "" ? var.codeowners_owner : var.github_org
   }
 }
 
