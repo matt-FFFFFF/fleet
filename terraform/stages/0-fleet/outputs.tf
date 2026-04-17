@@ -31,7 +31,7 @@ output "fleet_keyvault_name" {
 }
 
 output "fleet_resource_group_name" {
-  description = "Informational — rg-fleet-shared."
+  description = "Informational — fleet-shared resource group name (default: rg-fleet-shared; sourced from _fleet.yaml.acr.resource_group)."
   value       = local.derived.acr_resource_group
 }
 
@@ -74,10 +74,10 @@ output "kargo_mgmt_uami_client_id" {
   value       = azapi_resource.uami_kargo_mgmt.output.properties.clientId
 }
 
-# --- Derived names (kept for CI parity check; see PLAN §16.9.10) ------------
+# --- Derived names (kept for intended CI parity check; see PLAN §16.9.10) --
 
 output "derived_names" {
-  description = "Computed resource names. Diffed against terraform/config-loader/load.sh output in CI."
+  description = "Computed resource names. Intended to be diffed against terraform/config-loader/load.sh output in CI once the parity check in PLAN §16.9.10 lands."
   value = {
     acr_name      = local.derived.acr_name
     fleet_kv_name = local.derived.fleet_kv_name

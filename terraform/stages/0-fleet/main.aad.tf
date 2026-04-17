@@ -14,8 +14,10 @@
 # The RP `client_secret` on each app exists solely for the OIDC auth-code
 # flow (human SSO login) — Argo/Dex upstream does not yet support
 # `client_assertion` RP auth. We manage exactly the Argo secret here:
-#   - azuread_application_password with end_date_relative = "2160h" (90d)
-#   - rotate_when_changed keyed off a time_rotating resource (60d cadence)
+#   - azuread_application_password with end_date anchored to the
+#     time_rotating resource via timeadd(..., "2160h") (90d validity)
+#   - rotate_when_changed keyed off the same time_rotating resource
+#     (60d cadence)
 #   - create-before-destroy — old secret remains valid during the rotation
 #     window so Argo (ESO-synced) does not see a gap
 #   - resulting .value written to the fleet KV as a secret version
