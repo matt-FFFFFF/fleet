@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.9.0"
+  required_version = "~> 1.9"
 
   required_providers {
     azapi = {
@@ -24,13 +24,13 @@ terraform {
 }
 
 provider "azapi" {
-  tenant_id       = var.fleet.tenant_id
-  subscription_id = var.environment.subscription_id
+  tenant_id       = local.fleet.tenant_id
+  subscription_id = local.environment.subscription_id
   use_oidc        = true # authenticating as uami-fleet-meta via GitHub OIDC
 }
 
 provider "github" {
-  owner = var.fleet.github_org
+  owner = local.fleet.github_org
   # GITHUB_TOKEN env var in CI — sourced from the fleet-meta GitHub App
   # installation token (via actions/create-github-app-token).
 }

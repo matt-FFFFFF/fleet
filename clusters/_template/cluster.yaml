@@ -9,7 +9,8 @@
 
 cluster:
   role: workload                                    # management | workload
-  subscription_id: <sub-fleet-nonprod>
+  # subscription_id is inherited from _fleet.yaml.environments.<env>;
+  # override here only if a single cluster lives in a different sub.
   resource_group: rg-aks-<env>-<region>-<NN>
 
 networking:

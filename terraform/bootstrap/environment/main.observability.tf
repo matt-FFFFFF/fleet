@@ -1,7 +1,7 @@
 # main.observability.tf
 #
 # Per-env observability stack: NSP + AMW + DCE + Grafana + PE + Action Group.
-# All resources scoped to var.environment.subscription_id (the env's sub).
+# All resources scoped to local.environment.subscription_id (the env's sub).
 #
 # NSP is still in preview in several regions — verify availability before
 # apply. Fallback = AMPLS; see PLAN §15.
@@ -12,14 +12,14 @@
 # For Phase 1 the values default to placeholder strings.
 
 locals {
-  amw_name     = "amw-${var.fleet.name}-${var.env}"
-  dce_name     = "dce-${var.fleet.name}-${var.env}"
-  amg_name     = "amg-${var.fleet.name}-${var.env}"
-  nsp_name     = "nsp-${var.fleet.name}-${var.env}"
-  pe_name      = "pe-amg-${var.fleet.name}-${var.env}"
-  ag_name      = "ag-${var.fleet.name}-${var.env}"
-  ag_short     = substr("${var.fleet.observability.action_group.short_name_prefix}${var.env}", 0, 12)
-  pdns_grafana = var.fleet.observability.network_isolation.grafana_private_dns_zone
+  amw_name     = "amw-${local.fleet.name}-${var.env}"
+  dce_name     = "dce-${local.fleet.name}-${var.env}"
+  amg_name     = "amg-${local.fleet.name}-${var.env}"
+  nsp_name     = "nsp-${local.fleet.name}-${var.env}"
+  pe_name      = "pe-amg-${local.fleet.name}-${var.env}"
+  ag_name      = "ag-${local.fleet.name}-${var.env}"
+  ag_short     = substr("${local.observ.action_group.short_name_prefix}${var.env}", 0, 12)
+  pdns_grafana = local.observ.network_isolation.grafana_private_dns_zone
 }
 
 # --- NSP ---------------------------------------------------------------------
@@ -28,7 +28,7 @@ resource "azapi_resource" "nsp" {
   type      = "Microsoft.Network/networkSecurityPerimeters@2023-08-01-preview"
   name      = local.nsp_name
   parent_id = azapi_resource.rg_env_obs.id
-  location  = var.location
+  location  = local.location
 
   body = {
     properties = {}
@@ -38,7 +38,7 @@ resource "azapi_resource" "nsp" {
 
 resource "azapi_resource" "nsp_profile" {
   type      = "Microsoft.Network/networkSecurityPerimeters/profiles@2023-08-01-preview"
-  name      = var.fleet.observability.network_isolation.nsp_profile_name
+  name      = local.observ.network_isolation.nsp_profile_name
   parent_id = azapi_resource.nsp.id
 
   body = {
@@ -78,11 +78,11 @@ resource "azapi_resource" "amw" {
   type      = "Microsoft.Monitor/accounts@2023-04-03"
   name      = local.amw_name
   parent_id = azapi_resource.rg_env_obs.id
-  location  = var.location
+  location  = local.location
 
   body = {
     properties = {
-      publicNetworkAccess = var.fleet.observability.monitor_workspace.public_network_access
+      publicNetworkAccess = local.observ.monitor_workspace.public_network_access
     }
   }
   response_export_values = ["id", "properties.metrics.prometheusQueryEndpoint"]
@@ -108,13 +108,13 @@ resource "azapi_resource" "dce" {
   type      = "Microsoft.Insights/dataCollectionEndpoints@2023-03-11"
   name      = local.dce_name
   parent_id = azapi_resource.rg_env_obs.id
-  location  = var.location
+  location  = local.location
 
   body = {
     kind = "Linux"
     properties = {
       networkAcls = {
-        publicNetworkAccess = var.fleet.observability.data_collection_endpoint.public_network_access
+        publicNetworkAccess = local.observ.data_collection_endpoint.public_network_access
       }
     }
   }
@@ -145,7 +145,7 @@ resource "azapi_resource" "amg" {
   type      = "Microsoft.Dashboard/grafana@2023-09-01"
   name      = local.amg_name
   parent_id = azapi_resource.rg_env_obs.id
-  location  = var.location
+  location  = local.location
 
   identity {
     type = "SystemAssigned"
@@ -182,11 +182,11 @@ resource "azapi_resource" "amg_pe" {
   type      = "Microsoft.Network/privateEndpoints@2023-11-01"
   name      = local.pe_name
   parent_id = azapi_resource.rg_env_obs.id
-  location  = var.location
+  location  = local.location
 
   body = {
     properties = {
-      subnet = { id = var.environment.networking.grafana_pe_subnet_id }
+      subnet = { id = local.environment.networking.grafana_pe_subnet_id }
       privateLinkServiceConnections = [{
         name = "amg"
         properties = {
@@ -209,7 +209,7 @@ resource "azapi_resource" "pdns_grafana" {
 }
 
 resource "azapi_resource" "pdns_grafana_links" {
-  for_each = toset(var.environment.networking.grafana_pe_linked_vnet_ids)
+  for_each = toset(local.environment.networking.grafana_pe_linked_vnet_ids)
 
   type      = "Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01"
   name      = "link-${basename(each.value)}"
@@ -279,7 +279,7 @@ resource "azapi_resource" "ra_amg_amw_data_reader" {
 }
 
 resource "azapi_resource" "ra_amg_group_admin" {
-  for_each  = toset(var.environment.grafana.admins)
+  for_each  = toset(local.environment.grafana.admins)
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
   name      = uuidv5("url", "amg-admin-${each.value}-${azapi_resource.amg.id}")
   parent_id = azapi_resource.amg.id
@@ -294,7 +294,7 @@ resource "azapi_resource" "ra_amg_group_admin" {
 }
 
 resource "azapi_resource" "ra_amg_group_editor" {
-  for_each  = toset(var.environment.grafana.editors)
+  for_each  = toset(local.environment.grafana.editors)
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
   name      = uuidv5("url", "amg-editor-${each.value}-${azapi_resource.amg.id}")
   parent_id = azapi_resource.amg.id

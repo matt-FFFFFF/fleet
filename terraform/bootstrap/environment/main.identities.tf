@@ -15,7 +15,7 @@ locals {
   # `AcrPull` built-in role definition GUID — used in the ABAC condition.
   role_acr_pull = "7f951dda-4ed3-4680-a7ca-43fe172d538d"
 
-  env_sub_id = var.environment.subscription_id
+  env_sub_id = local.environment.subscription_id
 }
 
 # --- Env resource groups -----------------------------------------------------
@@ -24,15 +24,15 @@ resource "azapi_resource" "rg_env_shared" {
   type      = "Microsoft.Resources/resourceGroups@2024-03-01"
   name      = "rg-fleet-${var.env}-shared"
   parent_id = "/subscriptions/${local.env_sub_id}"
-  location  = var.location
+  location  = local.location
   body      = { properties = {} }
 }
 
 resource "azapi_resource" "rg_env_dns" {
   type      = "Microsoft.Resources/resourceGroups@2024-03-01"
-  name      = replace(var.fleet.dns.resource_group_pattern, "{env}", var.env)
+  name      = replace(local.dns.resource_group_pattern, "{env}", var.env)
   parent_id = "/subscriptions/${local.env_sub_id}"
-  location  = var.location
+  location  = local.location
   body      = { properties = {} }
 }
 
@@ -40,7 +40,7 @@ resource "azapi_resource" "rg_env_obs" {
   type      = "Microsoft.Resources/resourceGroups@2024-03-01"
   name      = "rg-obs-${var.env}"
   parent_id = "/subscriptions/${local.env_sub_id}"
-  location  = var.location
+  location  = local.location
   body      = { properties = {} }
 }
 
@@ -50,7 +50,7 @@ resource "azapi_resource" "uami_env" {
   type      = "Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31"
   name      = "uami-fleet-${var.env}"
   parent_id = azapi_resource.rg_env_shared.id
-  location  = var.location
+  location  = local.location
 
   body                   = { properties = {} }
   response_export_values = ["properties.clientId", "properties.principalId"]
@@ -64,7 +64,7 @@ resource "azapi_resource" "fic_env" {
   body = {
     properties = {
       issuer    = "https://token.actions.githubusercontent.com"
-      subject   = "repo:${var.fleet.github_org}/${var.fleet_repo_name}:environment:fleet-${var.env}"
+      subject   = "repo:${local.fleet.github_org}/${local.fleet.github_repo}:environment:fleet-${var.env}"
       audiences = ["api://AzureADTokenExchange"]
     }
   }
@@ -99,7 +99,7 @@ resource "azapi_resource" "ra_env_blob_contrib" {
 
   body = {
     properties = {
-      roleDefinitionId = "/subscriptions/${var.fleet.state.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_blob_data_ctrb}"
+      roleDefinitionId = "/subscriptions/${local.derived.state_subscription}/providers/Microsoft.Authorization/roleDefinitions/${local.role_blob_data_ctrb}"
       principalId      = azapi_resource.uami_env.output.properties.principalId
       principalType    = "ServicePrincipal"
     }
@@ -109,14 +109,14 @@ resource "azapi_resource" "ra_env_blob_contrib" {
 # Fleet KV resource id — computed (KV created by Stage 0, same naming).
 locals {
   fleet_kv_id = join("/", [
-    "/subscriptions", var.fleet.acr.subscription_id,
-    "resourceGroups", var.fleet.acr.resource_group,
-    "providers/Microsoft.KeyVault/vaults", var.fleet.keyvault.name,
+    "/subscriptions", local.derived.acr_subscription_id,
+    "resourceGroups", local.derived.acr_resource_group,
+    "providers/Microsoft.KeyVault/vaults", local.derived.fleet_kv_name,
   ])
   fleet_acr_id = join("/", [
-    "/subscriptions", var.fleet.acr.subscription_id,
-    "resourceGroups", var.fleet.acr.resource_group,
-    "providers/Microsoft.ContainerRegistry/registries", var.fleet.acr.name,
+    "/subscriptions", local.derived.acr_subscription_id,
+    "resourceGroups", local.derived.acr_resource_group,
+    "providers/Microsoft.ContainerRegistry/registries", local.derived.acr_name,
   ])
 }
 
@@ -127,7 +127,7 @@ resource "azapi_resource" "ra_env_fleet_kv_secrets_user" {
 
   body = {
     properties = {
-      roleDefinitionId = "/subscriptions/${var.fleet.acr.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_kv_secrets_user}"
+      roleDefinitionId = "/subscriptions/${local.derived.acr_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_kv_secrets_user}"
       principalId      = azapi_resource.uami_env.output.properties.principalId
       principalType    = "ServicePrincipal"
     }
@@ -143,7 +143,7 @@ resource "azapi_resource" "ra_env_acr_uaa_bounded" {
 
   body = {
     properties = {
-      roleDefinitionId = "/subscriptions/${var.fleet.acr.subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_uaa}"
+      roleDefinitionId = "/subscriptions/${local.derived.acr_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_uaa}"
       principalId      = azapi_resource.uami_env.output.properties.principalId
       principalType    = "ServicePrincipal"
 
@@ -180,11 +180,6 @@ resource "azapi_resource" "ra_env_acr_uaa_bounded" {
 # fleet-meta needs Contributor + User Access Administrator + Application
 # Administrator (Entra-level, already granted in bootstrap/fleet) to run
 # team-bootstrap and env-bootstrap again against this env.
-
-variable "fleet_meta_principal_id" {
-  description = "principalId of uami-fleet-meta (from bootstrap/fleet outputs)."
-  type        = string
-}
 
 resource "azapi_resource" "ra_meta_sub_contrib" {
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"

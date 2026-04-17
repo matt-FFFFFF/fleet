@@ -3,15 +3,15 @@
 # Per-env state container under the shared tfstate-fleet SA. Seeded here so
 # downstream Stage 1 / Stage 2 cluster applies have a backend.
 #
-# SA itself is in sub-fleet-shared (`var.fleet.state.subscription_id`), while
-# this stage runs with azapi pointed at the env subscription. We override
-# parent_id by constructing the full SA resource path explicitly.
+# SA itself is in sub-fleet-shared (fleet.state.subscription_id), while this
+# stage runs with azapi pointed at the env subscription. We override parent_id
+# by constructing the full SA resource path explicitly.
 
 locals {
   state_sa_id = join("/", [
-    "/subscriptions", var.fleet.state.subscription_id,
-    "resourceGroups", var.fleet.state.resource_group,
-    "providers/Microsoft.Storage/storageAccounts", var.fleet.state.storage_account,
+    "/subscriptions", local.derived.state_subscription,
+    "resourceGroups", local.derived.state_resource_group,
+    "providers/Microsoft.Storage/storageAccounts", local.derived.state_storage_account,
   ])
   state_blob_svc_id    = "${local.state_sa_id}/blobServices/default"
   state_container_name = "tfstate-${var.env}"

@@ -5,7 +5,7 @@
 # to gate it, 2 for prod).
 
 resource "github_repository_environment" "env" {
-  repository  = var.fleet_repo_name
+  repository  = local.fleet.github_repo
   environment = "fleet-${var.env}"
 
   dynamic "reviewers" {
@@ -25,12 +25,12 @@ resource "github_repository_environment" "env" {
 locals {
   env_vars = {
     AZURE_CLIENT_ID         = azapi_resource.uami_env.output.properties.clientId
-    AZURE_TENANT_ID         = var.fleet.tenant_id
+    AZURE_TENANT_ID         = local.fleet.tenant_id
     AZURE_SUBSCRIPTION_ID   = local.env_sub_id
     TFSTATE_CONTAINER       = local.state_container_name
-    TFSTATE_STORAGE_ACCOUNT = var.fleet.state.storage_account
-    TFSTATE_RESOURCE_GROUP  = var.fleet.state.resource_group
-    FLEET_NAME              = var.fleet.name
+    TFSTATE_STORAGE_ACCOUNT = local.derived.state_storage_account
+    TFSTATE_RESOURCE_GROUP  = local.derived.state_resource_group
+    FLEET_NAME              = local.fleet.name
 
     # Env observability IDs — informational only; Stage 1 looks these up by
     # derived name at plan time (see PLAN §4.1 / Stage 1 azapi data sources).
@@ -47,7 +47,7 @@ locals {
 
 resource "github_actions_environment_variable" "env_vars" {
   for_each      = local.env_vars
-  repository    = var.fleet_repo_name
+  repository    = local.fleet.github_repo
   environment   = github_repository_environment.env.environment
   variable_name = each.key
   value         = each.value

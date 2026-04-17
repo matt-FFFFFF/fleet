@@ -4,14 +4,13 @@
 # Stage 0, bootstrap/environment, bootstrap/team, and the per-env Stage 1 /
 # Stage 2 containers seeded by bootstrap/environment — land in this account.
 #
-# Resource scope: the shared subscription (var.fleet.state.subscription_id).
-# This is sub-fleet-shared in the current subscription model.
+# Resource scope: the shared subscription (fleet.state.subscription_id).
 
 resource "azapi_resource" "state_rg" {
   type      = "Microsoft.Resources/resourceGroups@2024-03-01"
-  name      = var.fleet.state.resource_group
-  parent_id = "/subscriptions/${var.fleet.state.subscription_id}"
-  location  = var.fleet.acr.location # colocate state with fleet shared infra
+  name      = local.derived.state_resource_group
+  parent_id = "/subscriptions/${local.derived.state_subscription}"
+  location  = local.derived.acr_location # colocate state with fleet shared infra
 
   body = {
     properties = {}
@@ -20,9 +19,9 @@ resource "azapi_resource" "state_rg" {
 
 resource "azapi_resource" "state_sa" {
   type      = "Microsoft.Storage/storageAccounts@2023-05-01"
-  name      = var.fleet.state.storage_account
+  name      = local.derived.state_storage_account
   parent_id = azapi_resource.state_rg.id
-  location  = var.fleet.acr.location
+  location  = local.derived.acr_location
 
   body = {
     sku  = { name = "Standard_ZRS" }
@@ -72,7 +71,7 @@ resource "azapi_resource" "state_blob_service" {
 
 resource "azapi_resource" "state_container_fleet" {
   type      = "Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01"
-  name      = var.fleet.state.containers.fleet
+  name      = local.derived.state_container
   parent_id = azapi_resource.state_blob_service.id
 
   body = {

@@ -1846,3 +1846,254 @@ Each environment holds its own `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
   resources that already exist for the workload→AAD direction —
   same pattern, now covering RP auth too — and delete the fleet KV
   entry.
+
+## 16. Template-repo adoption model
+
+This repo ships as a **GitHub template repository**. Adopters instantiate
+their own fleet repo via GitHub's "Use this template" flow, then run a
+one-shot initializer to materialize adopter-specific values. After
+initialization the repo is a concrete, self-contained fleet repo with
+no template machinery left behind.
+
+> **Implementation status (Phase 1):** §§16.1–16.8 are implemented. The
+> rendering layer was changed from an initial sed-over-`__UPPER_SNAKE__`
+> token pass to a **throwaway Terraform root module at `init/`** driven by
+> a thin wrapper shell (`init-fleet.sh`). Rationale: Terraform is already
+> a hard dependency for bootstrap, and `templatefile()` plus variable
+> validation blocks give us typed inputs and per-field regex checks
+> without a second toolchain or sed quoting hazards. The single-source-of-
+> truth contract (everything lives in `clusters/_fleet.yaml`; bootstrap
+> stages `yamldecode` it) is unchanged.
+
+### 16.1 Single source of truth
+
+All adopter-specific values live in `clusters/_fleet.yaml`. That file is
+**generated** by the `init/` module on first run from
+`init/templates/_fleet.yaml.tftpl`; the tftpl and the entire `init/`
+directory are deleted post-render.
+
+Fields the adopter supplies (via interactive prompts; see §16.3):
+
+- `fleet.name` — short slug, lowercase alnum, ≤ 12 chars (feeds into
+  resource naming derivations; see §16.5).
+- `fleet.display_name` — human-friendly name for README and Grafana.
+- `fleet.tenant_id` — Entra tenant GUID.
+- `fleet.github_org` — GitHub org/user owning the fleet repo.
+- `fleet.github_repo` — fleet repo name (e.g. `platform-fleet`).
+- `fleet.team_template_repo` — team template repo name.
+- `fleet.primary_region` — default Azure region.
+- `environments.mgmt.subscription_id`, `.nonprod.subscription_id`,
+  `.prod.subscription_id`, plus a separate `acr.subscription_id` /
+  `state.subscription_id` (both sourced from a single `sub_shared`
+  input).
+- `dns.fleet_root` — e.g. `int.acme.example`.
+
+Fields intentionally **not** prompted (filled post-init; tagged with
+angle-bracket `<...>` placeholders or `TODO` in the rendered yaml):
+
+- AAD group object IDs (`aad.argocd.owners`, `aad.kargo.owners`,
+  per-env `aks.admin_groups`, `rbac_cluster_admins`, `rbac_readers`,
+  `grafana.admins`, `grafana.editors`).
+- Per-env `networking.grafana_pe_subnet_id` and
+  `grafana_pe_linked_vnet_ids`.
+
+These typically aren't known at adoption time and the adopter edits
+`clusters/_fleet.yaml` directly after init. Everything else (CIDRs,
+K8s versions, node SKUs, autoscaler tuning) stays in
+`clusters/_defaults.yaml` with fleet-wide defaults.
+
+### 16.2 Bootstrap Terraform reads yaml (no duplication)
+
+`terraform/bootstrap/fleet` and `terraform/bootstrap/environment` read
+`clusters/_fleet.yaml` directly via `yamldecode(file(...))` locals,
+matching the pattern runtime stages already use (via
+`terraform/config-loader/load.sh`).
+
+- `terraform/bootstrap/fleet/variables.tf` shrinks to:
+  `fleet_stage0_fic_subject`, `fleet_meta_fic_subject`,
+  `fleet_repo_visibility`, `gh_repo_module_source` (all optional).
+- `terraform/bootstrap/environment/variables.tf` keeps `env`,
+  `env_reviewers_count`, `location` (optional; defaults to
+  `local.fleet.primary_region`), `fleet_meta_principal_id`.
+- All resources reference `local.fleet.*` / `local.environments.<env>.*`
+  / `local.derived.*`.
+
+Name derivation (ACR, fleet KV, state SA, env KV, cluster KV,
+resource groups) must agree between `load.sh` and bootstrap-stage
+HCL locals. The canonical spec lives in `docs/naming.md` (see §16.5)
+and is validated by a CI diff between the two implementations against
+a fixture `_fleet.yaml`.
+
+### 16.3 `init-fleet.sh` responsibilities
+
+A thin wrapper around `init/` (the throwaway Terraform module).
+Interactive wizard by default; `--non-interactive` plus optional
+`--values-file <path>.tfvars` for CI.
+
+1. **Preflight**: require `terraform` (≥ 1.9) and `git`; refuse to run
+   if `.fleet-initialized` exists or the worktree is dirty (override
+   with `--force`).
+2. **Overlay** (if `--values-file` is passed): for each `key = "value"`
+   line in the overlay file, patch the matching line in
+   `init/inputs.auto.tfvars` via a small python-inline rewrite.
+3. **Prompt** for any variable in `init/inputs.auto.tfvars` still set
+   to the sentinel `"__PROMPT__"`. The prompt text is derived from the
+   inline `# comment` after each variable line.
+4. **Apply** the `init/` module via
+   `terraform -chdir=init init && terraform apply -auto-approve`.
+   Terraform's variable validation blocks reject malformed GUIDs,
+   slugs, DNS names, etc. — the shell contains zero format regexes.
+5. Terraform renders (via `local_file` + `templatefile`):
+   - `clusters/_fleet.yaml`
+   - `.github/CODEOWNERS` (`* @<github_org>/platform-engineers`)
+   - `README.md` (replaces the pre-init template README)
+   - `.fleet-initialized` marker (yamlencoded; committed)
+6. **Offer to remove example clusters**
+   (`clusters/mgmt/eastus/aks-mgmt-01`,
+   `clusters/nonprod/eastus/aks-nonprod-01`). Default: keep.
+7. **Self-cleanup**: delete `init/`, `init-fleet.sh` itself,
+   `.github/workflows/template-selftest.yaml`,
+   `.github/workflows/status-check.yaml`, and `.github/fixtures/` so
+   the adopter repo contains zero template machinery. Template history
+   remains accessible via `git log`.
+
+### 16.4 GitHub template repo mechanics
+
+- The template repo is marked "Template repository" in GitHub Settings
+  (repo admin action, documented in `docs/adoption.md`).
+- Adopter flow: *Use this template → Create new repository* → clone
+  locally → run `./init-fleet.sh` → commit → push.
+- No `git remote` manipulation is required; GitHub instantiation
+  handles repo identity. `init-fleet.sh` does not touch git remotes.
+- `github_repository` resources in `bootstrap/fleet` read repo names
+  from `local.fleet.*`. The fleet repo itself already exists (the
+  adopter created it via "Use this template"), so `main.github.tf`
+  ships an `import { to = github_repository.fleet, id =
+  local.fleet.github_repo }` block that adopts the existing repo into
+  state on the first apply — **no manual `terraform import` step is
+  required**. The team-template repo is created fresh by the apply.
+
+### 16.5 Name derivation spec (`docs/naming.md`)
+
+Canonical, implementation-neutral spec for every derived resource
+name. Implemented identically in `terraform/config-loader/load.sh`
+and in bootstrap-stage HCL locals. Initial rules:
+
+- **State SA**: `st<fleet.name>tfstate` (truncate + lowercase to 24
+  chars; fail-fast if `fleet.name` produces an invalid name).
+- **Fleet ACR**: `acr<fleet.name>shared`.
+- **Fleet KV**: `kv-<fleet.name>-fleet` (≤ 24 chars).
+- **Env KV** (future): `kv-<fleet.name>-<env>`.
+- **Cluster KV**: `kv-<cluster.name>` (≤ 24 chars; truncation rule
+  documented).
+- **State containers**: `tfstate-fleet`, `tfstate-<env>`,
+  `tfstate-cluster-<cluster.name>`.
+- **Resource groups**: `rg-fleet-tfstate`, `rg-fleet-shared`,
+  `rg-fleet-<env>-shared`, `rg-dns-<env>`, `rg-obs-<env>`,
+  `rg-<cluster.name>`.
+- **UAMIs**: `uami-fleet-stage0`, `uami-fleet-meta`,
+  `uami-fleet-<env>`, `uami-kargo-mgmt`, `uami-<cluster.name>-cp`,
+  `uami-<cluster.name>-kubelet`, `uami-<cluster.name>-workload-<svc>`.
+- **DNS zones**: `<cluster.name>.<cluster.region>.<cluster.env>.<dns.fleet_root>`
+  (per-cluster private zone under the fleet root).
+
+Overrides (`acr.name_override`, `keyvault.name_override`,
+`state.storage_account_name_override`) bypass derivation when set.
+
+### 16.6 Safety rails
+
+- Pre-init README banner block (bounded by `<!-- fleet:banner -->`
+  sentinels) warns that `./init-fleet.sh` is the adopter entry point.
+  The TF module's README template omits the banner, so a successful
+  init removes it.
+- `init-fleet.sh` refuses to run on a dirty worktree or a repo with an
+  existing `.fleet-initialized` marker unless `--force` is passed.
+- Terraform's variable validation blocks reject malformed inputs before
+  any file is written (no partial renders).
+- The `__PROMPT__` sentinel is a build-time guard: Terraform fails
+  validation on it (it's not a valid GUID / slug / DNS name), so even
+  a buggy wrapper can't apply with a sentinel unsubstituted.
+
+### 16.7 Template-repo self-test
+
+`.github/workflows/template-selftest.yaml` runs on the **template repo
+itself** (deleted by `init-fleet.sh` in adopter repos). Steps:
+
+1. Run `init-fleet.sh --non-interactive --force --values-file
+   .github/fixtures/adopter-test.tfvars` on the CI checkout.
+2. Assert the init machinery (`init/`, `init-fleet.sh`, selftest
+   workflow, fixtures dir) was removed, and the rendered artefacts
+   (`clusters/_fleet.yaml`, `.fleet-initialized`) exist and parse.
+3. `terraform fmt -check` + `terraform validate` on `bootstrap/fleet`
+   and `bootstrap/environment` against the rendered `_fleet.yaml`.
+4. Run `config-loader/load.sh` for each example cluster; assert it
+   produces valid JSON.
+
+Does not run `terraform plan` against Azure/GitHub (no creds); keeps
+the template verified purely offline.
+
+### 16.8 Files added / modified for templating
+
+**New**
+
+- `init-fleet.sh` — wrapper: preflight, prompts, `terraform apply`, cleanup.
+- `init/main.tf`, `init/variables.tf`, `init/render.tf`, `init/outputs.tf`
+  — throwaway Terraform root module.
+- `init/inputs.auto.tfvars` — adopter input file with `"__PROMPT__"`
+  sentinels.
+- `init/templates/_fleet.yaml.tftpl` — rendered to
+  `clusters/_fleet.yaml`.
+- `init/templates/CODEOWNERS.tftpl` — rendered to `.github/CODEOWNERS`.
+- `init/templates/README.md.tftpl` — rendered to `README.md`
+  (replaces the pre-init banner'd README).
+- `docs/adoption.md` — adopter-facing guide.
+- `docs/naming.md` — canonical name-derivation spec.
+- `.github/fixtures/adopter-test.tfvars` — selftest values.
+- `.github/workflows/template-selftest.yaml`.
+- `.fleet-initialized` — written by init, committed in adopter repo.
+
+**Modified**
+
+- `terraform/bootstrap/fleet/{variables,main,main.state,main.identities,main.github,providers,outputs}.tf`
+  — reduced `variables.tf`; all resources reference `local.fleet.*`
+  / `local.derived.*` via `yamldecode(file("../../../clusters/_fleet.yaml"))`.
+- `terraform/bootstrap/environment/{variables,main,main.state,main.identities,main.observability,main.github,providers}.tf`
+  — same pattern; `var.location` optional, defaults to
+  `local.fleet.primary_region`.
+- `terraform/config-loader/load.sh` — injects
+  `cluster.subscription_id` from
+  `_fleet.yaml.environments.<env>.subscription_id` if not already set.
+- `README.md` — branding/banner sentinel blocks; "Adopting this
+  template" section.
+- `.gitignore` — adds `.fleet-bootstrap/`; keeps `.fleet-initialized`
+  un-ignored.
+
+**Unchanged**
+
+- `clusters/_defaults.yaml` and env `_defaults.yaml` (non-identity
+  tuning only; subscription IDs sourced from
+  `_fleet.yaml.environments.<env>.subscription_id` and stitched in
+  by the config-loader).
+- Runtime stages (`0-fleet`, `1-cluster`, `2-platform`), which
+  already read yaml.
+
+### 16.9 Execution order (completed in Phase 1)
+
+1. [x] Draft `docs/naming.md` (locks the derivation contract).
+2. [x] Refactor `bootstrap/fleet` + `bootstrap/environment` to read
+   `_fleet.yaml` via locals.
+3. [x] Build `init/` throwaway Terraform module (replaces the initial
+   sed-based `_fleet.yaml.template` approach).
+4. [x] Write `init-fleet.sh` wrapper (interactive + non-interactive
+   modes via tfvars overlay).
+5. [x] Add README sentinel blocks and pre-init banner; template a
+   new post-init README.md.tftpl.
+6. [x] Write `docs/adoption.md`.
+7. [x] Add template-selftest workflow + tfvars fixture.
+8. [x] Dedup subscription IDs out of env `_defaults.yaml`; stitch from
+   `environments.<env>.subscription_id` via `config-loader/load.sh`.
+9. [x] Smoke test: non-interactive init in a throwaway clone; confirm
+   rendered `_fleet.yaml` parses and template scaffolding is removed.
+10. [ ] Follow-up (deferred to Phase 2 CI work): CI diff between
+    `load.sh` name derivation and bootstrap-stage HCL locals against a
+    fixture `_fleet.yaml`.

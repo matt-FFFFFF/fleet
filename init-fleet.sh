@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# init-fleet.sh — one-shot initializer for adopters of the fleet template repo.
+#
+# What it does, in order:
+#   1. Preflight: checks for terraform + git; refuses to run if
+#      .fleet-initialized already exists or the worktree is dirty (bypass
+#      with --force).
+#   2. Loads init/inputs.auto.tfvars and, for every variable whose value is
+#      still the sentinel "__PROMPT__", prompts on the TTY and writes the
+#      answer back into the file. Non-interactive callers pre-fill the
+#      file (or pass --values-file to overlay) so no prompts fire.
+#   3. Runs `terraform -chdir=init init && apply` — Terraform validates
+#      inputs (regex-based validation blocks per variable) and renders:
+#        clusters/_fleet.yaml
+#        .github/CODEOWNERS
+#        README.md
+#        .fleet-initialized
+#   4. Optionally removes the example clusters (interactive prompt; kept by
+#      default in --non-interactive mode for CI convenience).
+#   5. Self-cleanup: deletes init/, this script, the selftest workflow, and
+#      the CI fixtures directory so the adopter repo contains zero template
+#      machinery.
+#
+# Usage:
+#   ./init-fleet.sh                                 # interactive wizard
+#   ./init-fleet.sh --non-interactive               # CI; all values must be
+#                                                    # pre-filled in init/inputs.auto.tfvars
+#   ./init-fleet.sh --non-interactive --values-file <path>.tfvars
+#                                                   # overlay values from another file
+#   ./init-fleet.sh --force                         # allow dirty tree / re-init
+#
+# See docs/adoption.md.
+
+set -euo pipefail
+
+die()  { printf 'init-fleet: %s\n' "$*" >&2; exit 1; }
+warn() { printf 'init-fleet: %s\n' "$*" >&2; }
+info() { printf '  %s\n' "$*"; }
+
+# ---- flag parsing -----------------------------------------------------------
+
+FORCE=0
+NON_INTERACTIVE=0
+VALUES_FILE=""
+
+while (($#)); do
+  case "$1" in
+    --force)            FORCE=1; shift ;;
+    --non-interactive)  NON_INTERACTIVE=1; shift ;;
+    --values-file)      VALUES_FILE="${2:?--values-file needs a path}"; shift 2 ;;
+    --values-file=*)    VALUES_FILE="${1#*=}"; shift ;;
+    -h|--help)
+      sed -n '2,33p' "$0"; exit 0 ;;
+    *) die "unknown flag: $1" ;;
+  esac
+done
+
+# ---- preflight --------------------------------------------------------------
+
+command -v terraform >/dev/null 2>&1 || die "terraform is required (~> 1.9)"
+command -v git       >/dev/null 2>&1 || die "git is required"
+
+repo_root="$(cd "$(dirname "$0")" && pwd)"
+cd "$repo_root"
+
+init_dir="$repo_root/init"
+tfvars="$init_dir/inputs.auto.tfvars"
+marker=".fleet-initialized"
+
+[[ -d "$init_dir" ]] || die "init/ directory not found; is this a template repo checkout?"
+[[ -f "$tfvars"   ]] || die "init/inputs.auto.tfvars not found"
+
+if [[ -f "$marker" && $FORCE -eq 0 ]]; then
+  die "$marker exists; this repo has already been initialized. Pass --force to re-init."
+fi
+
+if [[ $FORCE -eq 0 ]] && git rev-parse --git-dir >/dev/null 2>&1; then
+  if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+    die "worktree is dirty; commit or stash first, or pass --force."
+  fi
+fi
+
+if [[ -n "$VALUES_FILE" && ! -f "$VALUES_FILE" ]]; then
+  die "values file not found: $VALUES_FILE"
+fi
+
+# ---- overlay --values-file (CI path) ----------------------------------------
+#
+# If the caller passed --values-file, merge it on top of inputs.auto.tfvars by
+# running a trivial key=value overlay: for each `key = "value"` line in the
+# overlay file, replace the matching line in inputs.auto.tfvars. This avoids
+# a second HCL parser and keeps the "one auto.tfvars is the input" contract.
+
+if [[ -n "$VALUES_FILE" ]]; then
+  info "Overlaying values from $VALUES_FILE"
+  while IFS= read -r line; do
+    # Match:  key = "value"   (ignore comments / blanks)
+    if [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*=[[:space:]]*\"(.*)\"[[:space:]]*$ ]]; then
+      key="${BASH_REMATCH[1]}"
+      val="${BASH_REMATCH[2]}"
+      # Replace or append in the main tfvars. Use a python one-liner to avoid
+      # sed's quoting hell on arbitrary values.
+      python3 - "$tfvars" "$key" "$val" <<'PY'
+import pathlib, re, sys
+path, key, val = sys.argv[1], sys.argv[2], sys.argv[3]
+p = pathlib.Path(path)
+text = p.read_text()
+pattern = re.compile(rf'^(\s*){re.escape(key)}(\s*=\s*)"[^"]*"', re.MULTILINE)
+replacement = rf'\g<1>{key}\g<2>"{val}"'
+new_text, n = pattern.subn(replacement, text)
+if n == 0:
+    # Variable not present — append.
+    new_text = text.rstrip() + f'\n{key} = "{val}"\n'
+p.write_text(new_text)
+PY
+    fi
+  done < "$VALUES_FILE"
+fi
+
+# ---- prompt for __PROMPT__ sentinels ----------------------------------------
+#
+# Extract every `key = "__PROMPT__"` line from inputs.auto.tfvars and, unless
+# --non-interactive was given, ask the user to fill it in. Hard errors if any
+# sentinel remains after the pass — Terraform validation will catch malformed
+# values (GUIDs, slugs, etc.), so the shell doesn't need to duplicate those
+# regexes.
+
+remaining_prompts() {
+  # Prints each key that still equals "__PROMPT__".
+  grep -E '^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*=[[:space:]]*"__PROMPT__"' "$tfvars" \
+    | sed -E 's/^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*=.*$/\1/'
+}
+
+pending="$(remaining_prompts || true)"
+
+if [[ -n "$pending" ]]; then
+  if [[ $NON_INTERACTIVE -eq 1 ]]; then
+    echo "init-fleet: --non-interactive but these variables are still __PROMPT__:" >&2
+    printf '  %s\n' $pending >&2
+    die "pre-fill them in init/inputs.auto.tfvars or pass --values-file"
+  fi
+
+  echo "Fleet adopter initialization. Ctrl-C to abort." >&2
+  echo "" >&2
+  for key in $pending; do
+    # Pull the inline # comment from the tfvars line for use as the prompt.
+    hint="$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$tfvars" \
+            | sed -E 's/^[^#]*#[[:space:]]*//;t;d' || true)"
+    while true; do
+      if [[ -n "$hint" ]]; then
+        read -r -p "  ${key} (${hint}): " val </dev/tty
+      else
+        read -r -p "  ${key}: " val </dev/tty
+      fi
+      [[ -n "$val" ]] && break
+      warn "  ✗ required"
+    done
+    # Escape backslashes and double-quotes for embedding in a tfvars string.
+    esc="${val//\\/\\\\}"
+    esc="${esc//\"/\\\"}"
+    python3 - "$tfvars" "$key" "$esc" <<'PY'
+import pathlib, re, sys
+path, key, val = sys.argv[1], sys.argv[2], sys.argv[3]
+p = pathlib.Path(path)
+text = p.read_text()
+pattern = re.compile(rf'^(\s*){re.escape(key)}(\s*=\s*)"__PROMPT__"', re.MULTILINE)
+replacement = rf'\g<1>{key}\g<2>"{val}"'
+new_text, n = pattern.subn(replacement, text)
+assert n == 1, f"failed to substitute {key}"
+p.write_text(new_text)
+PY
+  done
+  echo "" >&2
+fi
+
+# Final sentinel sweep — should be empty now.
+if [[ -n "$(remaining_prompts || true)" ]]; then
+  die "internal error: __PROMPT__ sentinels remain after collection"
+fi
+
+# ---- terraform apply --------------------------------------------------------
+
+# Stamp the template commit into the marker so adopters can trace their init
+# back to a known template SHA.
+template_commit="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo unknown)"
+
+info "Running terraform init"
+terraform -chdir="$init_dir" init -input=false -no-color >/dev/null
+
+info "Running terraform apply"
+terraform -chdir="$init_dir" apply \
+  -input=false -no-color -auto-approve \
+  -var "template_commit=${template_commit}"
+
+# ---- optional: example cluster removal --------------------------------------
+
+if [[ $NON_INTERACTIVE -eq 0 ]]; then
+  read -r -p "Keep example clusters (aks-mgmt-01, aks-nonprod-01)? [Y/n] " keep_ans </dev/tty
+  if [[ "$keep_ans" =~ ^[Nn]$ ]]; then
+    info "Removing example clusters"
+    rm -rf clusters/mgmt/eastus/aks-mgmt-01 clusters/nonprod/eastus/aks-nonprod-01
+  fi
+fi
+
+# ---- self-cleanup -----------------------------------------------------------
+#
+# Everything below this point removes template-only machinery from the
+# adopter's checkout. After this, the repo has no trace of init/, the
+# selftest workflow, or this script — only the rendered artefacts and the
+# marker remain.
+
+info "Removing template scaffolding"
+rm -rf "$init_dir"
+rm -f "$repo_root/.github/workflows/template-selftest.yaml"
+rm -f "$repo_root/.github/workflows/status-check.yaml"
+rm -rf "$repo_root/.github/fixtures"
+# The legacy sed-based template file, if still present from an earlier
+# iteration of the template, is no longer needed.
+rm -f "$repo_root/clusters/_fleet.yaml.template"
+rm -f "$0"
+
+echo ""
+echo "✔ Initialization complete."
+echo "  - Review changes: git status && git diff"
+echo "  - Commit:         git add -A && git commit -m 'chore: initialize fleet from template'"
+echo "  - Next:           docs/adoption.md → terraform/bootstrap/fleet"
