@@ -143,7 +143,7 @@ data "azuread_directory_role_templates" "all" {
 
 resource "azuread_directory_role" "app_admin" {
   template_id = one([
-    for tmpl in data.azuread_directory_role_templates.all.object_id : tmpl.object_id if tmpl.display_name == "Application Administrator"
+    for tmpl in data.azuread_directory_role_templates.all.role_templates : tmpl.object_id if tmpl.display_name == "Application Administrator"
   ])
 }
 
