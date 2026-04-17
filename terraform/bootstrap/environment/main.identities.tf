@@ -33,7 +33,7 @@ resource "azapi_resource" "rg_env_dns" {
   name      = replace(local.dns.resource_group_pattern, "{env}", var.env)
   parent_id = "/subscriptions/${local.env_sub_id}"
   location  = local.location
-  body      = { properties = {} }
+  body      = {}
 }
 
 resource "azapi_resource" "rg_env_obs" {
@@ -41,7 +41,7 @@ resource "azapi_resource" "rg_env_obs" {
   name      = "rg-obs-${var.env}"
   parent_id = "/subscriptions/${local.env_sub_id}"
   location  = local.location
-  body      = { properties = {} }
+  body      = {}
 }
 
 # --- uami-fleet-<env> --------------------------------------------------------
@@ -52,7 +52,7 @@ resource "azapi_resource" "uami_env" {
   parent_id = azapi_resource.rg_env_shared.id
   location  = local.location
 
-  body                   = { properties = {} }
+  body                   = {}
   response_export_values = ["properties.clientId", "properties.principalId"]
 }
 
