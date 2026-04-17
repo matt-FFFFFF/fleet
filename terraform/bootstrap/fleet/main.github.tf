@@ -21,9 +21,10 @@
 # (Terraform records the import as applied). It is safe to leave the block
 # in source — or to delete it post-first-apply; both behaviours are equal.
 #
-# For Phase 1 we write the repo as code with `github_repository`. The org's
-# GH-repo module (var.gh_repo_module_source) replaces these blocks once its
-# source is known.
+# For Phase 1 we write the repo as code with `github_repository`. An org's
+# own GH-repo module can replace these blocks later; the input used to be
+# surfaced as `var.gh_repo_module_source` but was removed when the variable
+# became unused — reintroduce it alongside the module swap.
 # -----------------------------------------------------------------------------
 
 import {

@@ -25,18 +25,4 @@ resource "azapi_resource" "state_container_env" {
   body = {
     properties = { publicAccess = "None" }
   }
-
-  # Foundational resource for this stage — gate here so a misspelled or
-  # missing var.env fails with an actionable message instead of the generic
-  # "Invalid index" thrown by local.environment downstream.
-  lifecycle {
-    precondition {
-      condition = contains(keys(local.fleet_doc.environments), var.env)
-      error_message = format(
-        "env %q is not declared in clusters/_fleet.yaml.environments; declared envs: %s",
-        var.env,
-        join(", ", keys(local.fleet_doc.environments)),
-      )
-    }
-  }
 }

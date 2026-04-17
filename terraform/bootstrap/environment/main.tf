@@ -17,9 +17,9 @@ locals {
   fleet_doc       = yamldecode(file(local.fleet_yaml_path))
 
   fleet = local.fleet_doc.fleet
-  # Direct lookup — a bad var.env is caught earlier by the precondition on
-  # azapi_resource.state_container_env (main.state.tf), which produces an
-  # actionable error naming the declared envs.
+  # Direct lookup — var.env is guarded by a validation block in variables.tf
+  # that asserts it exists in _fleet.yaml.environments before any evaluation
+  # of locals/providers/resources.
   environment = local.fleet_doc.environments[var.env]
   observ      = local.fleet_doc.observability
   dns         = local.fleet_doc.dns

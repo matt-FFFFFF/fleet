@@ -11,6 +11,22 @@ variable "env" {
     condition     = can(regex("^[a-z][a-z0-9-]{1,15}$", var.env))
     error_message = "env must be lowercase alnum, 2-16 chars."
   }
+
+  # Assert that the env is actually declared in _fleet.yaml. Validation runs
+  # before any local/provider/resource evaluation, so this replaces the
+  # generic "Invalid index" that local.fleet_doc.environments[var.env] would
+  # otherwise throw via provider "azapi".subscription_id in providers.tf.
+  validation {
+    condition = contains(
+      keys(try(yamldecode(file("${path.root}/../../../clusters/_fleet.yaml")).environments, {})),
+      var.env,
+    )
+    error_message = format(
+      "env %q is not declared in clusters/_fleet.yaml.environments; declared envs: %s",
+      var.env,
+      join(", ", keys(try(yamldecode(file("${path.root}/../../../clusters/_fleet.yaml")).environments, {}))),
+    )
+  }
 }
 
 variable "env_reviewers_count" {
