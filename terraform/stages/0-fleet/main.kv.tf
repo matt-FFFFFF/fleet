@@ -38,6 +38,17 @@ resource "azapi_resource" "fleet_kv" {
   }
 
   response_export_values = ["id", "properties.vaultUri"]
+
+  # The fleet KV must live in the same RG as the ACR (rg-fleet-shared) so
+  # bootstrap/environment can reconstruct its id from acr.* alone. Surface
+  # any drift in `_fleet.yaml.keyvault.resource_group` early instead of
+  # letting Stage 0 silently ignore the field.
+  lifecycle {
+    precondition {
+      condition     = lower(local.derived.fleet_kv_resource_group) == lower(local.fleet_doc.acr.resource_group)
+      error_message = "_fleet.yaml.keyvault.resource_group must equal acr.resource_group; the fleet KV is colocated with the ACR in the fleet-shared RG."
+    }
+  }
 }
 
 # --- RBAC for the Stage 0 executor -------------------------------------------

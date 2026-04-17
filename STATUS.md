@@ -144,9 +144,9 @@ AAD apps, Argo RP secret rotation, Kargo mgmt UAMI).
 - [~] **Phase 1 (Skeleton)** — in progress:
   - [x] Repo scaffold per §2.
   - [x] `_fleet.yaml` (generated) + `_defaults.yaml`.
-  - [x] `bootstrap/fleet` code; not applied.
-  - [x] `bootstrap/environment` code; not applied.
-  - [x] `stages/0-fleet` body — scaffolded, not applied.
+  - [~] `bootstrap/fleet` code; not applied.
+  - [~] `bootstrap/environment` code; not applied.
+  - [~] `stages/0-fleet` body — scaffolded, not applied.
   - [ ] Example cluster `cluster.yaml` content validated against
         loader.
   - [ ] `stages/1-cluster` body + `aks-cluster` + `cluster-identities`.
