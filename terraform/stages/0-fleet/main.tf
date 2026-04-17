@@ -63,7 +63,10 @@ locals {
   # Every cluster file lives at clusters/<env>/<region>/<name>/cluster.yaml.
   # fileset() matches only that depth; clusters/_template/cluster.yaml (two
   # segments) is excluded automatically.
-  cluster_files = fileset("${path.module}/../../../clusters", "*/*/*/cluster.yaml")
+  # sort() to pin iteration order — fileset() returns a set, and the
+  # resulting AAD app redirect_uris list must be stable across runs to
+  # avoid spurious diffs when the cluster inventory is unchanged.
+  cluster_files = sort(fileset("${path.module}/../../../clusters", "*/*/*/cluster.yaml"))
 
   clusters = [
     for f in local.cluster_files : {
