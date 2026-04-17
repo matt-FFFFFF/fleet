@@ -1,6 +1,6 @@
 # Rendering resources. Each local_file writes into the parent repo (../),
-# overwriting any existing content. `file_permission = 0644` is the default
-# and is set explicitly for clarity.
+# overwriting any existing content. `local_file` defaults (0777 dir perms,
+# 0777 file perms masked by umask) are fine for generated text assets here.
 #
 # The .fleet-initialized marker is rendered LAST in dependency order by
 # referencing the other resources' ids in its content, which makes it

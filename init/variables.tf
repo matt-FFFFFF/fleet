@@ -36,8 +36,10 @@ variable "github_org" {
   description = "GitHub org or user that owns the fleet repo."
   type        = string
   validation {
-    condition     = can(regex("^[A-Za-z0-9][A-Za-z0-9-]*$", var.github_org))
-    error_message = "github_org must match ^[A-Za-z0-9][A-Za-z0-9-]*$."
+    # GitHub org/user rules: 1-39 chars, alnum at both ends, single hyphens
+    # between alnum segments (no leading/trailing hyphen, no `--`).
+    condition     = length(var.github_org) <= 39 && can(regex("^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$", var.github_org))
+    error_message = "github_org must be 1-39 characters of letters or digits, with single hyphens only between alphanumeric segments."
   }
 }
 
