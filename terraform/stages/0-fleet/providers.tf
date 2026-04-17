@@ -17,9 +17,9 @@ terraform {
   }
 
   backend "azurerm" {
-    # Init-time:
-    #   resource_group_name  = rg-fleet-tfstate
-    #   storage_account_name = <fleet.state.storage_account>
+    # Init-time values (see backend.tf):
+    #   resource_group_name  = <state RG from bootstrap/fleet>
+    #   storage_account_name = <state SA from bootstrap/fleet>
     #   container_name       = tfstate-fleet
     #   key                  = stage0/fleet.tfstate
     #   use_oidc             = true
@@ -27,13 +27,15 @@ terraform {
   }
 }
 
+# ACR, fleet KV and the Kargo UAMI all live in the fleet-shared subscription
+# (fleet.acr.subscription_id, which by convention == fleet.keyvault.subscription_id).
 provider "azapi" {
-  tenant_id       = var.fleet.tenant_id
-  subscription_id = var.fleet.acr.subscription_id # sub-fleet-shared
+  tenant_id       = local.fleet.tenant_id
+  subscription_id = local.derived.acr_subscription_id
   use_oidc        = true
 }
 
 provider "azuread" {
-  tenant_id = var.fleet.tenant_id
+  tenant_id = local.fleet.tenant_id
   use_oidc  = true
 }

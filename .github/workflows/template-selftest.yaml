@@ -87,6 +87,17 @@ jobs:
           terraform init -backend=false
           terraform validate
 
+      - name: terraform fmt -check (stages/0-fleet)
+        working-directory: terraform/stages/0-fleet
+        run: terraform fmt -check -recursive
+
+      - name: terraform validate (stages/0-fleet)
+        working-directory: terraform/stages/0-fleet
+        run: |
+          rm -f backend.tf
+          terraform init -backend=false
+          terraform validate
+
       - name: config-loader smoke-test (if example clusters kept)
         run: |
           for p in clusters/mgmt/eastus/aks-mgmt-01 clusters/nonprod/eastus/aks-nonprod-01; do

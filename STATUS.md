@@ -12,7 +12,8 @@
 > Legend: `[x]` done · `[~]` in progress / scaffolded but unapplied
 > `[ ]` not started · `[-]` deferred.
 
-Last updated: 2026-04-17 · template-init pivoted to Terraform module.
+Last updated: 2026-04-17 · stages/0-fleet scaffolded (ACR, fleet KV,
+AAD apps, Argo RP secret rotation, Kargo mgmt UAMI).
 
 ---
 
@@ -66,9 +67,19 @@ Last updated: 2026-04-17 · template-init pivoted to Terraform module.
 
 ### Stage 0 — `terraform/stages/0-fleet`
 
-- [~] `providers.tf` only. ACR, fleet KV, AAD apps (argocd + kargo),
-      federated credentials, Kargo UAMI, secret rotation — **all
-      pending**.
+- [~] Scaffolded; **not yet applied**:
+  - [x] ACR (Premium, zone-redundant, admin disabled).
+  - [x] Fleet Key Vault (RBAC-auth, purge protection, soft-delete 90d).
+  - [x] Argo AAD application + service principal.
+  - [x] Argo RP `client_secret` rotation (60d cadence via `time_rotating`,
+        `create_before_destroy`, `.value` written to fleet KV).
+  - [x] Kargo AAD application + service principal (password deferred to
+        mgmt Stage 1 per PLAN).
+  - [x] Kargo mgmt UAMI (`uami-kargo-mgmt`) + `AcrPull` on the fleet ACR.
+  - [x] Redirect URIs derived from the cluster inventory (`fileset` +
+        `yamldecode`); mgmt redirects filtered on `cluster.role`.
+  - [x] Outputs exported per PLAN §4 Stage 0 table (consumed as repo
+        vars by Stage 1/2).
 
 ### Stage 1 — `terraform/stages/1-cluster`
 
@@ -133,11 +144,11 @@ Last updated: 2026-04-17 · template-init pivoted to Terraform module.
 - [~] **Phase 1 (Skeleton)** — in progress:
   - [x] Repo scaffold per §2.
   - [x] `_fleet.yaml` (generated) + `_defaults.yaml`.
-  - [~] `bootstrap/fleet` code; not applied.
-  - [~] `bootstrap/environment` code; not applied.
+  - [x] `bootstrap/fleet` code; not applied.
+  - [x] `bootstrap/environment` code; not applied.
+  - [x] `stages/0-fleet` body — scaffolded, not applied.
   - [ ] Example cluster `cluster.yaml` content validated against
         loader.
-  - [ ] `stages/0-fleet` body.
   - [ ] `stages/1-cluster` body + `aks-cluster` + `cluster-identities`.
   - [ ] `config-loader/load.sh` naming-derivation parity.
   - [ ] CI workflows (`validate`, `tf-plan`, `tf-apply`,
@@ -184,10 +195,9 @@ Last updated: 2026-04-17 · template-init pivoted to Terraform module.
 
 ## Next likely units of work
 
-1. Write `stages/0-fleet` body (ACR, fleet KV, AAD apps, FICs,
-   Kargo UAMI, secret rotation).
-2. Land `aks-cluster` + `cluster-identities` modules + `stages/1-cluster`.
-3. First live apply of `bootstrap/fleet` against a real tenant; record
-   any drift here.
-4. `validate.yaml` + `tf-plan.yaml` CI workflows.
-5. CI parity check between `load.sh` naming and bootstrap HCL locals.
+1. Land `aks-cluster` + `cluster-identities` modules + `stages/1-cluster`.
+2. First live apply of `bootstrap/fleet` + `stages/0-fleet` against a real
+   tenant; record any drift here.
+3. `validate.yaml` + `tf-plan.yaml` CI workflows.
+4. CI parity check between `load.sh` naming and bootstrap / Stage 0
+   HCL locals.
