@@ -14,7 +14,7 @@
 # `rg-fleet-shared` is created by bootstrap/fleet; referenced by id.
 
 resource "azapi_resource" "acr" {
-  type      = "Microsoft.ContainerRegistry/registries@2023-11-01-preview"
+  type      = "Microsoft.ContainerRegistry/registries@2023-07-01"
   name      = local.derived.acr_name
   parent_id = local.derived.fleet_shared_rg_id
   location  = local.derived.acr_location
