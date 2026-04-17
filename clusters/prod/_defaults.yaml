@@ -1,0 +1,5 @@
+# Prod env defaults. Narrower than nonprod: tighter autoscaler headroom,
+# prod-only tags, etc. Left minimal for Phase 1.
+
+cluster:
+  subscription_id: <sub-fleet-prod>

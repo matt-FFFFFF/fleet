@@ -1,0 +1,37 @@
+# Cluster template. Copy with `cp -r` under clusters/<env>/<region>/<name>/
+# and fill placeholders.
+#
+#   cluster.name        : final directory segment (derived; do not set)
+#   cluster.env         : 1st segment under clusters/ (derived; do not set)
+#   cluster.region      : 2nd segment under clusters/ (derived; do not set)
+#
+# Only declare fields that differ from the _defaults.yaml chain.
+
+cluster:
+  role: workload                                    # management | workload
+  subscription_id: <sub-fleet-nonprod>
+  resource_group: rg-aks-<env>-<region>-<NN>
+
+networking:
+  vnet_id: <vnet-resource-id>
+  subnet_name: snet-aks
+  dns_linked_vnet_ids:                              # usually hub + cluster VNet
+    - <vnet-hub-resource-id>
+    - <vnet-cluster-resource-id>
+
+# node_pools:                                       # uncomment to override defaults
+#   apps:
+#     min_count: 3
+#     max_count: 30
+
+# platform:
+#   argocd:
+#     github_app:
+#       app_id: "<id>"
+#       installation_id: "<id>"
+#   kargo:                                          # mgmt only
+#     github_app:
+#       app_id: "<id>"
+#       installation_id: "<id>"
+
+teams: []                                           # opt this cluster into teams (filename basenames of platform-gitops/config/teams/*.yaml)

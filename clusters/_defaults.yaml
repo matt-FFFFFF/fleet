@@ -1,0 +1,64 @@
+# Fleet-wide defaults for cluster.yaml.
+#
+# Merged under every cluster file by terraform/config-loader/load.sh:
+#   fleet/_defaults.yaml << env/_defaults.yaml << region/_defaults.yaml << cluster.yaml
+# (`yq eval-all '... *d ...'` deep-merge; later files override earlier).
+#
+# Values below are true fleet-wide defaults. Per-env or per-region overrides
+# belong in the nearer _defaults.yaml, not here.
+
+kubernetes:
+  version: "1.30"
+  sku_tier: Standard
+  node_image_upgrade: NodeImage
+  control_plane_upgrade: patch
+  cluster_autoscaler_profile:
+    scale_down_delay_after_add: 10m
+    scale_down_unneeded: 10m
+    expander: least-waste
+    max_graceful_termination_sec: 600
+
+networking:
+  private_cluster: true
+  pod_cidr: 10.244.0.0/16
+  service_cidr: 10.0.0.0/16
+
+node_pools:
+  system:
+    vm_size: Standard_D4s_v5
+    min_count: 2
+    max_count: 5
+    zones: [1, 2, 3]
+    enable_auto_scaling: true
+  apps:
+    vm_size: Standard_D8s_v5
+    min_count: 3
+    max_count: 20
+    zones: [1, 2, 3]
+    enable_auto_scaling: true
+
+platform:
+  gitops:
+    repo_url: https://github.com/<github-org>/fleet
+    path: platform-gitops
+    revision: main
+  argocd:
+    helm_version: "9.5.0"
+    oidc:
+      issuer: https://login.microsoftonline.com/<tenant-object-id>/v2.0
+      client_id_kv_secret: argocd-oidc-client-id          # from fleet KV
+    github_app:
+      private_key_kv_secret: argocd-github-app-pem        # from fleet KV
+  kargo:
+    enabled: true                                          # honored only when cluster.role == "management"
+    helm_version: "1.0.5"
+    oidc:
+      issuer: https://login.microsoftonline.com/<tenant-object-id>/v2.0
+      client_id_kv_secret: kargo-oidc-client-id           # from mgmt cluster KV
+    github_app:
+      private_key_kv_secret: kargo-github-app-pem         # from mgmt cluster KV
+  observability:
+    managed_prometheus:
+      enabled: true
+
+teams: []

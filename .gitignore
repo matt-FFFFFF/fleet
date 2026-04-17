@@ -1,0 +1,28 @@
+# Terraform
+**/.terraform/
+**/.terraform.lock.hcl.bak
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+
+# Generated tfvars (see terraform/config-loader/load.sh and .github/workflows/tf-apply.yaml)
+# Stage 1 per-cluster merged config is generated at CI time and never committed.
+**/terraform.tfvars.json
+**/stage2.auto.tfvars.json
+!**/examples/**/terraform.tfvars.json
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Secrets — nothing here should ever be committed; belt and braces.
+*.pem
+*.key
+!**/testdata/**/*.pem
+.env
+.envrc.local

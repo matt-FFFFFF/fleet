@@ -1,0 +1,24 @@
+cluster:
+  role: management
+  resource_group: rg-aks-mgmt-eastus-01
+
+networking:
+  vnet_id: <vnet-mgmt-resource-id>
+  subnet_name: snet-aks
+  dns_linked_vnet_ids:
+    - <vnet-hub-mgmt-resource-id>
+    - <vnet-mgmt-resource-id>
+
+# Argo GH App specifics for the mgmt cluster (installation-id differs per
+# cluster if separate installations are used; otherwise inherit from defaults).
+platform:
+  argocd:
+    github_app:
+      app_id: "<argocd-app-id>"
+      installation_id: "<argocd-mgmt-installation-id>"
+  kargo:
+    github_app:
+      app_id: "<kargo-app-id>"
+      installation_id: "<kargo-mgmt-installation-id>"
+
+teams: []

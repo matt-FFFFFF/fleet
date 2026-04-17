@@ -1,0 +1,133 @@
+# Fleet-scope configuration.
+#
+# Consumed by `terraform/stages/0-fleet` and referenced (via Stage 0 outputs
+# published to repo variables) by every per-cluster stage. Changes here fan
+# out to every cluster — review accordingly.
+#
+# Placeholders (angle-bracketed) MUST be filled before first apply.
+
+fleet:
+  name: acme                                       # used in resource naming prefixes (<=8 chars recommended)
+  tenant_id: <tenant-object-id>
+  github_org: <github-org>                         # used by bootstrap/* to scope repo/env creation
+
+acr:
+  name: acmefleet                                  # Stage 0 creates acmefleet.azurecr.io
+  resource_group: rg-fleet-shared
+  subscription_id: <sub-fleet-shared>              # ACR lives in the shared subscription
+  location: eastus
+  sku: Premium
+
+keyvault:                                          # FLEET KV (one; Stage 0)
+  name: kv-acme-fleet
+  resource_group: rg-fleet-shared
+  location: eastus
+  # Stores ONLY fleet-wide secrets:
+  #   argocd-github-app-pem        (every cluster's Argo reads it)
+  #   argocd-oidc-client-secret    (every cluster's Argo reads it; rotated 60d by Stage 0)
+  # Mgmt-only Kargo secrets live in the mgmt cluster's KV, not here.
+
+state:
+  storage_account: sttfstateacmefleet              # created by bootstrap/fleet
+  resource_group: rg-fleet-tfstate
+  subscription_id: <sub-fleet-shared>
+  containers:
+    fleet: tfstate-fleet                           # Stage 0 + bootstrap/{environment,team}
+
+aad:
+  argocd:
+    display_name: fleet-argocd
+    owners: [<object-id>]
+    group_claim_name: groups
+  kargo:
+    display_name: fleet-kargo
+    owners: [<object-id>]
+    group_claim_name: groups
+  grafana:
+    sku: Standard
+    zone_redundancy: true
+    api_key_enabled: false                         # AAD only
+    deterministic_outbound_ip: true
+  aks:
+    tenant_id: <tenant-object-id>                  # aadProfile.tenantID; usually == fleet.tenant_id
+    disable_local_accounts: true                   # hard requirement; AKS module pin
+    enable_azure_rbac: true                        # Azure RBAC for Kubernetes Authorization
+
+observability:
+  # Names derived per env by the config-loader:
+  #   AMW:     amw-<fleet.name>-<env>
+  #   DCE:     dce-<fleet.name>-<env>
+  #   Grafana: amg-<fleet.name>-<env>
+  #   NSP:     nsp-<fleet.name>-<env>
+  #   PE:      pe-amg-<fleet.name>-<env>
+  #   RG:      rg-obs-<env>
+  #   AG:      ag-<fleet.name>-<env>
+  network_isolation:
+    mode: network_security_perimeter
+    nsp_profile_name: default
+    grafana_private_dns_zone: privatelink.grafana.azure.com
+  monitor_workspace:
+    public_network_access: Disabled
+  data_collection_endpoint:
+    public_network_access: Disabled
+  action_group:
+    short_name_prefix: acme                        # <=12 chars; env is appended at render time
+
+environments:
+  mgmt:
+    subscription_id: <sub-fleet-mgmt>
+    networking:
+      grafana_pe_subnet_id: <resource-id>
+      grafana_pe_linked_vnet_ids:
+        - <vnet-resource-id>
+    aks:
+      admin_groups: [<grp-aks-admin-mgmt>]           # break-glass (bypass K8s RBAC)
+      rbac_cluster_admins: [<grp-platform-admin>]    # platform SRE (AAD → K8s RBAC)
+      rbac_readers: []
+    grafana:
+      admins: [<grp-grafana-mgmt-admins>]
+      editors: []
+    action_group:
+      receivers:
+        pagerduty: { integration_key_kv_secret: pagerduty-platform }
+
+  nonprod:
+    subscription_id: <sub-fleet-nonprod>
+    networking:
+      grafana_pe_subnet_id: <resource-id>
+      grafana_pe_linked_vnet_ids:
+        - <vnet-resource-id>
+    aks:
+      admin_groups: [<grp-aks-admin-nonprod>]
+      rbac_cluster_admins: [<grp-platform-admin-nonprod>]
+      rbac_readers: [<grp-platform-reader-nonprod>]
+    grafana:
+      admins: [<grp-grafana-nonprod-admins>]
+      editors: [<grp-grafana-nonprod-editors>]
+    action_group:
+      receivers:
+        slack: { webhook_url_kv_secret: slack-webhook-nonprod }
+
+  prod:
+    subscription_id: <sub-fleet-prod>
+    networking:
+      grafana_pe_subnet_id: <resource-id>
+      grafana_pe_linked_vnet_ids:
+        - <vnet-resource-id>
+    aks:
+      admin_groups: [<grp-aks-admin-prod>]           # very small
+      rbac_cluster_admins: [<grp-platform-admin-prod>]
+      rbac_readers: [<grp-platform-reader-prod>]
+    grafana:
+      admins: [<grp-grafana-prod-admins>]
+      editors: [<grp-grafana-prod-editors>]
+    action_group:
+      receivers:
+        pagerduty: { integration_key_kv_secret: pagerduty-prod }
+        slack:     { webhook_url_kv_secret: slack-webhook-prod }
+
+dns:
+  fleet_root: int.acme.example                     # every private zone is a child of this
+  # Zone FQDN per cluster is derived:
+  #   <cluster.name>.<cluster.region>.<cluster.env>.<fleet_root>
+  resource_group_pattern: rg-dns-{env}

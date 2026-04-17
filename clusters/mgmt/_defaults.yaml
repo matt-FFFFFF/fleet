@@ -1,0 +1,17 @@
+# Env-scope defaults for management clusters. Only one mgmt cluster is
+# expected in practice, but this file stays here for consistency.
+
+cluster:
+  subscription_id: <sub-fleet-mgmt>
+
+# Mgmt clusters run platform workloads only (no team pool).
+node_pools:
+  system:
+    vm_size: Standard_D4s_v5
+    min_count: 2
+    max_count: 4
+    zones: [1, 2, 3]
+    enable_auto_scaling: true
+  # No `apps` pool on mgmt (see PLAN §1 / §14): all platform + Kargo workloads
+  # tolerate the system pool. Explicit override below removes the default.
+  apps: null

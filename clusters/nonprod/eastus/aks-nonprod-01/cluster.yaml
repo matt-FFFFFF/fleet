@@ -1,0 +1,18 @@
+cluster:
+  role: workload
+  resource_group: rg-aks-nonprod-eastus-01
+
+networking:
+  vnet_id: <vnet-nonprod-resource-id>
+  subnet_name: snet-aks
+  dns_linked_vnet_ids:
+    - <vnet-hub-nonprod-resource-id>
+    - <vnet-nonprod-resource-id>
+
+platform:
+  argocd:
+    github_app:
+      app_id: "<argocd-app-id>"
+      installation_id: "<argocd-nonprod-installation-id>"
+
+teams: []
