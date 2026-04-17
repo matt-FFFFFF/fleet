@@ -159,22 +159,17 @@ resource "azapi_resource" "amg" {
       deterministicOutboundIP = "Enabled"
       zoneRedundancy          = "Enabled"
       grafanaMajorVersion     = "10"
+      # AMW integration is an inline property of the grafana resource, not a
+      # child resource type. Confirmed via azureschema against
+      # Microsoft.Dashboard/grafana @ 2023-09-01.
+      grafanaIntegrations = {
+        azureMonitorWorkspaceIntegrations = [
+          { azureMonitorWorkspaceResourceId = azapi_resource.amw.id },
+        ]
+      }
     }
   }
   response_export_values = ["id", "identity.principalId", "properties.endpoint"]
-}
-
-# AMW integration (default Prometheus data source)
-resource "azapi_resource" "amg_amw_integration" {
-  type      = "Microsoft.Dashboard/grafana/integrations/azureMonitorWorkspaceIntegrations@2023-09-01"
-  name      = "primary"
-  parent_id = azapi_resource.amg.id
-
-  body = {
-    properties = {
-      azureMonitorWorkspaceResourceId = azapi_resource.amw.id
-    }
-  }
 }
 
 # Grafana PE + PDNS

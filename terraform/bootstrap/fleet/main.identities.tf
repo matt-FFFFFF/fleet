@@ -15,7 +15,7 @@ resource "azapi_resource" "rg_fleet_shared" {
   parent_id = "/subscriptions/${local.derived.acr_subscription_id}"
   location  = local.derived.acr_location
 
-  body = { properties = {} }
+  body = {}
 }
 
 # --- UAMIs -------------------------------------------------------------------
