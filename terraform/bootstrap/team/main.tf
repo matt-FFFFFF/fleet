@@ -10,7 +10,7 @@
 # documents the next operator step.
 
 terraform {
-  required_version = ">= 1.9.0"
+  required_version = "~> 1.9"
   required_providers {
     github = {
       source  = "integrations/github"
@@ -42,11 +42,6 @@ variable "team" {
 variable "team_template_repo" {
   type    = string
   default = "team-repo-template"
-}
-
-variable "fleet_repo" {
-  type    = string
-  default = "fleet"
 }
 
 provider "github" { owner = var.github_org }

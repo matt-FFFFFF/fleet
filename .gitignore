@@ -26,3 +26,7 @@ crash.*.log
 !**/testdata/**/*.pem
 .env
 .envrc.local
+
+# Template-adoption artifacts. `.fleet-initialized` is intentionally NOT
+# ignored — it's committed by the adopter to record initialization.
+.fleet-bootstrap/

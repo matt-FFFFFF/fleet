@@ -1,5 +1,7 @@
-# Prod env defaults. Narrower than nonprod: tighter autoscaler headroom,
-# prod-only tags, etc. Left minimal for Phase 1.
-
-cluster:
-  subscription_id: <sub-fleet-prod>
+# Env-scope defaults for prod clusters.
+#
+# subscription_id is sourced from clusters/_fleet.yaml
+# environments.prod.subscription_id (see PLAN §16 / docs/naming.md).
+# Narrower than nonprod: tighter autoscaler headroom, prod-only tags, etc.
+# Left minimal for Phase 1.
+{}

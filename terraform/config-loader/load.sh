@@ -82,7 +82,12 @@ merged_json="$(printf '%s' "$merged_yaml" | yq -o=json '.')"
 fleet_name="$(printf '%s' "$fleet_json" | jq -r '.fleet.name')"
 fleet_root="$(printf '%s' "$fleet_json" | jq -r '.dns.fleet_root')"
 dns_rg_pattern="$(printf '%s' "$fleet_json" | jq -r '.dns.resource_group_pattern // "rg-dns-{env}"')"
-acr_name="$(printf '%s' "$fleet_json" | jq -r '.acr.name')"
+# ACR name: override else `acr<fleet.name>shared` — matches docs/naming.md
+# and bootstrap/fleet/main.tf local.derived.acr_name.
+acr_name="$(printf '%s' "$fleet_json" | jq -r --arg fn "$fleet_name" '
+  (.acr.name_override // "") as $ov
+  | (if $ov == "" then "acr" + $fn + "shared" else $ov end)
+')"
 
 dns_zone_fqdn="${name}.${region}.${env}.${fleet_root}"
 dns_zone_rg="$(printf '%s' "$merged_json" | jq -r --arg p "$dns_rg_pattern" --arg env "$env" '
@@ -98,6 +103,17 @@ kv_rg="$(printf '%s' "$merged_json" | jq -r '.platform.keyvault.resource_group /
 
 acr_login_server="${acr_name}.azurecr.io"
 cluster_domain="$dns_zone_fqdn"
+
+# subscription_id: pulled from _fleet.yaml.environments.<env> if the cluster
+# file doesn't override. Env _defaults.yaml no longer carries this value;
+# the single source of truth is _fleet.yaml (see PLAN §16).
+cluster_sub="$(printf '%s' "$merged_json" | jq -r '.cluster.subscription_id // empty')"
+if [[ -z "$cluster_sub" ]]; then
+  cluster_sub="$(printf '%s' "$fleet_json" | jq -r --arg env "$env" '
+    .environments[$env].subscription_id // empty
+  ')"
+  [[ -n "$cluster_sub" ]] || die "no subscription_id for env $env in _fleet.yaml"
+fi
 
 # --- Emit ---------------------------------------------------------------------
 #
@@ -117,10 +133,12 @@ jq -n \
   --arg kv_rg      "$kv_rg" \
   --arg acr_ls     "$acr_login_server" \
   --arg cl_domain  "$cluster_domain" \
+  --arg cluster_sub "$cluster_sub" \
   '$merged
    | .cluster.name   = $name
    | .cluster.env    = $env
    | .cluster.region = $region
+   | .cluster.subscription_id = $cluster_sub
    | .fleet = $fleet
    | .derived = {
        dns_zone_fqdn:           $dns_fqdn,

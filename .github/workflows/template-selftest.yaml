@@ -1,0 +1,97 @@
+name: template-selftest
+
+# Validates that init/ renders a clean adopter tree:
+#   - init-fleet.sh --non-interactive --values-file <fixture> succeeds
+#   - no init/ or template scaffolding remains afterward
+#   - `terraform fmt -check` and `terraform validate` pass on both
+#     bootstrap stacks against the rendered clusters/_fleet.yaml
+#   - `config-loader/load.sh` emits valid JSON for each example cluster
+#
+# Runs against the TEMPLATE repo itself; deleted from adopter repos by
+# init-fleet.sh (so adopters never inherit this workflow).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  selftest:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: jq --version
+
+      - name: Install yq (for config-loader smoke test)
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Run init-fleet.sh (non-interactive)
+        run: |
+          ./init-fleet.sh --non-interactive --force \
+            --values-file .github/fixtures/adopter-test.tfvars
+
+      - name: Assert init/ scaffolding was removed
+        run: |
+          for p in init init-fleet.sh \
+                   .github/workflows/template-selftest.yaml \
+                   .github/workflows/status-check.yaml \
+                   .github/fixtures; do
+            if [[ -e "$p" ]]; then
+              echo "ERROR: expected $p to have been removed by init-fleet.sh" >&2
+              exit 1
+            fi
+          done
+
+      - name: Assert clusters/_fleet.yaml exists and parses
+        run: |
+          test -f clusters/_fleet.yaml
+          yq '.' clusters/_fleet.yaml >/dev/null
+
+      - name: Assert .fleet-initialized marker is present
+        run: test -f .fleet-initialized
+
+      - name: terraform fmt -check (bootstrap/fleet)
+        working-directory: terraform/bootstrap/fleet
+        run: terraform fmt -check -recursive
+
+      - name: terraform fmt -check (bootstrap/environment)
+        working-directory: terraform/bootstrap/environment
+        run: terraform fmt -check -recursive
+
+      - name: terraform validate (bootstrap/fleet)
+        working-directory: terraform/bootstrap/fleet
+        run: |
+          # Skip backend init; local state is fine for validate.
+          rm -f backend.tf
+          terraform init -backend=false
+          terraform validate
+
+      - name: terraform validate (bootstrap/environment)
+        working-directory: terraform/bootstrap/environment
+        env:
+          TF_VAR_env: nonprod
+          TF_VAR_fleet_meta_principal_id: 00000000-0000-0000-0000-000000000000
+        run: |
+          rm -f backend.tf
+          terraform init -backend=false
+          terraform validate
+
+      - name: config-loader smoke-test (if example clusters kept)
+        run: |
+          for p in clusters/mgmt/eastus/aks-mgmt-01 clusters/nonprod/eastus/aks-nonprod-01; do
+            if [[ -f "$p/cluster.yaml" ]]; then
+              echo "==> $p"
+              terraform/config-loader/load.sh "$p" | jq 'del(.fleet) | {cluster, derived}'
+            fi
+          done

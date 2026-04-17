@@ -8,17 +8,32 @@
 # placeholder until the published module path is known.
 
 # -----------------------------------------------------------------------------
-# Fleet repo (idempotent: managed-if-exists is not natively supported — if the
-# repo exists from a prior run, the operator passes -refresh-only for the
-# first run, then removes the `-target=null_resource.repo_check` guard).
+# Fleet repo.
 #
-# For Phase 1 we write the repo as code with `github_repository`. The org's
-# GH-repo module (var.gh_repo_module_source) replaces these two blocks once
-# its source is known.
+# The adopter instantiated this repo via GitHub's "Use this template" flow,
+# so by the time `bootstrap/fleet` runs the repo ALREADY EXISTS on GitHub.
+# We want Terraform to own its settings going forward, so we declare a
+# `github_repository` resource + an `import` block that adopts the existing
+# repo into state on the first apply. No manual `terraform import` step is
+# required.
+#
+# Import blocks are idempotent: after the first apply the block is a no-op
+# (Terraform records the import as applied). It is safe to leave the block
+# in source — or to delete it post-first-apply; both behaviours are equal.
+#
+# For Phase 1 we write the repo as code with `github_repository`. An org's
+# own GH-repo module can replace these blocks later; the input used to be
+# surfaced as `var.gh_repo_module_source` but was removed when the variable
+# became unused — reintroduce it alongside the module swap.
 # -----------------------------------------------------------------------------
 
+import {
+  to = github_repository.fleet
+  id = local.fleet.github_repo
+}
+
 resource "github_repository" "fleet" {
-  name                   = var.fleet_repo_name
+  name                   = local.fleet.github_repo
   description            = "Fleet monorepo: Terraform-driven AKS fleet + platform GitOps + Kargo"
   visibility             = var.fleet_repo_visibility
   has_issues             = true
@@ -65,7 +80,7 @@ resource "github_branch_protection" "fleet_main" {
 }
 
 resource "github_repository" "team_template" {
-  name                   = var.team_template_repo_name
+  name                   = local.fleet.team_template_repo
   description            = "Template repo for team-owned services (services/<app>/environments/*)"
   visibility             = var.fleet_repo_visibility
   is_template            = true
@@ -121,21 +136,21 @@ resource "github_repository_environment" "fleet_meta" {
 locals {
   stage0_env_vars = {
     AZURE_CLIENT_ID         = azapi_resource.uami_fleet_stage0.output.properties.clientId
-    AZURE_TENANT_ID         = var.fleet.tenant_id
-    AZURE_SUBSCRIPTION_ID   = var.fleet.acr.subscription_id
-    TFSTATE_CONTAINER       = var.fleet.state.containers.fleet
-    TFSTATE_STORAGE_ACCOUNT = var.fleet.state.storage_account
-    TFSTATE_RESOURCE_GROUP  = var.fleet.state.resource_group
-    FLEET_NAME              = var.fleet.name
+    AZURE_TENANT_ID         = local.fleet.tenant_id
+    AZURE_SUBSCRIPTION_ID   = local.derived.acr_subscription_id
+    TFSTATE_CONTAINER       = local.derived.state_container
+    TFSTATE_STORAGE_ACCOUNT = local.derived.state_storage_account
+    TFSTATE_RESOURCE_GROUP  = local.derived.state_resource_group
+    FLEET_NAME              = local.fleet.name
   }
   meta_env_vars = {
     AZURE_CLIENT_ID         = azapi_resource.uami_fleet_meta.output.properties.clientId
-    AZURE_TENANT_ID         = var.fleet.tenant_id
-    AZURE_SUBSCRIPTION_ID   = var.fleet.acr.subscription_id
-    TFSTATE_CONTAINER       = var.fleet.state.containers.fleet
-    TFSTATE_STORAGE_ACCOUNT = var.fleet.state.storage_account
-    TFSTATE_RESOURCE_GROUP  = var.fleet.state.resource_group
-    FLEET_NAME              = var.fleet.name
+    AZURE_TENANT_ID         = local.fleet.tenant_id
+    AZURE_SUBSCRIPTION_ID   = local.derived.acr_subscription_id
+    TFSTATE_CONTAINER       = local.derived.state_container
+    TFSTATE_STORAGE_ACCOUNT = local.derived.state_storage_account
+    TFSTATE_RESOURCE_GROUP  = local.derived.state_resource_group
+    FLEET_NAME              = local.fleet.name
   }
 }
 

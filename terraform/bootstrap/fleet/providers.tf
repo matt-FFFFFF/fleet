@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.9.0"
+  required_version = "~> 1.9"
 
   required_providers {
     azapi = {
@@ -31,19 +31,19 @@ terraform {
 # files are gitignored; only the .tf files and lockfile ship.
 
 provider "azapi" {
-  tenant_id       = var.fleet.tenant_id
-  subscription_id = var.fleet.acr.subscription_id
+  tenant_id       = local.fleet.tenant_id
+  subscription_id = local.fleet_doc.acr.subscription_id
   # Operator runs `az login` (interactive) before `terraform apply`.
   use_cli = true
 }
 
 provider "azuread" {
-  tenant_id = var.fleet.tenant_id
+  tenant_id = local.fleet.tenant_id
   use_cli   = true
 }
 
 provider "github" {
-  owner = var.fleet.github_org
+  owner = local.fleet.github_org
   # Auth: operator exports GITHUB_TOKEN (a classic PAT with org:admin +
   # repo:admin scope) before running. This token is used only for the
   # initial repo + GH App install; all downstream CI uses OIDC.

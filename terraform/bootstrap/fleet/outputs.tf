@@ -12,7 +12,7 @@ output "state_container_fleet" {
 }
 
 output "state_subscription_id" {
-  value = var.fleet.state.subscription_id
+  value = local.derived.state_subscription
 }
 
 output "fleet_shared_resource_group_id" {
@@ -41,4 +41,13 @@ output "fleet_repo_full_name" {
 
 output "team_template_repo_full_name" {
   value = github_repository.team_template.full_name
+}
+
+output "derived_names" {
+  description = "Computed resource names; kept as an output for downstream stages and CI diffs against config-loader/load.sh."
+  value = {
+    state_storage_account = local.derived.state_storage_account
+    acr_name              = local.derived.acr_name
+    fleet_kv_name         = local.derived.fleet_kv_name
+  }
 }

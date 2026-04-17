@@ -1,0 +1,72 @@
+name: status-check
+
+# Enforces the STATUS.md discipline codified in AGENTS.md §"Workflow rules":
+#   any PR that touches substantive fleet code (terraform/, clusters/, init/)
+#   must also touch STATUS.md in the same PR. This keeps the "what is" index
+#   from drifting from reality.
+#
+# Bypass: add `[skip-status]` anywhere in the PR title, or add the
+# `skip-status` label. Use sparingly — pure-formatting/typo PRs qualify,
+# real work does not.
+#
+# This workflow is template-side; init-fleet.sh removes it (along with
+# the rest of the template scaffolding) in adopter repos. The adopter
+# fleet is a real fleet, not a plan-driven spec, so PLAN/STATUS discipline
+# no longer applies — the workflow has nothing to enforce there.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, edited]
+
+jobs:
+  status-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine bypass
+        id: bypass
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          bypass=0
+          if [[ "$PR_TITLE" == *"[skip-status]"* ]]; then bypass=1; fi
+          if echo "$PR_LABELS" | grep -q '"skip-status"'; then bypass=1; fi
+          echo "bypass=$bypass" >> "$GITHUB_OUTPUT"
+
+      - name: Check that STATUS.md was updated alongside tracked paths
+        if: steps.bypass.outputs.bypass == '0'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+
+          # Tracked paths: substantive code + contracts. Keep in sync with
+          # AGENTS.md's "Repo geography" block.
+          tracked_regex='^(terraform/|clusters/|init/|docs/(naming|adoption)\.md$|PLAN\.md$)'
+
+          touched_tracked=0
+          touched_status=0
+          while IFS= read -r f; do
+            [[ -z "$f" ]] && continue
+            if [[ "$f" =~ $tracked_regex ]]; then touched_tracked=1; fi
+            if [[ "$f" == "STATUS.md" ]]; then touched_status=1; fi
+          done <<< "$files"
+
+          if [[ $touched_tracked -eq 1 && $touched_status -eq 0 ]]; then
+            echo "::error::This PR touches tracked paths but does not update STATUS.md."
+            echo ""
+            echo "Update STATUS.md to reflect the new state, OR add '[skip-status]'"
+            echo "to the PR title / 'skip-status' label if the change is purely"
+            echo "cosmetic (typos, formatting, comment-only). See AGENTS.md."
+            echo ""
+            echo "Changed files in this PR:"
+            printf '  %s\n' $files
+            exit 1
+          fi
+          echo "OK: status discipline satisfied (tracked=$touched_tracked, status=$touched_status)."

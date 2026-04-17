@@ -1,2 +1,7 @@
-cluster:
-  subscription_id: <sub-fleet-nonprod>
+# Env-scope defaults for nonprod clusters.
+#
+# subscription_id is sourced from clusters/_fleet.yaml
+# environments.nonprod.subscription_id (see PLAN §16 / docs/naming.md).
+# Add env-wide nonprod tunables here as needed; this file is intentionally
+# minimal for Phase 1.
+{}

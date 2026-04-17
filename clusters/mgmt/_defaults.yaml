@@ -1,8 +1,9 @@
 # Env-scope defaults for management clusters. Only one mgmt cluster is
 # expected in practice, but this file stays here for consistency.
-
-cluster:
-  subscription_id: <sub-fleet-mgmt>
+#
+# subscription_id is NOT declared here — it's sourced from
+# clusters/_fleet.yaml environments.mgmt.subscription_id by the
+# config-loader (see PLAN §16 / docs/naming.md).
 
 # Mgmt clusters run platform workloads only (no team pool).
 node_pools:
