@@ -82,7 +82,12 @@ merged_json="$(printf '%s' "$merged_yaml" | yq -o=json '.')"
 fleet_name="$(printf '%s' "$fleet_json" | jq -r '.fleet.name')"
 fleet_root="$(printf '%s' "$fleet_json" | jq -r '.dns.fleet_root')"
 dns_rg_pattern="$(printf '%s' "$fleet_json" | jq -r '.dns.resource_group_pattern // "rg-dns-{env}"')"
-acr_name="$(printf '%s' "$fleet_json" | jq -r '.acr.name')"
+# ACR name: override else `acr<fleet.name>shared` — matches docs/naming.md
+# and bootstrap/fleet/main.tf local.derived.acr_name.
+acr_name="$(printf '%s' "$fleet_json" | jq -r --arg fn "$fleet_name" '
+  (.acr.name_override // "") as $ov
+  | (if $ov == "" then "acr" + $fn + "shared" else $ov end)
+')"
 
 dns_zone_fqdn="${name}.${region}.${env}.${fleet_root}"
 dns_zone_rg="$(printf '%s' "$merged_json" | jq -r --arg p "$dns_rg_pattern" --arg env "$env" '

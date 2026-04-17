@@ -6,12 +6,12 @@ Canonical, implementation-neutral spec. Implemented in:
 - `terraform/bootstrap/fleet/**` and `terraform/bootstrap/environment/**` HCL
   locals
 - The self-test CI diffs outputs from both implementations against
-  `.github/fixtures/adopter-test.yaml`.
+  `.github/fixtures/adopter-test.tfvars`.
 
 ## Inputs
 
 All derivations read `clusters/_fleet.yaml` — produced by `init-fleet.sh`
-from `clusters/_fleet.yaml.template` during adoption. The relevant
+from `init/templates/_fleet.yaml.tftpl` during adoption. The relevant
 fields:
 
 - `fleet.name` — short slug, `^[a-z][a-z0-9]{1,11}$` (≤12 chars).

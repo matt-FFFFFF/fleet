@@ -59,6 +59,10 @@ done
 
 command -v terraform >/dev/null 2>&1 || die "terraform is required (~> 1.9)"
 command -v git       >/dev/null 2>&1 || die "git is required"
+# python3 is used for the --values-file overlay and __PROMPT__ substitution
+# (see overlay_tfvar / prompt loops below). Enforced up-front so adopters
+# without it fail fast with an actionable message rather than mid-run.
+command -v python3   >/dev/null 2>&1 || die "python3 is required (used for tfvars in-place edits)"
 
 repo_root="$(cd "$(dirname "$0")" && pwd)"
 cd "$repo_root"
