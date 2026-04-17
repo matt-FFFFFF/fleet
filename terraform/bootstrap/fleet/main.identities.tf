@@ -138,12 +138,12 @@ resource "azapi_resource" "ra_meta_blob_contrib" {
 # Both UAMIs need `Application Administrator` in Entra to CRUD AAD apps
 # (Stage 0 for fleet-stage0; env/team bootstrap flows for fleet-meta).
 
-data "azuread_directory_role_template" "app_admin" {
+data "azuread_directory_role" "app_admin" {
   display_name = "Application Administrator"
 }
 
 resource "azuread_directory_role" "app_admin" {
-  template_id = data.azuread_directory_role_template.app_admin.object_id
+  template_id = data.azuread_directory_role.app_admin.object_id
 }
 
 resource "azuread_directory_role_assignment" "stage0_app_admin" {
