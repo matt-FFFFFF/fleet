@@ -543,11 +543,12 @@ messages; the rest must be arranged out-of-band by the adopter org.
   PEM, and webhook secret captured. This is **not**
   `terraform apply`-able from the platform's API — the GitHub App
   Manifest flow requires a one-time browser handshake. The
-  adopter runs `init/init-gh-apps.sh` (§16.4) which automates
-  everything *except* the click-to-create step; the operator
-  clicks "Create GitHub App" twice in a browser and the script
-  captures the resulting credentials and writes them as inputs
-  to `bootstrap/fleet`.
+  adopter runs `./init-gh-apps.sh` (§16.4; lives at the repo root
+  next to `init-fleet.sh`) which automates everything *except*
+  the click-to-create step; the operator clicks "Create GitHub
+  App" twice in a browser and the script captures the resulting
+  credentials and writes them to `./.gh-apps.auto.tfvars` as
+  inputs consumed by **Stage 0** (not `bootstrap/fleet`).
 - Repo `<github_org>/<team_template_repo>` (default
   `team-repo-template`) must **not** pre-exist; it is created
   fresh by `bootstrap/fleet` with `prevent_destroy = true`.
@@ -574,14 +575,14 @@ messages; the rest must be arranged out-of-band by the adopter org.
   populated (no `__PROMPT__` sentinels remain; `<...>` placeholder
   fields under `environments.*` may remain empty until
   `bootstrap/environment` runs for that env).
-- `init/init-gh-apps.sh` has been run successfully and its
-  outputs (`fleet-meta-app-id`, `fleet-meta-pem`,
+- `init-gh-apps.sh` (at the repo root) has been run successfully
+  and its outputs (`fleet-meta-app-id`, `fleet-meta-pem`,
   `stage0-publisher-app-id`, `stage0-publisher-pem`, etc.) are
-  available either as `TF_VAR_*` env vars or as a tfvars overlay
-  file passed to `terraform apply` — see §16.4 for the exact
-  variable names. `bootstrap/fleet` writes the PEMs into the
-  fleet KV (created here for that purpose) and never echoes them
-  to logs.
+  available as `./.gh-apps.auto.tfvars` (or as `TF_VAR_*` env
+  vars) for **Stage 0** — see §16.4 for the exact variable
+  names. The fleet Key Vault is created and these secrets are
+  seeded in Stage 0; `bootstrap/fleet` does not write or manage
+  the GitHub App credentials.
 
 Creates:
 

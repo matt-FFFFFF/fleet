@@ -1,12 +1,20 @@
 # main.kv.tf
 #
 # Fleet Key Vault — exactly ONE per fleet, and it stores ONLY secrets that
-# must be read by more than one cluster. Current tenants:
+# must be read by more than one cluster and are managed in Stage 0. Current
+# Stage 0 tenant:
 #
-#   argocd-github-app-pem       — every cluster's Argo reads it
 #   argocd-oidc-client-secret   — every cluster's Argo reads it
 #                                 (rotated here on every Stage 0 apply, 60d
 #                                  cadence; see main.aad.tf)
+#
+# PLAN §4 Stage 0 additionally assigns Stage 0 the GH App PEM / webhook
+# secret seeding (`fleet-meta-app-pem`, `fleet-meta-webhook-secret`,
+# `stage0-publisher-app-pem`, `stage0-publisher-webhook-secret`) and the
+# `argocd-github-app-pem` secret. Those KV-secret resources land together
+# with the `init-gh-apps.sh` helper (PLAN §16.4); see the implementation-
+# status callout in PLAN §16. They intentionally do not ship in this
+# scaffold.
 #
 # Mgmt-only secrets (kargo-github-app-pem, kargo-oidc-client-secret) live
 # in the mgmt cluster's own KV (Stage 1), not here. Per-cluster secrets

@@ -28,8 +28,8 @@ terraform {
 }
 
 # ACR, fleet KV, and the Kargo UAMI all live in the fleet-shared subscription
-# identified by fleet.acr.subscription_id; the fleet KV does not carry its own
-# subscription_id field and implicitly inherits this one.
+# identified by _fleet.yaml acr.subscription_id; the fleet KV does not carry
+# its own subscription_id field and implicitly inherits this one.
 provider "azapi" {
   tenant_id       = local.fleet.tenant_id
   subscription_id = local.derived.acr_subscription_id

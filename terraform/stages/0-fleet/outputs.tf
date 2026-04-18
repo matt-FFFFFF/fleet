@@ -6,7 +6,13 @@
 # non-sensitive identity facts; no secret material is ever a Stage 0 output
 # (the Argo RP secret goes directly into the fleet KV via azapi).
 #
-# Variable-name mapping matches PLAN §4 Stage 0 "Outputs" table exactly.
+# Variable-name mapping matches the subset of PLAN §4 Stage 0 "Outputs"
+# that ships in this scaffold. The GitHub App outputs (`fleet_meta_app_id`,
+# `fleet_meta_app_client_id`, `stage0_publisher_app_id`,
+# `stage0_publisher_app_client_id`) are specified in PLAN §4 Stage 0 but
+# land together with the (not-yet-implemented) `init-gh-apps.sh` helper
+# (PLAN §16.4); see the implementation-status callout in PLAN §16. They
+# are intentionally absent here and will be added when §16.4 lands.
 
 # --- Fleet shared infrastructure ---------------------------------------------
 

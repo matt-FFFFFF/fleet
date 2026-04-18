@@ -109,6 +109,13 @@ click: building the manifest from `_fleet.yaml`, opening a localhost
 listener for the redirect, exchanging the temp code for the App
 credentials, and installing both Apps on the fleet repo.
 
+> **Status:** `init-gh-apps.sh` is specified but **not yet
+> implemented** as of Phase 1. The command block below describes
+> the intended adopter experience once the helper lands. Until it
+> does, follow the manual-creation steps further down.
+
+### Future (once `init-gh-apps.sh` ships)
+
 ```sh
 export GITHUB_TOKEN=<PAT with repo:admin + admin:org>
 ./init-gh-apps.sh
@@ -127,12 +134,12 @@ later populates. The on-disk `.gh-apps.auto.tfvars` and
 applies; the adopter may delete them manually once the fleet KV
 holds authoritative copies.
 
-> **Status:** this script is specified but not yet implemented as
-> of Phase 1. Until it lands, the two GitHub Apps must be created
-> manually via *Organization settings → Developer settings → GitHub
-> Apps → New GitHub App* with the permissions above, and their
-> credentials supplied to Stage 0 via `TF_VAR_*` env vars. See
-> `PLAN.md` §16.4 for the variable names.
+### Today (manual)
+
+Create the two GitHub Apps manually via *Organization settings →
+Developer settings → GitHub Apps → New GitHub App* with the
+permissions above, then supply their credentials to Stage 0 via
+`TF_VAR_*` env vars. See `PLAN.md` §16.4 for the variable names.
 
 ## 5. Bootstrap Terraform
 
@@ -173,7 +180,9 @@ GitHub items must be arranged out-of-band by the adopter org.
   organization).
 - Both GitHub Apps from §4 exist on the fleet repo and their
   credentials are available as `TF_VAR_*` env vars or in
-  `init/.gh-apps.auto.tfvars`.
+  `./.gh-apps.auto.tfvars`. The fleet Key Vault is created and
+  these secrets are seeded in Stage 0; `bootstrap/fleet` does not
+  write or manage the GitHub App credentials.
 - The team-template repo (`<github_org>/<team_template_repo>`,
   default `team-repo-template`) must **not** pre-exist; it is
   created fresh with `prevent_destroy = true`.
