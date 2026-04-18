@@ -83,4 +83,11 @@ resource "azapi_resource" "ra_stage0_kv_secrets_officer" {
 resource "time_sleep" "wait_kv_rbac" {
   depends_on      = [azapi_resource.ra_stage0_kv_secrets_officer]
   create_duration = "60s"
+
+  # Re-run the delay if the role assignment is ever replaced
+  # (e.g. principal drift), so secret writes don't race RBAC
+  # propagation on re-apply.
+  lifecycle {
+    replace_triggered_by = [azapi_resource.ra_stage0_kv_secrets_officer]
+  }
 }

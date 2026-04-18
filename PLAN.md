@@ -602,17 +602,15 @@ Creates:
   used by env-bootstrap and team-bootstrap workflows.
 - **`fleet-meta` GitHub App** (admin-class) and **`stage0-publisher`
   GitHub App** (narrow). Both are created **out of band** by the
-  `init/init-gh-apps.sh` helper (§16.4) before this stage runs,
-  because the GitHub App Manifest flow requires a one-time browser
-  consent click that no API can bypass. `bootstrap/fleet` consumes
-  their credentials as input variables and is responsible only for:
-  - Storing both PEMs and webhook secrets as fleet-KV secrets
-    (`fleet-meta-app-pem`, `fleet-meta-webhook-secret`,
-    `stage0-publisher-app-pem`,
-    `stage0-publisher-webhook-secret`); read at workflow time by
-    the `fleet-meta` and `stage0-publisher` UAMIs respectively.
-  - Publishing the App ids and client ids as fleet-repo variables
-    so workflows can mint installation tokens.
+  `init-gh-apps.sh` helper (§16.4) before this stage runs, because
+  the GitHub App Manifest flow requires a one-time browser consent
+  click that no API can bypass. **`bootstrap/fleet` does not touch
+  GH App credentials** — the fleet Key Vault is created in Stage 0
+  (§4 Stage 0), and storing the PEMs / webhook secrets there is
+  therefore Stage 0's job. `bootstrap/fleet`'s only involvement
+  with the Apps is creating the `fleet-stage0` / `fleet-meta`
+  GitHub environments that Stage 0 later populates with
+  App-derived variables.
   - Required permissions per App (asserted by the manifest):
     - `fleet-meta`: `administration:write`, `environments:write`,
       `variables:write`, `secrets:write`, `contents:write` —
@@ -823,6 +821,15 @@ Creates:
     authenticate to GitHub for platform-gitops pulls.
   - `argocd-oidc-client-secret` — every cluster's ArgoCD reads it for
     human SSO auth-code flow.
+  - `fleet-meta-app-pem`, `fleet-meta-webhook-secret`,
+    `stage0-publisher-app-pem`, `stage0-publisher-webhook-secret` —
+    the two GH Apps created out-of-band by `init-gh-apps.sh` (§16.4).
+    Values are consumed from the repo-root `.gh-apps.auto.tfvars`
+    overlay this stage reads in addition to its normal tfvars.json.
+    bootstrap/fleet does not create the fleet KV, so seeding these
+    secrets is Stage 0's responsibility; downstream workflows read
+    them at run time via the `fleet-meta` / `stage0-publisher`
+    UAMIs.
   - additional fleet-wide secrets added over time.
   Kargo GitHub App PEM and Kargo OIDC client secret are **not** here
   — only the mgmt cluster uses them, so they live in the mgmt
@@ -938,6 +945,19 @@ secret material is ever a Stage 0 output.
 | `kargo_mgmt_uami_resource_id`     | `KARGO_MGMT_UAMI_RESOURCE_ID`       | Mgmt Stage 2 — parent ref for `fc-kargo-mgmt` FIC (`.../federatedIdentityCredentials`)                                      |
 | `kargo_mgmt_uami_principal_id`    | `KARGO_MGMT_UAMI_PRINCIPAL_ID`      | Every workload cluster's Stage 1 — `AKS RBAC Reader` role-assignment `properties.principalId` on the workload AKS resource  |
 | `kargo_mgmt_uami_client_id`       | `KARGO_MGMT_UAMI_CLIENT_ID`         | Mgmt Stage 2 — `azure.workload.identity/client-id` annotation on the `kargo-controller` ServiceAccount                      |
+
+**GitHub Apps** (Apps themselves are created by `init-gh-apps.sh`
+out-of-band per §16.4; Stage 0 receives their ids/client ids as
+inputs via `.gh-apps.auto.tfvars` and publishes them as repo
+variables so downstream workflows can mint installation tokens)
+
+| TF output                           | Repo variable                  | Consumed by                                                                                      |
+| ----------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------ |
+| `fleet_meta_app_id`                 | `FLEET_META_APP_ID`            | `env-bootstrap.yaml`, `team-bootstrap.yaml` — installation-token minting under `fleet-meta` UAMI |
+| `fleet_meta_app_client_id`          | `FLEET_META_APP_CLIENT_ID`     | same workflows — App client id for JWT `iss` claim                                               |
+| `stage0_publisher_app_id`           | `STAGE0_PUBLISHER_APP_ID`      | `tf-apply.yaml` (Stage 0 `publish-stage0-outputs` step) — token to `PATCH` repo variables        |
+| `stage0_publisher_app_client_id`    | `STAGE0_PUBLISHER_APP_CLIENT_ID`| same                                                                                             |
+
 
 **Not published as repo variables** (available from other sources, no indirection needed):
 
@@ -1959,12 +1979,12 @@ one-shot initializer to materialize adopter-specific values. After
 initialization the repo is a concrete, self-contained fleet repo with
 no template machinery left behind.
 
-> **Implementation status (Phase 1):** §§16.1–16.3 and §§16.5–16.9 are
-> implemented. **§16.4 (`init/init-gh-apps.sh` GitHub-App provisioning
-> helper) is specified but not yet built** — the two GH Apps are
-> currently created manually by the adopter operator. §16.10.10 (CI
-> naming-derivation parity diff) is deferred to Phase 2 CI work.
-> The rendering layer was changed from an initial
+> **Implementation status (Phase 1):** §§16.1–16.3, §§16.5–16.9, and
+> §§16.10.1–16.10.9 are implemented. **§16.4 (`init-gh-apps.sh`
+> GitHub-App provisioning helper) is specified but not yet built** —
+> the two GH Apps are currently created manually by the adopter
+> operator. §16.10.10 (CI naming-derivation parity diff) is deferred
+> to Phase 2 CI work. The rendering layer was changed from an initial
 > sed-over-`__UPPER_SNAKE__` token pass to a **throwaway Terraform root
 > module at `init/`** driven by a thin wrapper shell (`init-fleet.sh`).
 > Rationale: Terraform is already a hard dependency for bootstrap, and
@@ -2066,7 +2086,7 @@ Interactive wizard by default; `--non-interactive` plus optional
    the adopter repo contains zero template machinery. Template history
    remains accessible via `git log`.
 
-### 16.4 `init/init-gh-apps.sh` — GitHub App provisioning helper
+### 16.4 `init-gh-apps.sh` — GitHub App provisioning helper
 
 Two GitHub Apps (`fleet-meta`, `stage0-publisher`; rationale and
 permission split in §4 Stage -1 `bootstrap/fleet`) must exist on the
@@ -2076,11 +2096,18 @@ the App Manifest flow, which requires a one-time browser handshake to
 record the operator's consent to the requested permissions. This
 script automates everything around that single click.
 
+Lives at the **repo root** next to `init-fleet.sh`, not inside
+`init/`. `init-fleet.sh` deletes the entire `init/` tree on
+self-cleanup (§16.3 step 7), which runs before this helper is
+invoked — anything placed under `init/` would therefore already be
+gone.
+
 Run order: after `init-fleet.sh` (so `_fleet.yaml` exists) and before
 `terraform -chdir=terraform/bootstrap/fleet apply`. Idempotent: if
 both apps already exist on `<fleet.github_org>` and their PEMs are
-already captured in the state file (`init/.gh-apps.state.json`,
-gitignored), the script exits 0 with a "nothing to do" message.
+already captured in the state file (`./.gh-apps.state.json` at repo
+root, gitignored), the script exits 0 with a "nothing to do"
+message.
 
 Steps, per App:
 
@@ -2099,17 +2126,17 @@ Steps, per App:
    `gh api -X POST /app-manifests/<code>/conversions` →
    `{ id, slug, client_id, client_secret, pem, webhook_secret }`.
    These values are returned **once**; the script writes them
-   immediately to `init/.gh-apps.state.json` (mode 0600).
+   immediately to `./.gh-apps.state.json` (mode 0600, gitignored).
 6. **Install** the App on the fleet repo:
    `gh api -X POST /orgs/<org>/installations` (operator may be
    re-prompted in the browser to confirm install scope).
-7. **Emit** a tfvars overlay file (`init/.gh-apps.auto.tfvars`,
-   gitignored) with the variable names `bootstrap/fleet` consumes:
+7. **Emit** a tfvars overlay file (`./.gh-apps.auto.tfvars` at repo
+   root, gitignored) with the variable names Stage 0 consumes:
 
    ```hcl
-   fleet_meta_app_id          = "<id>"
-   fleet_meta_app_client_id   = "<client_id>"
-   fleet_meta_app_pem         = <<EOT
+   fleet_meta_app_id             = "<id>"
+   fleet_meta_app_client_id      = "<client_id>"
+   fleet_meta_app_pem            = <<EOT
    <pem>
    EOT
    fleet_meta_app_webhook_secret = "<webhook_secret>"
@@ -2122,11 +2149,15 @@ Steps, per App:
    stage0_publisher_app_webhook_secret  = "<webhook_secret>"
    ```
 
-   `bootstrap/fleet` declares matching `variable` blocks, writes
-   the PEMs and webhook secrets straight into the fleet KV (created
-   in the same apply for this purpose), and publishes the App ids /
-   client ids as fleet-repo variables for workflows to mint
-   installation tokens.
+   **Stage 0** declares matching `variable` blocks (not
+   `bootstrap/fleet`: bootstrap/fleet does not create the fleet
+   KV). Stage 0's tf-apply workflow symlinks or copies
+   `.gh-apps.auto.tfvars` into `terraform/stages/0-fleet/` so
+   `terraform plan/apply` picks it up as an additional variable
+   source. Stage 0 then writes the PEMs + webhook secrets into the
+   fleet KV it creates, and publishes the App ids / client ids as
+   fleet-repo variables (see §4 Stage 0 outputs) so downstream
+   workflows can mint installation tokens.
 
 Failure modes the script handles explicitly:
 
@@ -2138,16 +2169,19 @@ Failure modes the script handles explicitly:
 - Manifest exchange returns 404/410 → temp_code expired; rerun.
 - App already exists with the same name → list existing Apps via
   `gh api /orgs/<org>/installations` and skip creation; if the
-  existing App's PEM is *not* in `init/.gh-apps.state.json`, abort
+  existing App's PEM is *not* in `./.gh-apps.state.json`, abort
   with a clear message (the operator must rotate the PEM via
   `gh api -X POST /apps/<slug>/keys` and re-run).
 
-Self-cleanup: like `init-fleet.sh`, this script is deleted by
-`init-fleet.sh`'s self-cleanup pass once `.fleet-initialized` is
-written. The state file (`init/.gh-apps.state.json`) and tfvars
-overlay are likewise removed; their authoritative storage post-
-bootstrap is the fleet KV (PEMs/secrets) and fleet-repo variables
-(ids).
+Self-cleanup: the script `rm`s itself after a successful run in
+which both Apps exist, are installed, and the tfvars overlay has
+been written. The state file (`./.gh-apps.state.json`) and tfvars
+overlay (`./.gh-apps.auto.tfvars`) remain on disk (both gitignored)
+until Stage 0 has successfully applied — their authoritative storage
+post-Stage-0 is the fleet KV (PEMs/webhook secrets) and fleet-repo
+variables (ids/client ids). The adopter may delete both files
+manually after the first green Stage 0 apply; leaving them in place
+is harmless.
 
 ### 16.5 GitHub template repo mechanics
 

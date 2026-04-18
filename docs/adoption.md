@@ -101,30 +101,38 @@ radius (rationale in `PLAN.md` §4 Stage -1):
 
 Neither App can be created headlessly: the GitHub Apps API requires
 a one-time browser handshake (the App Manifest flow) so a human can
-consent to the requested permissions. The `init/init-gh-apps.sh`
-helper (see `PLAN.md` §16.4) automates everything around that
-single click — building the manifest from `_fleet.yaml`, opening a
-localhost listener for the redirect, exchanging the temp code for
-the App credentials, and installing both Apps on the fleet repo.
+consent to the requested permissions. The `init-gh-apps.sh` helper
+(see `PLAN.md` §16.4) — placed at the **repo root** alongside
+`init-fleet.sh`, because `init-fleet.sh` deletes the entire `init/`
+tree on self-cleanup — automates everything around that single
+click: building the manifest from `_fleet.yaml`, opening a localhost
+listener for the redirect, exchanging the temp code for the App
+credentials, and installing both Apps on the fleet repo.
 
 ```sh
 export GITHUB_TOKEN=<PAT with repo:admin + admin:org>
-./init/init-gh-apps.sh
+./init-gh-apps.sh
 ```
 
 The script writes the resulting App IDs / PEMs / webhook secrets to
-`init/.gh-apps.auto.tfvars` (gitignored). `bootstrap/fleet` reads
-that file as a tfvars overlay and stores the secrets in the fleet
-Key Vault on first apply; from that point forward the on-disk file
-is no longer needed and is deleted by the same self-cleanup pass
-that removes `init/`.
+`./.gh-apps.auto.tfvars` (gitignored) at the repo root. This file is
+a tfvars overlay consumed by **Stage 0** (`terraform/stages/0-fleet`,
+not `bootstrap/fleet`): Stage 0 creates the fleet Key Vault, writes
+the PEMs + webhook secrets into it, and publishes the App IDs /
+client IDs as repo variables. `bootstrap/fleet` itself does **not**
+touch GH App credentials — its only GH-App involvement is creating
+the `fleet-stage0` / `fleet-meta` GitHub environments that Stage 0
+later populates. The on-disk `.gh-apps.auto.tfvars` and
+`.gh-apps.state.json` remain on disk (both gitignored) after Stage 0
+applies; the adopter may delete them manually once the fleet KV
+holds authoritative copies.
 
 > **Status:** this script is specified but not yet implemented as
 > of Phase 1. Until it lands, the two GitHub Apps must be created
 > manually via *Organization settings → Developer settings → GitHub
 > Apps → New GitHub App* with the permissions above, and their
-> credentials supplied to `bootstrap/fleet` via `TF_VAR_*` env
-> vars. See `PLAN.md` §16.4 for the variable names.
+> credentials supplied to Stage 0 via `TF_VAR_*` env vars. See
+> `PLAN.md` §16.4 for the variable names.
 
 ## 5. Bootstrap Terraform
 
