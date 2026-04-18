@@ -35,7 +35,7 @@ locals {
     repository            = local.oidc_repo.full_name
     repository_id         = tostring(local.oidc_repo.repo_id)
     repository_owner      = local.oidc_owner_login
-    repository_owner_id   = local.oidc_owner_id
+    repository_owner_id   = tostring(local.oidc_owner_id)
     repository_visibility = local.oidc_repo.visibility
   } : {}
 

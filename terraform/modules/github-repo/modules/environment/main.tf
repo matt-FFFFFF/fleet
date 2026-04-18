@@ -93,10 +93,18 @@ locals {
   # Custom format: key:value pairs joined with ":"
   # e.g. repository_owner_id:6844498:repository_id:760046975:environment:staging
   # The "environment" key uses the actual environment name; other keys use the
-  # resolved values from oidc_subject_claim_values.
+  # resolved values from oidc_subject_claim_values. Non-`environment` keys
+  # that are not present in `oidc_subject_claim_values` are replaced with a
+  # sentinel so the resulting precondition below fails with a clear message
+  # instead of a bare "Invalid index" error.
+  missing_claim_keys = !local.use_default_subject ? [
+    for key in var.actions_oidc_subject_claims.include_claim_keys :
+    key if key != "environment" && !contains(keys(var.oidc_subject_claim_values), key)
+  ] : []
+
   custom_subject = !local.use_default_subject ? join(":", flatten([
     for key in var.actions_oidc_subject_claims.include_claim_keys :
-    [key, key == "environment" ? var.environment : var.oidc_subject_claim_values[key]]
+    [key, key == "environment" ? var.environment : lookup(var.oidc_subject_claim_values, key, "")]
   ])) : ""
 
   # Final subject: explicit override > auto-constructed
@@ -140,22 +148,34 @@ resource "azapi_resource" "federated_identity_credential" {
   }
 
   response_export_values = []
+
+  lifecycle {
+    precondition {
+      condition     = length(local.missing_claim_keys) == 0
+      error_message = "actions_oidc_subject_claims.include_claim_keys references ${jsonencode(local.missing_claim_keys)} but no matching entries were supplied in oidc_subject_claim_values. Every non-`environment` claim key must have a value."
+    }
+  }
 }
 
 # -----------------------------------------------------------------------------
 # Azure role assignments
+#
+# Role-assignment resource names are Azure-scope GUIDs; deriving them
+# deterministically from (role_key, scope, principalId) via `uuidv5` matches
+# the repo-wide convention (see terraform/stages/0-fleet/main.kv.tf and
+# terraform/bootstrap/environment/main.identities.tf) and makes IDs stable
+# across recreations/imports.
 # -----------------------------------------------------------------------------
-
-resource "random_uuid" "role_assignment" {
-  for_each = var.role_assignments
-}
 
 resource "azapi_resource" "role_assignment" {
   for_each = var.role_assignments
 
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
   parent_id = each.value.scope
-  name      = random_uuid.role_assignment[each.key].result
+  name = uuidv5(
+    "url",
+    "${each.key}/${each.value.scope}/${azapi_resource.identity[0].output.properties.principalId}",
+  )
 
   body = {
     properties = {
