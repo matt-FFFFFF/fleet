@@ -231,8 +231,20 @@ if [ -f "$repo_root/.gitignore" ]; then
   if ! tmp=$(mktemp 2>/dev/null); then
     tmp=$(mktemp -t init-fleet.XXXXXX) || die "failed to create temporary file"
   fi
-  grep -v '^\*\*/\.terraform\.lock\.hcl$' "$repo_root/.gitignore" > "$tmp" || true
-  mv "$tmp" "$repo_root/.gitignore"
+  # grep exits 0 (matches found) or 1 (no matches) — both mean the
+  # output in $tmp is valid; only exit >=2 signals a real error that
+  # must not clobber the original .gitignore.
+  if grep -v '^\*\*/\.terraform\.lock\.hcl$' "$repo_root/.gitignore" > "$tmp"; then
+    mv "$tmp" "$repo_root/.gitignore"
+  else
+    grep_status=$?
+    if [ "$grep_status" -eq 1 ]; then
+      mv "$tmp" "$repo_root/.gitignore"
+    else
+      rm -f "$tmp"
+      die "failed to update $repo_root/.gitignore"
+    fi
+  fi
 fi
 
 rm -f "$0"
