@@ -484,6 +484,36 @@ structure and Azure-resource names.
 
 ### Stage -1 — Bootstrap (`terraform/bootstrap/`)
 
+> **Implementation status (2026-04-18).** All three Stage-1 roots
+> (`bootstrap/fleet`, `bootstrap/environment`, `bootstrap/team`) are
+> refactored onto the vendored `terraform/modules/github-repo` module
+> (fork of `terraform-github-repository-and-content`; see
+> `terraform/modules/github-repo/VENDORING.md`). Consequences:
+>
+> - The fleet repo, both its GH Actions environments (`fleet-stage0`,
+>   `fleet-meta`), their UAMIs + federated credentials, env-scoped RBAC,
+>   and the `main`-branch protection ruleset are all owned by a single
+>   `module "fleet_repo"` call in `bootstrap/fleet/main.github.tf`.
+> - `bootstrap/environment` calls
+>   `modules/github-repo/modules/environment` directly (the fleet repo
+>   itself is already owned by `bootstrap/fleet`) and preserves the
+>   legacy FIC name `gh-fleet-<env>` via the `identity.fic_name`
+>   override.
+> - OIDC subject claims use ID-based keys
+>   (`repository_owner_id`, `repository_id`, `environment`) on both
+>   sides — immutable, so org/repo renames cannot silently invalidate
+>   federated credentials.
+> - `bootstrap/team` uses `template = {...}` + a managed
+>   `.github/CODEOWNERS` file via `files`, plus a matching
+>   `main`-branch ruleset.
+> - Env variables that reference the module's own UAMI output
+>   (`AZURE_CLIENT_ID` etc.) are created at the callsite as separate
+>   `github_actions_environment_variable` resources, not via the
+>   module's `variables` input, to avoid a module-to-child-output
+>   cycle.
+> - GH Apps (`fleet-meta`, `stage0-publisher`) and their PEMs → KV
+>   wiring remain TODO as previously tracked.
+
 Three TF roots, each run rarely. Bootstrap exists to create the
 identities and GitHub scaffolding that CI-run stages depend on.
 
@@ -1703,6 +1733,17 @@ Each environment holds its own `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
   path do not trigger CI beyond lint checks.
 
 ### Branch protection
+
+> **Implementation status (2026-04-18).** `main`-branch protection on
+> the fleet repo and the team-template repo is enforced via GitHub
+> repository **rulesets** (vendored
+> `terraform/modules/github-repo/modules/ruleset`), not the legacy
+> `github_branch_protection` resource. The ruleset requires signed
+> commits, PR review (1 approver, CODEOWNERS), up-to-date branches,
+> and a `validate` status check; non-fast-forward pushes are blocked.
+> Kargo-bot bypass on
+> `platform-gitops/components/*/environments/{dev,staging}/values.yaml`
+> is deferred until the Kargo GitHub App is minted (see §15).
 
 - `main` requires PR review, `validate.yaml` to pass, signed commits.
 - Exception for the Kargo GitHub App on paths

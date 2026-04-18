@@ -12,8 +12,10 @@
 > Legend: `[x]` done · `[~]` in progress / scaffolded but unapplied
 > `[ ]` not started · `[-]` deferred.
 
-Last updated: 2026-04-17 · stages/0-fleet scaffolded (ACR, fleet KV,
-AAD apps, Argo RP secret rotation, Kargo mgmt UAMI).
+Last updated: 2026-04-18 · vendored `terraform-github-repository-and-content`
+into `terraform/modules/github-repo`; `bootstrap/{fleet,environment,team}`
+refactored onto it; `main`-branch protection migrated to ruleset;
+Terraform floor bumped to `~> 1.11`.
 
 ---
 
@@ -50,20 +52,28 @@ AAD apps, Argo RP secret rotation, Kargo mgmt UAMI).
 ### Stage -1 — `terraform/bootstrap/`
 
 - [~] `bootstrap/fleet/` — scaffolded (state SA, stage0 + meta UAMIs,
-      FICs, GH repo + branch protection, env variables). **Not yet
-      applied against a live tenant.**
+      FICs, GH repo + `main`-branch **ruleset**, env variables).
+      Delivered via the vendored `terraform/modules/github-repo` module.
+      **Not yet applied against a live tenant.**
   - [x] yamldecode locals; no `var.fleet`.
-  - [x] `import` block for `github_repository.fleet`.
+  - [x] `import` block for `module.fleet_repo.github_repository.this[0]`.
+  - [x] OIDC subject claims use ID-based keys
+        (`repository_owner_id`, `repository_id`, `environment`).
   - [ ] GH Apps (`fleet-meta`, `stage0-publisher`) — documented as
         TODO in `main.github.tf`; manifest-flow helper not written.
   - [ ] PEMs → fleet KV wiring (deferred; KV created in Stage 0).
 - [~] `bootstrap/environment/` — scaffolded (state container, env
       UAMI, GH env + variables, observability RG/AG/AMG/AMW/DCE/NSP).
-      Not yet applied.
+      GH env + UAMI delivered via the vendored
+      `modules/github-repo/modules/environment` submodule. Not yet
+      applied.
   - [x] yamldecode locals; `var.location` optional.
   - [x] Consumes `fleet_meta_principal_id` input from fleet outputs.
-- [ ] `bootstrap/team/` — stub only; awaits PLAN §4 Stage -1
-      `team-bootstrap.yaml` flow.
+  - [x] OIDC subject claims match fleet (ID-based); FIC name preserved
+        via `identity.fic_name = "gh-fleet-<env>"` override.
+- [~] `bootstrap/team/` — refactored onto the vendored module
+      (`module "team_repo"` with `template =` + CODEOWNERS file);
+      awaits PLAN §4 Stage -1 `team-bootstrap.yaml` CI flow.
 
 ### Stage 0 — `terraform/stages/0-fleet`
 
@@ -193,6 +203,19 @@ AAD apps, Argo RP secret rotation, Kargo mgmt UAMI).
       committed, checked by `init-fleet.sh --force`).
 - [x] `.github/fixtures/adopter-test.tfvars` selftest input.
 - [x] `AGENTS.md` — agent onboarding preamble.
+- [x] `terraform/modules/github-repo/` — vendored fork of
+      `terraform-github-repository-and-content` (root + `modules/environment`
+      + `modules/ruleset`). Repo-local extensions: `is_template`,
+      `allow_{merge_commit,squash_merge,rebase_merge}`,
+      `delete_branch_on_merge`, `vulnerability_alerts`,
+      `environments[*].identity.fic_name`, hard-coded
+      `lifecycle.ignore_changes` on `github_repository.this`. See
+      `VENDORING.md` for upstream diff.
+- [x] Terraform floor raised to `~> 1.11` across `init/`, all
+      bootstrap stacks, Stage 0, and `template-selftest.yaml`.
+- [x] `main`-branch protection on the fleet repo migrated from
+      `github_branch_protection` to the vendored `modules/ruleset`
+      (Kargo-bot bypass deferred per PLAN §10 / §15).
 
 ## Next likely units of work
 

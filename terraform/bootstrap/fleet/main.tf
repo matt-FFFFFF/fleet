@@ -57,8 +57,5 @@ locals {
       try(local.fleet_doc.keyvault.name_override, ""),
       substr("kv-${local.fleet.name}-fleet", 0, 24),
     )
-
-    fleet_stage0_fic_subject = var.fleet_stage0_fic_subject != "" ? var.fleet_stage0_fic_subject : "repo:${local.fleet.github_org}/${local.fleet.github_repo}:environment:fleet-stage0"
-    fleet_meta_fic_subject   = var.fleet_meta_fic_subject != "" ? var.fleet_meta_fic_subject : "repo:${local.fleet.github_org}/${local.fleet.github_repo}:environment:fleet-meta"
   }
 }

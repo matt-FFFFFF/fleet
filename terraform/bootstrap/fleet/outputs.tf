@@ -21,26 +21,26 @@ output "fleet_shared_resource_group_id" {
 
 output "fleet_stage0_uami" {
   value = {
-    resource_id  = azapi_resource.uami_fleet_stage0.id
-    client_id    = azapi_resource.uami_fleet_stage0.output.properties.clientId
-    principal_id = azapi_resource.uami_fleet_stage0.output.properties.principalId
+    resource_id  = module.fleet_repo.environments["stage0"].identity.id
+    client_id    = module.fleet_repo.environments["stage0"].identity.client_id
+    principal_id = module.fleet_repo.environments["stage0"].identity.principal_id
   }
 }
 
 output "fleet_meta_uami" {
   value = {
-    resource_id  = azapi_resource.uami_fleet_meta.id
-    client_id    = azapi_resource.uami_fleet_meta.output.properties.clientId
-    principal_id = azapi_resource.uami_fleet_meta.output.properties.principalId
+    resource_id  = module.fleet_repo.environments["meta"].identity.id
+    client_id    = module.fleet_repo.environments["meta"].identity.client_id
+    principal_id = module.fleet_repo.environments["meta"].identity.principal_id
   }
 }
 
 output "fleet_repo_full_name" {
-  value = github_repository.fleet.full_name
+  value = module.fleet_repo.full_name
 }
 
 output "team_template_repo_full_name" {
-  value = github_repository.team_template.full_name
+  value = module.team_template_repo.full_name
 }
 
 output "derived_names" {
