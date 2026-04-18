@@ -97,9 +97,18 @@ locals {
   # that are not present in `oidc_subject_claim_values` are replaced with a
   # sentinel so the resulting precondition below fails with a clear message
   # instead of a bare "Invalid index" error.
+  # Non-`environment` keys in `include_claim_keys` must resolve to a
+  # non-empty string via `oidc_subject_claim_values`. A missing key, a null
+  # value, or an empty string all count as "missing" — any of these would
+  # produce an invalid federated-credential subject (e.g. a stray
+  # `::` segment from an empty value).
   missing_claim_keys = !local.use_default_subject ? [
     for key in var.actions_oidc_subject_claims.include_claim_keys :
-    key if key != "environment" && !contains(keys(var.oidc_subject_claim_values), key)
+    key if key != "environment" && (
+      !contains(keys(var.oidc_subject_claim_values), key) ||
+      try(var.oidc_subject_claim_values[key], null) == null ||
+      try(var.oidc_subject_claim_values[key], "") == ""
+    )
   ] : []
 
   custom_subject = !local.use_default_subject ? join(":", flatten([
@@ -152,7 +161,7 @@ resource "azapi_resource" "federated_identity_credential" {
   lifecycle {
     precondition {
       condition     = length(local.missing_claim_keys) == 0
-      error_message = "actions_oidc_subject_claims.include_claim_keys references ${jsonencode(local.missing_claim_keys)} but no matching entries were supplied in oidc_subject_claim_values. Every non-`environment` claim key must have a value."
+      error_message = "actions_oidc_subject_claims.include_claim_keys references ${jsonencode(local.missing_claim_keys)} but those keys are absent, null, or empty in oidc_subject_claim_values. Every non-`environment` claim key must map to a non-empty string."
     }
   }
 }

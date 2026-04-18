@@ -4,6 +4,15 @@
 
 Terraform module that creates a GitHub repository and commits file content to it.
 
+> **Note for this repo.** This module is **vendored** into the fleet repo at
+> `terraform/modules/github-repo/` with repo-local extensions; see
+> `VENDORING.md` for the upstream source and the delta. Internal callers
+> **must** reference it via a relative in-repo path
+> (`source = "../../modules/github-repo"`), not the upstream URL used in
+> the examples below. The external `source = "github.com/..."` examples are
+> retained verbatim from upstream so this README stays regeneratable via
+> `terraform-docs`.
+
 ## Features
 
 - **Optional repo creation** -- set `create_repository = false` to manage files in an existing repository.

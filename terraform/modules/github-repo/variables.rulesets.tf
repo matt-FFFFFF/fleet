@@ -155,4 +155,24 @@ DESCRIPTION
     ])
     error_message = "target must be one of: branch, tag, push."
   }
+
+  validation {
+    condition = alltrue(flatten([
+      for k, v in var.rulesets : [
+        for a in coalesce(v.bypass_actors, []) :
+        contains(["Integration", "OrganizationAdmin", "RepositoryRole", "Team", "DeployKey"], a.actor_type)
+      ]
+    ]))
+    error_message = "bypass_actors[*].actor_type must be one of: Integration, OrganizationAdmin, RepositoryRole, Team, DeployKey."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for k, v in var.rulesets : [
+        for a in coalesce(v.bypass_actors, []) :
+        contains(["always", "pull_request"], a.bypass_mode)
+      ]
+    ]))
+    error_message = "bypass_actors[*].bypass_mode must be one of: always, pull_request."
+  }
 }
