@@ -86,14 +86,100 @@ git commit -m "chore: initialize fleet from template"
 git push
 ```
 
-## 4. Bootstrap Terraform
+## 4. Provision the GitHub Apps
 
-Proceed with `terraform/bootstrap/fleet` (human-run, once):
+The fleet uses two GitHub Apps with deliberately different blast
+radius (rationale in `PLAN.md` §4 Stage -1):
+
+- **`fleet-meta`** (admin-class) — used by env-bootstrap and
+  team-bootstrap workflows behind a 2-reviewer gate.
+  Permissions: `administration:write`, `environments:write`,
+  `variables:write`, `secrets:write`, `contents:write`.
+- **`stage0-publisher`** (narrow) — used by the Stage 0 workflow
+  to publish outputs as repo variables.
+  Permissions: `variables:write` only.
+
+Neither App can be created headlessly: the GitHub Apps API requires
+a one-time browser handshake (the App Manifest flow) so a human can
+consent to the requested permissions. The `init/init-gh-apps.sh`
+helper (see `PLAN.md` §16.4) automates everything around that
+single click — building the manifest from `_fleet.yaml`, opening a
+localhost listener for the redirect, exchanging the temp code for
+the App credentials, and installing both Apps on the fleet repo.
+
+```sh
+export GITHUB_TOKEN=<PAT with repo:admin + admin:org>
+./init/init-gh-apps.sh
+```
+
+The script writes the resulting App IDs / PEMs / webhook secrets to
+`init/.gh-apps.auto.tfvars` (gitignored). `bootstrap/fleet` reads
+that file as a tfvars overlay and stores the secrets in the fleet
+Key Vault on first apply; from that point forward the on-disk file
+is no longer needed and is deleted by the same self-cleanup pass
+that removes `init/`.
+
+> **Status:** this script is specified but not yet implemented as
+> of Phase 1. Until it lands, the two GitHub Apps must be created
+> manually via *Organization settings → Developer settings → GitHub
+> Apps → New GitHub App* with the permissions above, and their
+> credentials supplied to `bootstrap/fleet` via `TF_VAR_*` env
+> vars. See `PLAN.md` §16.4 for the variable names.
+
+## 5. Bootstrap Terraform
+
+### 5.1 Prerequisites
+
+Before invoking `terraform apply` on `bootstrap/fleet`, all of the
+following must be true. The adoption helpers (§2 above and §4
+above) handle the repo-state items automatically; the Azure and
+GitHub items must be arranged out-of-band by the adopter org.
+
+**Azure**
+
+- `az login` session in the tenant identified by
+  `_fleet.yaml.fleet.tenant_id`. Both providers run with
+  `use_cli = true`; no service-principal env vars are read.
+- Tenant role: **Privileged Role Administrator** (or Global
+  Administrator) — required to grant the
+  `Application Administrator` directory role to the
+  `fleet-stage0` and `fleet-meta` UAMIs.
+- Subscription role on `_fleet.yaml.acr.subscription_id`:
+  **Owner** (or Contributor + User Access Administrator).
+- Resource provider registrations on the shared subscription:
+  `Microsoft.Storage`, `Microsoft.Resources`,
+  `Microsoft.ManagedIdentity`, `Microsoft.Authorization`,
+  `Microsoft.ContainerRegistry`. Not enforced in code; an
+  RP-not-registered error is the most common first-apply failure.
+- Names that must be free (or matched by overrides in
+  `_fleet.yaml`): storage account `st<fleet.name>tfstate` (≤24
+  chars, globally unique), resource groups `rg-fleet-tfstate` and
+  `rg-fleet-shared`.
+
+**GitHub**
+
+- Fleet repo already exists (created via "Use this template" in
+  §1); `bootstrap/fleet` adopts it via an `import` block.
+- `GITHUB_TOKEN` exported with classic-PAT scopes `repo:admin`
+  and `admin:org` (the latter only if `github_org` is an
+  organization).
+- Both GitHub Apps from §4 exist on the fleet repo and their
+  credentials are available as `TF_VAR_*` env vars or in
+  `init/.gh-apps.auto.tfvars`.
+- The team-template repo (`<github_org>/<team_template_repo>`,
+  default `team-repo-template`) must **not** pre-exist; it is
+  created fresh with `prevent_destroy = true`.
+
+**Local tooling**
+
+- `terraform` ≥ 1.9, `az` CLI, `gh` CLI (authenticated to the
+  same account that holds `GITHUB_TOKEN`), `git`, `python3`,
+  `bash`.
+
+### 5.2 Apply
 
 ```sh
 cd terraform/bootstrap/fleet
-az login                              # tenant-admin + subscription-owner
-export GITHUB_TOKEN=<PAT org:admin + repo:admin>
 terraform init
 terraform apply
 ```

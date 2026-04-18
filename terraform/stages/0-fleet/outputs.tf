@@ -74,10 +74,10 @@ output "kargo_mgmt_uami_client_id" {
   value       = azapi_resource.uami_kargo_mgmt.output.properties.clientId
 }
 
-# --- Derived names (kept for intended CI parity check; see PLAN §16.9.10) --
+# --- Derived names (kept for intended CI parity check; see PLAN §16.10.10) --
 
 output "derived_names" {
-  description = "Computed resource names. Intended to be diffed against terraform/config-loader/load.sh output in CI once the parity check in PLAN §16.9.10 lands."
+  description = "Computed resource names. Intended to be diffed against terraform/config-loader/load.sh output in CI once the parity check in PLAN §16.10.10 lands."
   value = {
     acr_name      = local.derived.acr_name
     fleet_kv_name = local.derived.fleet_kv_name
