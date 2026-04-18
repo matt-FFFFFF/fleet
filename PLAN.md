@@ -542,13 +542,21 @@ messages; the rest must be arranged out-of-band by the adopter org.
   and installed on the fleet repo, with their app-id, client-id,
   PEM, and webhook secret captured. This is **not**
   `terraform apply`-able from the platform's API — the GitHub App
-  Manifest flow requires a one-time browser handshake. The
-  adopter runs `./init-gh-apps.sh` (§16.4; lives at the repo root
-  next to `init-fleet.sh`) which automates everything *except*
-  the click-to-create step; the operator clicks "Create GitHub
-  App" twice in a browser and the script captures the resulting
-  credentials and writes them to `./.gh-apps.auto.tfvars` as
-  inputs consumed by **Stage 0** (not `bootstrap/fleet`).
+  Manifest flow requires a one-time browser handshake.
+  **Future (once §16.4 lands):** the adopter runs
+  `./init-gh-apps.sh` (repo root, next to `init-fleet.sh`), which
+  automates everything *except* the click-to-create step, and
+  writes credentials to `./.gh-apps.auto.tfvars` for **Stage 0**
+  to consume (not `bootstrap/fleet`).
+  **Today (Phase 1):** GH Apps are **not required** to
+  `terraform apply` `bootstrap/fleet` — this stage does not
+  consume App credentials. Adopters who want env/team-bootstrap
+  workflows to function end-to-end must create the Apps manually
+  via *Organization settings → Developer settings → GitHub Apps*
+  with the permissions listed in §4 Stage 0; Stage 0 does not yet
+  declare input variables for them, so the credentials currently
+  have no TF consumer (they're supplied directly to workflow
+  secrets by the operator).
 - Repo `<github_org>/<team_template_repo>` (default
   `team-repo-template`) must **not** pre-exist; it is created
   fresh by `bootstrap/fleet` with `prevent_destroy = true`.
@@ -575,14 +583,15 @@ messages; the rest must be arranged out-of-band by the adopter org.
   populated (no `__PROMPT__` sentinels remain; `<...>` placeholder
   fields under `environments.*` may remain empty until
   `bootstrap/environment` runs for that env).
-- `init-gh-apps.sh` (at the repo root) has been run successfully
-  and its outputs (`fleet-meta-app-id`, `fleet-meta-pem`,
-  `stage0-publisher-app-id`, `stage0-publisher-pem`, etc.) are
-  available as `./.gh-apps.auto.tfvars` (or as `TF_VAR_*` env
-  vars) for **Stage 0** — see §16.4 for the exact variable
-  names. The fleet Key Vault is created and these secrets are
-  seeded in Stage 0; `bootstrap/fleet` does not write or manage
-  the GitHub App credentials.
+- **Future (once §16.4 lands):** `init-gh-apps.sh` (at the repo
+  root) has been run successfully and its outputs are available
+  as `./.gh-apps.auto.tfvars` for **Stage 0** — see §16.4 for the
+  exact variable names. The fleet Key Vault is created and these
+  secrets are seeded in Stage 0; `bootstrap/fleet` does not write
+  or manage the GitHub App credentials.
+  **Today (Phase 1):** not a prerequisite — `bootstrap/fleet` has
+  no GH App input variables and Stage 0 has not yet added the
+  §16.4 GH App input variables / KV-seed resources either.
 
 Creates:
 

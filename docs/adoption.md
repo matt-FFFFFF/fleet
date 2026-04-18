@@ -138,8 +138,10 @@ holds authoritative copies.
 
 Create the two GitHub Apps manually via *Organization settings →
 Developer settings → GitHub Apps → New GitHub App* with the
-permissions above, then supply their credentials to Stage 0 via
-`TF_VAR_*` env vars. See `PLAN.md` §16.4 for the variable names.
+permissions above. Do **not** expect Stage 0 to consume GitHub App
+credentials via `TF_VAR_*` env vars yet: `terraform/stages/0-fleet`
+does not currently declare those inputs, so they would be ignored.
+That wiring is planned for `PLAN.md` §16.4.
 
 ## 5. Bootstrap Terraform
 
