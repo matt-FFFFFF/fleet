@@ -484,7 +484,7 @@ structure and Azure-resource names.
 
 ### Stage -1 — Bootstrap (`terraform/bootstrap/`)
 
-> **Implementation status (2026-04-18).** All three Stage-1 roots
+> **Implementation status (2026-04-18).** All three Stage -1 roots
 > (`bootstrap/fleet`, `bootstrap/environment`, `bootstrap/team`) are
 > refactored onto the vendored `terraform/modules/github-repo` module
 > (fork of `terraform-github-repository-and-content`; see
