@@ -180,11 +180,12 @@ GitHub items must be arranged out-of-band by the adopter org.
 - `GITHUB_TOKEN` exported with classic-PAT scopes `repo:admin`
   and `admin:org` (the latter only if `github_org` is an
   organization).
-- Both GitHub Apps from §4 exist on the fleet repo and their
-  credentials are available as `TF_VAR_*` env vars or in
-  `./.gh-apps.auto.tfvars`. The fleet Key Vault is created and
-  these secrets are seeded in Stage 0; `bootstrap/fleet` does not
-  write or manage the GitHub App credentials.
+- The GitHub Apps from §4 are **not** required for the initial
+  `bootstrap/fleet` apply. They become relevant for later
+  workflows / once Stage 0 wires the §16.4 inputs; at that point,
+  provide their credentials as `TF_VAR_*` env vars or in
+  `./.gh-apps.auto.tfvars`. `bootstrap/fleet` does not create,
+  write, or manage the GitHub App credentials.
 - The team-template repo (`<github_org>/<team_template_repo>`,
   default `team-repo-template`) must **not** pre-exist; it is
   created fresh with `prevent_destroy = true`.

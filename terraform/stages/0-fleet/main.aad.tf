@@ -105,7 +105,11 @@ resource "azapi_resource" "argocd_oidc_client_secret" {
     }
   }
 
-  depends_on = [time_sleep.wait_kv_rbac]
+  retry = {
+    error_message_regex = [
+      "Unauthorized"
+    ]
+  }
 }
 
 # --- Kargo AAD app -----------------------------------------------------------

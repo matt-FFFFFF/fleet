@@ -1,5 +1,9 @@
 # Terraform
 **/.terraform/
+# .terraform.lock.hcl is gitignored in the TEMPLATE repo only (to avoid
+# churn from local/CI `terraform init` in this repo). `init-fleet.sh`
+# removes this line on adoption so adopter repos commit lock files for
+# reproducibility (HashiCorp's recommendation).
 **/.terraform.lock.hcl
 **/.terraform.lock.hcl.bak
 *.tfstate

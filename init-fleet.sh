@@ -221,6 +221,18 @@ rm -rf "$repo_root/.github/fixtures"
 # The legacy sed-based template file, if still present from an earlier
 # iteration of the template, is no longer needed.
 rm -f "$repo_root/clusters/_fleet.yaml.template"
+
+# Un-ignore Terraform lock files. The template gitignores them to avoid
+# churn from local/CI `terraform init` runs in the template repo, but
+# adopter repos should commit lock files for reproducibility (HashiCorp's
+# recommendation). Drop the line if present.
+if [ -f "$repo_root/.gitignore" ]; then
+  # Portable in-place edit (BSD + GNU sed).
+  tmp=$(mktemp)
+  grep -v '^\*\*/\.terraform\.lock\.hcl$' "$repo_root/.gitignore" > "$tmp" || true
+  mv "$tmp" "$repo_root/.gitignore"
+fi
+
 rm -f "$0"
 
 echo ""

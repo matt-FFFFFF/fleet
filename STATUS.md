@@ -175,7 +175,7 @@ AAD apps, Argo RP secret rotation, Kargo mgmt UAMI).
 - [x] §16.1 Single source of truth (`clusters/_fleet.yaml` generated).
 - [x] §16.2 Bootstrap TF reads yaml (both stacks refactored).
 - [x] §16.3 `init-fleet.sh` wrapper over `init/` TF module.
-- [ ] §16.4 `init/init-gh-apps.sh` — not started; spec only.
+- [ ] §16.4 `init-gh-apps.sh` — not started; spec only.
 - [x] §16.5 GitHub template mechanics; `import` block for fleet repo.
 - [x] §16.6 `docs/naming.md` drafted.
   - [ ] CI diff between `load.sh` and bootstrap HCL locals — deferred.

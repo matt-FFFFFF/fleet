@@ -2093,8 +2093,12 @@ Interactive wizard by default; `--non-interactive` plus optional
 7. **Self-cleanup**: delete `init/`, `init-fleet.sh` itself,
    `.github/workflows/template-selftest.yaml`,
    `.github/workflows/status-check.yaml`, and `.github/fixtures/` so
-   the adopter repo contains zero template machinery. Template history
-   remains accessible via `git log`.
+   the adopter repo contains zero template machinery. Also strip the
+   `**/.terraform.lock.hcl` line from `.gitignore` — the template
+   repo ignores lock files to avoid churn from local/CI
+   `terraform init`, but adopter repos should commit them for
+   reproducibility. Template history remains accessible via
+   `git log`.
 
 ### 16.4 `init-gh-apps.sh` — GitHub App provisioning helper
 
