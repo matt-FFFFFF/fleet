@@ -30,6 +30,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.11.4
+          terraform_wrapper: false
+
+      # Render `clusters/_fleet.yaml` (normally produced by `init-fleet.sh`
+      # during adoption) so the bootstrap stacks' `yamldecode(file(...))`
+      # locals can be evaluated by tflint's HCL pre-pass. Uses the
+      # committed test fixture; no live credentials required.
+      - name: Render clusters/_fleet.yaml from test fixture
+        working-directory: init
+        run: |
+          terraform init -backend=false
+          terraform apply -auto-approve \
+            -var-file=../.github/fixtures/adopter-test.tfvars \
+            -target=local_file.fleet_yaml
+
       - name: Setup tflint
         uses: terraform-linters/setup-tflint@v4
         with:

@@ -1,8 +1,8 @@
 output "env_uami" {
   value = {
-    resource_id  = azapi_resource.uami_env.id
-    client_id    = azapi_resource.uami_env.output.properties.clientId
-    principal_id = azapi_resource.uami_env.output.properties.principalId
+    resource_id  = module.env_github.identity.id
+    client_id    = module.env_github.identity.client_id
+    principal_id = module.env_github.identity.principal_id
   }
 }
 

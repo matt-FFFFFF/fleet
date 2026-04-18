@@ -3,14 +3,16 @@
 # Actions-run via .github/workflows/team-bootstrap.yaml under the fleet-meta
 # GitHub environment. Triggered on PR merge that adds a new
 # platform-gitops/config/teams/<team>.yaml. Creates the team's GitHub repo
-# from the team-repo-template + branch protection + Kargo GH App install.
+# from the team-repo-template + branch-protection ruleset + Kargo GH App
+# install.
 #
-# Phase 1 stub: the full wiring depends on the org's GH-repo module (see
-# bootstrap/fleet/main.github.tf comment). For now the workflow simply
-# documents the next operator step.
+# Phase 1 stub: Kargo GH App install is not wired yet (App ID is not known
+# until init-gh-apps.sh lands per PLAN §16.4). Repo + ruleset + initial
+# CODEOWNERS ARE provisioned by the current module call below.
 
 terraform {
-  required_version = "~> 1.9"
+  required_version = "~> 1.11"
+
   required_providers {
     github = {
       source  = "integrations/github"
@@ -46,46 +48,50 @@ variable "team_template_repo" {
 
 provider "github" { owner = var.github_org }
 
-resource "github_repository" "team" {
+module "team_repo" {
+  source = "../../modules/github-repo"
+
   name        = "${var.team}-gitops"
   description = "GitOps repo for team ${var.team}"
   visibility  = "private"
 
-  template {
+  delete_branch_on_merge = true
+  vulnerability_alerts   = true
+
+  template = {
     owner      = var.github_org
     repository = var.team_template_repo
   }
 
-  delete_branch_on_merge = true
-  vulnerability_alerts   = true
-
-  lifecycle {
-    prevent_destroy = true
-    ignore_changes  = [topics, template]
-  }
-}
-
-resource "github_branch_protection" "team_main" {
-  repository_id = github_repository.team.node_id
-  pattern       = "main"
-
-  required_pull_request_reviews {
-    required_approving_review_count = 1
-    require_code_owner_reviews      = true
+  # Seed CODEOWNERS so PRs require the team's review from day one.
+  files = {
+    ".github/CODEOWNERS" = "* @${var.github_org}/${var.team}\n"
   }
 
-  require_signed_commits = true
-  enforce_admins         = false
-}
-
-# CODEOWNERS seeding: create initial CODEOWNERS file pointing at the team.
-resource "github_repository_file" "codeowners" {
-  repository          = github_repository.team.name
-  branch              = "main"
-  file                = ".github/CODEOWNERS"
-  content             = "* @${var.github_org}/${var.team}\n"
-  commit_message      = "Seed CODEOWNERS for team ${var.team}"
-  overwrite_on_create = true
+  # Branch-protection via repository ruleset — matches bootstrap/fleet's
+  # main-branch ruleset shape.
+  rulesets = {
+    main = {
+      name        = "main-branch-protection"
+      enforcement = "active"
+      target      = "branch"
+      conditions = {
+        ref_name = {
+          include = ["~DEFAULT_BRANCH"]
+          exclude = []
+        }
+      }
+      rules = {
+        non_fast_forward    = true
+        required_signatures = true
+        pull_request = {
+          required_approving_review_count = 1
+          require_code_owner_review       = true
+        }
+      }
+      bypass_actors = []
+    }
+  }
 }
 
 # TODO(phase6): Kargo GH App installation on this repo via

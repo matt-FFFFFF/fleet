@@ -50,7 +50,7 @@ full before proposing or writing any change.
    touch all three: `docs/naming.md`, `config-loader/load.sh`, and
    the HCL `local.derived` in the affected bootstrap/stage module.
 6. **Version constraints.** Pessimistic-minor everywhere
-   (`~> X.Y`). Terraform: `~> 1.9`. Providers pinned in
+   (`~> X.Y`). Terraform: `~> 1.11`. Providers pinned in
    `providers.tf` per module; see existing files for the set.
 7. **Template machinery is self-destructing.** `init/`, `init-fleet.sh`,
    `.github/workflows/template-selftest.yaml`,
