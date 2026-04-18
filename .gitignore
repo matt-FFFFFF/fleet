@@ -1,5 +1,6 @@
 # Terraform
 **/.terraform/
+**/.terraform.lock.hcl
 **/.terraform.lock.hcl.bak
 *.tfstate
 *.tfstate.*
@@ -30,3 +31,8 @@ crash.*.log
 # Template-adoption artifacts. `.fleet-initialized` is intentionally NOT
 # ignored — it's committed by the adopter to record initialization.
 .fleet-bootstrap/
+
+# init-gh-apps.sh artifacts (PLAN §16.4). Both live at repo root and
+# contain GitHub App credentials; neither is ever committed.
+/.gh-apps.state.json
+/.gh-apps.auto.tfvars
