@@ -221,6 +221,32 @@ rm -rf "$repo_root/.github/fixtures"
 # The legacy sed-based template file, if still present from an earlier
 # iteration of the template, is no longer needed.
 rm -f "$repo_root/clusters/_fleet.yaml.template"
+
+# Un-ignore Terraform lock files. The template gitignores them to avoid
+# churn from local/CI `terraform init` runs in the template repo, but
+# adopter repos should commit lock files for reproducibility (HashiCorp's
+# recommendation). Drop the line if present.
+if [ -f "$repo_root/.gitignore" ]; then
+  # Portable temp file creation (GNU + BSD/macOS mktemp).
+  if ! tmp=$(mktemp 2>/dev/null); then
+    tmp=$(mktemp -t init-fleet.XXXXXX) || die "failed to create temporary file"
+  fi
+  # grep exits 0 (matches found) or 1 (no matches) — both mean the
+  # output in $tmp is valid; only exit >=2 signals a real error that
+  # must not clobber the original .gitignore.
+  if grep -v '^\*\*/\.terraform\.lock\.hcl$' "$repo_root/.gitignore" > "$tmp"; then
+    mv "$tmp" "$repo_root/.gitignore"
+  else
+    grep_status=$?
+    if [ "$grep_status" -eq 1 ]; then
+      mv "$tmp" "$repo_root/.gitignore"
+    else
+      rm -f "$tmp"
+      die "failed to update $repo_root/.gitignore"
+    fi
+  fi
+fi
+
 rm -f "$0"
 
 echo ""

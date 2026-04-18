@@ -72,8 +72,8 @@ jobs:
       - name: terraform validate (bootstrap/fleet)
         working-directory: terraform/bootstrap/fleet
         run: |
-          # Skip backend init; local state is fine for validate.
-          rm -f backend.tf
+          # -backend=false skips backend init entirely; no need to mutate
+          # the checkout by deleting backend.tf.
           terraform init -backend=false
           terraform validate
 
@@ -83,7 +83,16 @@ jobs:
           TF_VAR_env: nonprod
           TF_VAR_fleet_meta_principal_id: 00000000-0000-0000-0000-000000000000
         run: |
-          rm -f backend.tf
+          terraform init -backend=false
+          terraform validate
+
+      - name: terraform fmt -check (stages/0-fleet)
+        working-directory: terraform/stages/0-fleet
+        run: terraform fmt -check -recursive
+
+      - name: terraform validate (stages/0-fleet)
+        working-directory: terraform/stages/0-fleet
+        run: |
           terraform init -backend=false
           terraform validate
 

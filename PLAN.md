@@ -492,6 +492,107 @@ identities and GitHub scaffolding that CI-run stages depend on.
 Run locally with tenant-admin + subscription-owner credentials. Uses
 local state (committed lockfile, not state).
 
+##### Prerequisites
+
+All of the following must be true on the operator's workstation
+*before* `terraform apply` is invoked. The adoption helper scripts
+(§16.3, §16.4) check most of these and fail fast with actionable
+messages; the rest must be arranged out-of-band by the adopter org.
+
+**Azure**
+
+- Authenticated `az login` session in the tenant identified by
+  `_fleet.yaml.fleet.tenant_id`. Both `azapi` and `azuread`
+  providers run with `use_cli = true`; no service-principal env
+  vars are read.
+- Tenant role: **Privileged Role Administrator** (or Global
+  Administrator) — required to grant the Entra
+  `Application Administrator` directory role to the `fleet-stage0`
+  and `fleet-meta` UAMIs. Without it the apply errors at the
+  `azuread_directory_role_assignment` step.
+- Subscription role on `_fleet.yaml.acr.subscription_id` (the
+  fleet-shared subscription): **Owner** (or Contributor + User
+  Access Administrator). Used to create resource groups, the
+  tfstate storage account + container, the bootstrap UAMIs and
+  their FICs, and `roleAssignments` on the shared RG and tfstate
+  container.
+- Resource provider registrations on the shared subscription:
+  `Microsoft.Storage`, `Microsoft.Resources`,
+  `Microsoft.ManagedIdentity`, `Microsoft.Authorization`,
+  `Microsoft.ContainerRegistry`. Not enforced in code today; an
+  RP-not-registered error is the most common first-apply failure.
+- Names that must be free (or correspond to overrides in
+  `_fleet.yaml`): storage account `st<fleet.name>tfstate`
+  (≤ 24 chars; collides on the global namespace), and resource
+  groups `rg-fleet-tfstate` and `rg-fleet-shared` in the shared
+  subscription must not pre-exist with conflicting state.
+
+**GitHub**
+
+- Fleet repo already exists on github.com — the adopter clicks
+  **Use this template** in the template repo's web UI; the new
+  repo is then referenced by `bootstrap/fleet` via an `import`
+  block, never created by Terraform.
+- `GITHUB_TOKEN` exported in the shell, with classic-PAT scopes
+  `repo:admin` + `admin:org` (the latter only if `github_org` is
+  an organization). Used by the `integrations/github` provider
+  for repo settings, branch protection, environments, environment
+  variables, and creating the team-repo template repo.
+- Both **GitHub Apps** (`fleet-meta`, `stage0-publisher`) created
+  and installed on the fleet repo, with their app-id, client-id,
+  PEM, and webhook secret captured. This is **not**
+  `terraform apply`-able from the platform's API — the GitHub App
+  Manifest flow requires a one-time browser handshake.
+  **Future (once §16.4 lands):** the adopter runs
+  `./init-gh-apps.sh` (repo root, next to `init-fleet.sh`), which
+  automates everything *except* the click-to-create step, and
+  writes credentials to `./.gh-apps.auto.tfvars` for **Stage 0**
+  to consume (not `bootstrap/fleet`).
+  **Today (Phase 1):** GH Apps are **not required** to
+  `terraform apply` `bootstrap/fleet` — this stage does not
+  consume App credentials. Adopters who want env/team-bootstrap
+  workflows to function end-to-end must create the Apps manually
+  via *Organization settings → Developer settings → GitHub Apps*
+  with the permissions listed in §4 Stage 0; Stage 0 does not yet
+  declare input variables for them, so the credentials currently
+  have no TF consumer (they're supplied directly to workflow
+  secrets by the operator).
+- Repo `<github_org>/<team_template_repo>` (default
+  `team-repo-template`) must **not** pre-exist; it is created
+  fresh by `bootstrap/fleet` with `prevent_destroy = true`.
+
+**Local tooling**
+
+- `terraform` ≥ 1.9 (pessimistic `~> 1.9`).
+- `az` CLI (any recent version).
+- `gh` CLI authenticated to the same GitHub account that holds
+  `GITHUB_TOKEN` — required by the GH App helper script (§16.4)
+  for the manifest exchange and for installing the resulting
+  Apps on the fleet repo.
+- `git`, `python3`, `bash`. `yq` is not required by this stage
+  (only by the runtime config-loader, §3.3).
+
+**Repo state**
+
+- `init-fleet.sh` has been run successfully (the
+  `.fleet-initialized` marker is present and committed). Without
+  this, `clusters/_fleet.yaml` does not exist and
+  `bootstrap/fleet` fails immediately at
+  `yamldecode(file(...))`.
+- `clusters/_fleet.yaml` has every adopter-supplied field
+  populated (no `__PROMPT__` sentinels remain; `<...>` placeholder
+  fields under `environments.*` may remain empty until
+  `bootstrap/environment` runs for that env).
+- **Future (once §16.4 lands):** `init-gh-apps.sh` (at the repo
+  root) has been run successfully and its outputs are available
+  as `./.gh-apps.auto.tfvars` for **Stage 0** — see §16.4 for the
+  exact variable names. The fleet Key Vault is created and these
+  secrets are seeded in Stage 0; `bootstrap/fleet` does not write
+  or manage the GitHub App credentials.
+  **Today (Phase 1):** not a prerequisite — `bootstrap/fleet` has
+  no GH App input variables and Stage 0 has not yet added the
+  §16.4 GH App input variables / KV-seed resources either.
+
 Creates:
 
 - **Fleet TF state storage account** (`rg-fleet-tfstate`) with
@@ -509,13 +610,24 @@ Creates:
   tenant-root/per-subscription (scope per subscription model);
   `Application Administrator` on Entra. This is the privileged identity
   used by env-bootstrap and team-bootstrap workflows.
-- **`fleet-meta` GitHub App** — admin-class App installed on the fleet
-  repo with `administration:write`, `environments:write`,
-  `variables:write`, `secrets:write`, `contents:write`. PEM stored in
-  fleet KV; read via `fleet-meta` UAMI at workflow time.
-- **`stage0-publisher` GitHub App** (narrower) — installed on the fleet
-  repo with only `variables:write` on repository variables. Used by the
-  Stage 0 workflow to publish outputs as repo variables (§10).
+- **`fleet-meta` GitHub App** (admin-class) and **`stage0-publisher`
+  GitHub App** (narrow). Both are created **out of band** by the
+  `init-gh-apps.sh` helper (§16.4) before this stage runs, because
+  the GitHub App Manifest flow requires a one-time browser consent
+  click that no API can bypass. **`bootstrap/fleet` does not touch
+  GH App credentials** — the fleet Key Vault is created in Stage 0
+  (§4 Stage 0), and storing the PEMs / webhook secrets there is
+  therefore Stage 0's job. `bootstrap/fleet`'s only involvement
+  with the Apps is creating the `fleet-stage0` / `fleet-meta`
+  GitHub environments that Stage 0 later populates with
+  App-derived variables.
+  - Required permissions per App (asserted by the manifest):
+    - `fleet-meta`: `administration:write`, `environments:write`,
+      `variables:write`, `secrets:write`, `contents:write` —
+      the privileged identity used by env-bootstrap and
+      team-bootstrap workflows.
+    - `stage0-publisher`: `variables:write` only — used by the
+      Stage 0 workflow to publish outputs as repo variables (§10).
 - **Fleet GitHub repo** — **created** via the organization's user-supplied
   **GH-repo Terraform module** (module source TBD; placeholder in Phase 1
   scaffold; replaced once published module path is known). Applies branch
@@ -719,6 +831,15 @@ Creates:
     authenticate to GitHub for platform-gitops pulls.
   - `argocd-oidc-client-secret` — every cluster's ArgoCD reads it for
     human SSO auth-code flow.
+  - `fleet-meta-app-pem`, `fleet-meta-webhook-secret`,
+    `stage0-publisher-app-pem`, `stage0-publisher-webhook-secret` —
+    the two GH Apps created out-of-band by `init-gh-apps.sh` (§16.4).
+    Values are consumed from the repo-root `.gh-apps.auto.tfvars`
+    overlay this stage reads in addition to its normal tfvars.json.
+    bootstrap/fleet does not create the fleet KV, so seeding these
+    secrets is Stage 0's responsibility; downstream workflows read
+    them at run time via the `fleet-meta` / `stage0-publisher`
+    UAMIs.
   - additional fleet-wide secrets added over time.
   Kargo GitHub App PEM and Kargo OIDC client secret are **not** here
   — only the mgmt cluster uses them, so they live in the mgmt
@@ -834,6 +955,19 @@ secret material is ever a Stage 0 output.
 | `kargo_mgmt_uami_resource_id`     | `KARGO_MGMT_UAMI_RESOURCE_ID`       | Mgmt Stage 2 — parent ref for `fc-kargo-mgmt` FIC (`.../federatedIdentityCredentials`)                                      |
 | `kargo_mgmt_uami_principal_id`    | `KARGO_MGMT_UAMI_PRINCIPAL_ID`      | Every workload cluster's Stage 1 — `AKS RBAC Reader` role-assignment `properties.principalId` on the workload AKS resource  |
 | `kargo_mgmt_uami_client_id`       | `KARGO_MGMT_UAMI_CLIENT_ID`         | Mgmt Stage 2 — `azure.workload.identity/client-id` annotation on the `kargo-controller` ServiceAccount                      |
+
+**GitHub Apps** (Apps themselves are created by `init-gh-apps.sh`
+out-of-band per §16.4; Stage 0 receives their ids/client ids as
+inputs via `.gh-apps.auto.tfvars` and publishes them as repo
+variables so downstream workflows can mint installation tokens)
+
+| TF output                           | Repo variable                  | Consumed by                                                                                      |
+| ----------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------ |
+| `fleet_meta_app_id`                 | `FLEET_META_APP_ID`            | `env-bootstrap.yaml`, `team-bootstrap.yaml` — installation-token minting under `fleet-meta` UAMI |
+| `fleet_meta_app_client_id`          | `FLEET_META_APP_CLIENT_ID`     | same workflows — App client id for JWT `iss` claim                                               |
+| `stage0_publisher_app_id`           | `STAGE0_PUBLISHER_APP_ID`      | `tf-apply.yaml` (Stage 0 `publish-stage0-outputs` step) — token to `PATCH` repo variables        |
+| `stage0_publisher_app_client_id`    | `STAGE0_PUBLISHER_APP_CLIENT_ID`| same                                                                                             |
+
 
 **Not published as repo variables** (available from other sources, no indirection needed):
 
@@ -1855,15 +1989,20 @@ one-shot initializer to materialize adopter-specific values. After
 initialization the repo is a concrete, self-contained fleet repo with
 no template machinery left behind.
 
-> **Implementation status (Phase 1):** §§16.1–16.8 are implemented. The
-> rendering layer was changed from an initial sed-over-`__UPPER_SNAKE__`
-> token pass to a **throwaway Terraform root module at `init/`** driven by
-> a thin wrapper shell (`init-fleet.sh`). Rationale: Terraform is already
-> a hard dependency for bootstrap, and `templatefile()` plus variable
-> validation blocks give us typed inputs and per-field regex checks
-> without a second toolchain or sed quoting hazards. The single-source-of-
-> truth contract (everything lives in `clusters/_fleet.yaml`; bootstrap
-> stages `yamldecode` it) is unchanged.
+> **Implementation status (Phase 1):** §§16.1–16.3, §§16.5–16.9, and
+> §§16.10.1–16.10.9 are implemented. **§16.4 (`init-gh-apps.sh`
+> GitHub-App provisioning helper) is specified but not yet built** —
+> the two GH Apps are currently created manually by the adopter
+> operator. §16.10.10 (CI naming-derivation parity diff) is deferred
+> to Phase 2 CI work. The rendering layer was changed from an initial
+> sed-over-`__UPPER_SNAKE__` token pass to a **throwaway Terraform root
+> module at `init/`** driven by a thin wrapper shell (`init-fleet.sh`).
+> Rationale: Terraform is already a hard dependency for bootstrap, and
+> `templatefile()` plus variable validation blocks give us typed inputs
+> and per-field regex checks without a second toolchain or sed quoting
+> hazards. The single-source-of-truth contract (everything lives in
+> `clusters/_fleet.yaml`; bootstrap stages `yamldecode` it) is
+> unchanged.
 
 ### 16.1 Single source of truth
 
@@ -1875,7 +2014,7 @@ directory are deleted post-render.
 Fields the adopter supplies (via interactive prompts; see §16.3):
 
 - `fleet.name` — short slug, lowercase alnum, ≤ 12 chars (feeds into
-  resource naming derivations; see §16.5).
+  resource naming derivations; see §16.6).
 - `fleet.display_name` — human-friendly name for README and Grafana.
 - `fleet.tenant_id` — Entra tenant GUID.
 - `fleet.github_org` — GitHub org/user owning the fleet repo.
@@ -1920,7 +2059,7 @@ matching the pattern runtime stages already use (via
 
 Name derivation (ACR, fleet KV, state SA, env KV, cluster KV,
 resource groups) must agree between `load.sh` and bootstrap-stage
-HCL locals. The canonical spec lives in `docs/naming.md` (see §16.5)
+HCL locals. The canonical spec lives in `docs/naming.md` (see §16.6)
 and is validated by a CI diff between the two implementations against
 a fixture `_fleet.yaml`.
 
@@ -1954,10 +2093,111 @@ Interactive wizard by default; `--non-interactive` plus optional
 7. **Self-cleanup**: delete `init/`, `init-fleet.sh` itself,
    `.github/workflows/template-selftest.yaml`,
    `.github/workflows/status-check.yaml`, and `.github/fixtures/` so
-   the adopter repo contains zero template machinery. Template history
-   remains accessible via `git log`.
+   the adopter repo contains zero template machinery. Also strip the
+   `**/.terraform.lock.hcl` line from `.gitignore` — the template
+   repo ignores lock files to avoid churn from local/CI
+   `terraform init`, but adopter repos should commit them for
+   reproducibility. Template history remains accessible via
+   `git log`.
 
-### 16.4 GitHub template repo mechanics
+### 16.4 `init-gh-apps.sh` — GitHub App provisioning helper
+
+Two GitHub Apps (`fleet-meta`, `stage0-publisher`; rationale and
+permission split in §4 Stage -1 `bootstrap/fleet`) must exist on the
+fleet repo before `bootstrap/fleet` runs. The GitHub Apps API has
+**no headless creation endpoint** — every App must be born through
+the App Manifest flow, which requires a one-time browser handshake to
+record the operator's consent to the requested permissions. This
+script automates everything around that single click.
+
+Lives at the **repo root** next to `init-fleet.sh`, not inside
+`init/`. `init-fleet.sh` deletes the entire `init/` tree on
+self-cleanup (§16.3 step 7), which runs before this helper is
+invoked — anything placed under `init/` would therefore already be
+gone.
+
+Run order: after `init-fleet.sh` (so `_fleet.yaml` exists) and before
+`terraform -chdir=terraform/bootstrap/fleet apply`. Idempotent: if
+both apps already exist on `<fleet.github_org>` and their PEMs are
+already captured in the state file (`./.gh-apps.state.json` at repo
+root, gitignored), the script exits 0 with a "nothing to do"
+message.
+
+Steps, per App:
+
+1. **Build the manifest** from `_fleet.yaml` (`fleet.github_org`,
+   `fleet.github_repo`, the App-specific permission set, and a
+   single-use `redirect_url` of `http://127.0.0.1:<random-port>/cb`).
+2. **Open a localhost listener** on the random port, bound to
+   `127.0.0.1` only, with a 5-minute timeout.
+3. **Print and (when stdout is a TTY) `open(1)`** the manifest URL:
+   `https://github.com/organizations/<org>/settings/apps/new?state=<nonce>`
+   with the manifest as a hidden form value (operator clicks
+   "Create GitHub App" once and is redirected to the listener).
+4. **Capture** the `?code=<temp_code>&state=<nonce>` redirect;
+   verify the nonce.
+5. **Exchange** the code:
+   `gh api -X POST /app-manifests/<code>/conversions` →
+   `{ id, slug, client_id, client_secret, pem, webhook_secret }`.
+   These values are returned **once**; the script writes them
+   immediately to `./.gh-apps.state.json` (mode 0600, gitignored).
+6. **Install** the App on the fleet repo:
+   `gh api -X POST /orgs/<org>/installations` (operator may be
+   re-prompted in the browser to confirm install scope).
+7. **Emit** a tfvars overlay file (`./.gh-apps.auto.tfvars` at repo
+   root, gitignored) with the variable names Stage 0 consumes:
+
+   ```hcl
+   fleet_meta_app_id             = "<id>"
+   fleet_meta_app_client_id      = "<client_id>"
+   fleet_meta_app_pem            = <<EOT
+   <pem>
+   EOT
+   fleet_meta_app_webhook_secret = "<webhook_secret>"
+
+   stage0_publisher_app_id              = "<id>"
+   stage0_publisher_app_client_id       = "<client_id>"
+   stage0_publisher_app_pem             = <<EOT
+   <pem>
+   EOT
+   stage0_publisher_app_webhook_secret  = "<webhook_secret>"
+   ```
+
+   **Stage 0** declares matching `variable` blocks (not
+   `bootstrap/fleet`: bootstrap/fleet does not create the fleet
+   KV). Stage 0's tf-apply workflow symlinks or copies
+   `.gh-apps.auto.tfvars` into `terraform/stages/0-fleet/` so
+   `terraform plan/apply` picks it up as an additional variable
+   source. Stage 0 then writes the PEMs + webhook secrets into the
+   fleet KV it creates, and publishes the App ids / client ids as
+   fleet-repo variables (see §4 Stage 0 outputs) so downstream
+   workflows can mint installation tokens.
+
+Failure modes the script handles explicitly:
+
+- `GITHUB_TOKEN` missing or wrong scopes → fail before opening the
+  browser; print the required `repo:admin` + `admin:org` scopes.
+- Operator closes the browser without clicking → 5-minute listener
+  timeout; rerun the script (idempotent for the App that already
+  succeeded).
+- Manifest exchange returns 404/410 → temp_code expired; rerun.
+- App already exists with the same name → list existing Apps via
+  `gh api /orgs/<org>/installations` and skip creation; if the
+  existing App's PEM is *not* in `./.gh-apps.state.json`, abort
+  with a clear message (the operator must rotate the PEM via
+  `gh api -X POST /apps/<slug>/keys` and re-run).
+
+Self-cleanup: the script `rm`s itself after a successful run in
+which both Apps exist, are installed, and the tfvars overlay has
+been written. The state file (`./.gh-apps.state.json`) and tfvars
+overlay (`./.gh-apps.auto.tfvars`) remain on disk (both gitignored)
+until Stage 0 has successfully applied — their authoritative storage
+post-Stage-0 is the fleet KV (PEMs/webhook secrets) and fleet-repo
+variables (ids/client ids). The adopter may delete both files
+manually after the first green Stage 0 apply; leaving them in place
+is harmless.
+
+### 16.5 GitHub template repo mechanics
 
 - The template repo is marked "Template repository" in GitHub Settings
   (repo admin action, documented in `docs/adoption.md`).
@@ -1973,7 +2213,7 @@ Interactive wizard by default; `--non-interactive` plus optional
   state on the first apply — **no manual `terraform import` step is
   required**. The team-template repo is created fresh by the apply.
 
-### 16.5 Name derivation spec (`docs/naming.md`)
+### 16.6 Name derivation spec (`docs/naming.md`)
 
 Canonical, implementation-neutral spec for every derived resource
 name. Implemented identically in `terraform/config-loader/load.sh`
@@ -2000,7 +2240,7 @@ and in bootstrap-stage HCL locals. Initial rules:
 Overrides (`acr.name_override`, `keyvault.name_override`,
 `state.storage_account_name_override`) bypass derivation when set.
 
-### 16.6 Safety rails
+### 16.7 Safety rails
 
 - Pre-init README banner block (bounded by `<!-- fleet:banner -->`
   sentinels) warns that `./init-fleet.sh` is the adopter entry point.
@@ -2014,7 +2254,7 @@ Overrides (`acr.name_override`, `keyvault.name_override`,
   validation on it (it's not a valid GUID / slug / DNS name), so even
   a buggy wrapper can't apply with a sentinel unsubstituted.
 
-### 16.7 Template-repo self-test
+### 16.8 Template-repo self-test
 
 `.github/workflows/template-selftest.yaml` runs on the **template repo
 itself** (deleted by `init-fleet.sh` in adopter repos). Steps:
@@ -2032,7 +2272,7 @@ itself** (deleted by `init-fleet.sh` in adopter repos). Steps:
 Does not run `terraform plan` against Azure/GitHub (no creds); keeps
 the template verified purely offline.
 
-### 16.8 Files added / modified for templating
+### 16.9 Files added / modified for templating
 
 **New**
 
@@ -2077,7 +2317,7 @@ the template verified purely offline.
 - Runtime stages (`0-fleet`, `1-cluster`, `2-platform`), which
   already read yaml.
 
-### 16.9 Execution order (completed in Phase 1)
+### 16.10 Execution order (completed in Phase 1)
 
 1. [x] Draft `docs/naming.md` (locks the derivation contract).
 2. [x] Refactor `bootstrap/fleet` + `bootstrap/environment` to read
