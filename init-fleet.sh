@@ -227,8 +227,10 @@ rm -f "$repo_root/clusters/_fleet.yaml.template"
 # adopter repos should commit lock files for reproducibility (HashiCorp's
 # recommendation). Drop the line if present.
 if [ -f "$repo_root/.gitignore" ]; then
-  # Portable in-place edit (BSD + GNU sed).
-  tmp=$(mktemp)
+  # Portable temp file creation (GNU + BSD/macOS mktemp).
+  if ! tmp=$(mktemp 2>/dev/null); then
+    tmp=$(mktemp -t init-fleet.XXXXXX) || die "failed to create temporary file"
+  fi
   grep -v '^\*\*/\.terraform\.lock\.hcl$' "$repo_root/.gitignore" > "$tmp" || true
   mv "$tmp" "$repo_root/.gitignore"
 fi

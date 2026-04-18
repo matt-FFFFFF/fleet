@@ -106,10 +106,22 @@ resource "azapi_resource" "argocd_oidc_client_secret" {
   }
 
   retry = {
+    # Broad enough to cover the common RBAC-propagation error surfaces
+    # KV returns immediately after a role assignment is created but
+    # before AAD has propagated it data-plane-wide. azapi retries these
+    # with exponential backoff until the ambient Stage 0 timeout.
     error_message_regex = [
-      "Unauthorized"
+      "Unauthorized",
+      "Forbidden",
+      "AuthorizationFailed",
+      "does not have secrets set permission",
     ]
   }
+
+  # Ordering: the role assignment must exist before the first write is
+  # even attempted. The retry above handles propagation latency after
+  # that.
+  depends_on = [azapi_resource.ra_stage0_kv_secrets_officer]
 }
 
 # --- Kargo AAD app -----------------------------------------------------------
