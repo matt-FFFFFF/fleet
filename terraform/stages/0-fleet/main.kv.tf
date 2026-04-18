@@ -5,8 +5,9 @@
 # Stage 0 tenant:
 #
 #   argocd-oidc-client-secret   — every cluster's Argo reads it
-#                                 (rotated here on every Stage 0 apply, 60d
-#                                  cadence; see main.aad.tf)
+#                                 (managed here; rotates on a 60d cadence
+#                                  and is updated on applies after the
+#                                  rotation boundary; see main.aad.tf)
 #
 # PLAN §4 Stage 0 additionally assigns Stage 0 the GH App PEM / webhook
 # secret seeding (`fleet-meta-app-pem`, `fleet-meta-webhook-secret`,

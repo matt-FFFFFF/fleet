@@ -25,7 +25,7 @@
 #   main.kv.tf           fleet KV + RBAC assignments
 #   main.aad.tf          Argo + Kargo AAD apps; Argo RP secret rotation
 #   main.identities.tf   uami-kargo-mgmt + AcrPull
-#   outputs.tf           outputs (published as repo variables by tf-apply.yaml)
+#   outputs.tf           outputs (intended to be published as repo variables once tf-apply.yaml lands)
 
 locals {
   fleet_yaml_path = "${path.module}/../../../clusters/_fleet.yaml"

@@ -1,10 +1,12 @@
 # outputs.tf
 #
-# Outputs published by tf-apply.yaml as fleet-wide GitHub repository variables
-# (via the `stage0-publisher` GitHub App, scope = variables:write). Consumed
-# by downstream stages as `vars.<UPPER_SNAKE_NAME>`. All values are
-# non-sensitive identity facts; no secret material is ever a Stage 0 output
-# (the Argo RP secret goes directly into the fleet KV via azapi).
+# These Stage 0 outputs are intended to be published as fleet-wide GitHub
+# repository variables for downstream stages to consume as
+# `vars.<UPPER_SNAKE_NAME>` once the planned `tf-apply.yaml` /
+# `stage0-publisher` GitHub App wiring lands; see PLAN §16 implementation
+# status. All values are non-sensitive identity facts; no secret material is
+# ever a Stage 0 output (the Argo RP secret goes directly into the fleet KV
+# via azapi).
 #
 # Variable-name mapping matches the subset of PLAN §4 Stage 0 "Outputs"
 # that ships in this scaffold. The GitHub App outputs (`fleet_meta_app_id`,
