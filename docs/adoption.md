@@ -168,8 +168,16 @@ credentials, and installing all three Apps on the fleet repo.
 
 ### Running `init-gh-apps.sh`
 
+Authenticate `gh` first — the script uses `gh api` throughout and
+accepts any of its credential sources:
+
 ```sh
-export GITHUB_TOKEN=<PAT with repo:admin + admin:org>
+# Either: use the gh keyring
+gh auth login --scopes 'repo,admin:org'
+
+# Or: export a PAT (GH_TOKEN and GITHUB_TOKEN both work)
+export GH_TOKEN=<PAT with repo:admin + admin:org>
+
 ./init-gh-apps.sh
 ```
 

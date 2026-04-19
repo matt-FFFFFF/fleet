@@ -179,6 +179,7 @@ except Exception:
 s[slug] = json.loads(payload)
 # Mode 0600 — these are App secrets.
 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+os.fchmod(fd, 0o600)  # tighten on pre-existing files; O_CREAT mode is ignored if file exists
 with os.fdopen(fd, 'w') as f:
     json.dump(s, f, indent=2, sort_keys=True)
 PY
@@ -236,7 +237,8 @@ create_app() {
 
   _create_app_cleanup() {
     [[ -n "${listener_pid:-}" ]] && kill "$listener_pid" 2>/dev/null || true
-    rm -f "${cb_file:-}" "${port_file:-}" "${form_file:-}"
+    rm -f "${cb_file:-}" "${port_file:-}"
+    [[ -n "${form_dir:-}" ]] && rm -rf "$form_dir" || true
   }
   # Install as EXIT trap: only fires if we exit abnormally (die → exit 1).
   # The final explicit call at the bottom of this function clears it via
@@ -317,8 +319,13 @@ PY
   # "Create GitHub App" once, after which they are redirected to our listener.
   # We pre-build a tiny HTML form because the manifest payload exceeds query-
   # string limits.
-  local form_file=""
-  form_file=$(mktemp -t gh-apps-form.XXXXXX).html
+  # mktemp portability: BSD (macOS) `mktemp -t` ignores an `.html` suffix
+  # placed after the X's, while GNU mktemp accepts `XXXXXX.html`. To keep
+  # a single temp artifact on both, use a tempdir and write a named file
+  # inside it — cleanup nukes the whole dir.
+  local form_dir=""
+  form_dir=$(mktemp -d -t gh-apps-form.XXXXXX)
+  local form_file="$form_dir/form.html"
   python3 - "$github_org" "$owner_type" "$nonce" "$manifest_json" "$form_file" <<'PY'
 import html, json, sys
 org, owner_type, nonce, manifest, out = sys.argv[1:6]
@@ -368,10 +375,14 @@ PY
   fi
 
   # Persist credentials to state immediately — the API returns them once.
+  # Pipe the raw JSON via stdin so no interpolation into a Python source
+  # string happens: embedding JSON in a `'''...'''` literal makes Python
+  # interpret its `\n` escapes (notably inside `pem`) as real newlines
+  # before json.loads sees them, which corrupts the parse.
   local payload
-  payload=$(python3 - <<PY
+  payload=$(printf '%s' "$conv_json" | python3 - <<'PY'
 import json, sys
-c = json.loads('''$conv_json''')
+c = json.loads(sys.stdin.read())
 out = {
     "id": c.get("id"),
     "slug": c.get("slug"),
@@ -413,11 +424,18 @@ install_app() {
   # Find the installation_id for THIS specific App on the fleet org/user.
   # The obvious-looking `repos/<org>/<repo>/installation` endpoint requires
   # App-JWT auth (not a PAT) and returns 404 with PAT auth. Instead, list
-  # all App installations on the owner scope and filter by app_id — this
-  # works with the `admin:org` PAT scope the script already requires.
+  # all App installations on the owner scope and filter by app_id:
+  #   - Organization: GET /orgs/{org}/installations    (admin:org PAT scope)
+  #   - User:         GET /user/installations          (authenticated user;
+  #     `/users/{user}/installations` is not a real route). For the user
+  #     case, the authenticated caller must BE the user that owns the repo.
   lookup_install_id() {
-    local base="/users/$github_org/installations"
-    [[ "$owner_type" == "Organization" ]] && base="/orgs/$github_org/installations"
+    local base
+    if [[ "$owner_type" == "Organization" ]]; then
+      base="/orgs/$github_org/installations"
+    else
+      base="/user/installations"
+    fi
     gh api --paginate "$base" \
       --jq ".installations[]? // .[] | select(.app_id==$app_id) | .id" \
       2>/dev/null | head -n1
@@ -452,6 +470,7 @@ path, slug, iid = sys.argv[1], sys.argv[2], sys.argv[3]
 s = json.load(open(path))
 s[slug]["installation_id"] = int(iid)
 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+os.fchmod(fd, 0o600)  # tighten on pre-existing files; O_CREAT mode is ignored if file exists
 with os.fdopen(fd, 'w') as f:
     json.dump(s, f, indent=2, sort_keys=True)
 PY
@@ -503,6 +522,7 @@ for slug, prefix in mapping:
     ]
 
 fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+os.fchmod(fd, 0o600)
 with os.fdopen(fd, 'w') as f:
     f.write("\n".join(lines))
 PY
