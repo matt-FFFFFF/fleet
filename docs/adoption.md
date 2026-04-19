@@ -176,7 +176,7 @@ accepts any of its credential sources:
 gh auth login --scopes 'repo,admin:org'
 
 # Or: export a PAT (GH_TOKEN and GITHUB_TOKEN both work)
-export GH_TOKEN=<PAT with repo:admin + admin:org>
+export GH_TOKEN=<PAT with repo + admin:org>
 
 ./init-gh-apps.sh
 ```

@@ -39,8 +39,9 @@
 #
 # Prereqs:
 #   - clusters/_fleet.yaml exists (run ./init-fleet.sh first).
-#   - `gh` CLI authenticated with `repo:admin` + `admin:org` scopes
-#     (via `gh auth login`, or $GH_TOKEN / $GITHUB_TOKEN env var).
+#   - `gh` CLI authenticated with `repo` + `admin:org` scopes
+#     (e.g. `gh auth login --scopes 'repo,admin:org'`, or equivalent
+#     $GH_TOKEN / $GITHUB_TOKEN env var).
 #   - python3, git.
 #
 # See PLAN §16.4 and docs/adoption.md §4.
@@ -68,6 +69,14 @@ while (($#)); do
   esac
 done
 
+# Validate --port up front: must be a non-negative integer in the TCP range.
+# 0 is the sentinel for "pick a random port". Invalid input here would
+# otherwise surface as a generic "listener failed to bind" error deep in
+# the per-App flow.
+if ! [[ "$PORT" =~ ^[0-9]+$ ]] || (( PORT > 65535 )); then
+  die "--port must be an integer 0..65535 (0 == random); got: $PORT"
+fi
+
 # ---- preflight --------------------------------------------------------------
 
 command -v python3 >/dev/null 2>&1 || die "python3 is required"
@@ -86,10 +95,10 @@ tfvars_file="$repo_root/.gh-apps.auto.tfvars"
 # Auth: don't hard-require $GITHUB_TOKEN — `gh` resolves credentials from
 # `gh auth login` (keyring), $GH_TOKEN, or $GITHUB_TOKEN in that order.
 # Just verify that `gh api` actually works; the prereq scopes
-# (repo:admin + admin:org) are enforced by the first failing call, which
+# (repo + admin:org) are enforced by the first failing call, which
 # is fine — we want to fail fast *here* on the smoke test, not mid-flow.
 if ! gh api user -q .login >/dev/null 2>&1; then
-  die "gh CLI cannot authenticate — run 'gh auth login' or export GH_TOKEN / GITHUB_TOKEN (requires 'repo:admin' + 'admin:org' scopes)"
+  die "gh CLI cannot authenticate — run 'gh auth login --scopes repo,admin:org' or export GH_TOKEN / GITHUB_TOKEN (requires 'repo' + 'admin:org' scopes)"
 fi
 
 # ---- load _fleet.yaml -------------------------------------------------------
@@ -577,5 +586,8 @@ echo "         $tfvars_file"
 echo ""
 
 if [[ $KEEP -eq 0 ]]; then
-  rm -f "$0"
+  # Best-effort self-delete. If the script can't remove itself (read-only
+  # checkout, restricted perms, adopter has it open in an editor, etc.)
+  # the provisioning work is still complete — don't surface a failure.
+  rm -f "$0" 2>/dev/null || warn "could not remove $0; delete manually when convenient"
 fi
