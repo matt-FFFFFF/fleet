@@ -114,6 +114,11 @@ the PEM never lands in Terraform state.
 Mutually exclusive with plaintext
 `version_control_system_github_application_key`.
 DESCRIPTION
+
+  validation {
+    condition     = var.github_app_key_kv_secret_id == null || (trimspace(coalesce(var.github_app_key_kv_secret_id, " ")) != "" && can(regex("^https://[^/]+\\.vault\\.azure\\.net/secrets/[^/]+/?$", var.github_app_key_kv_secret_id)))
+    error_message = "github_app_key_kv_secret_id, when set, must be a non-empty versionless Key Vault secret URI of the form https://<vault>.vault.azure.net/secrets/<name>."
+  }
 }
 
 variable "github_app_key_identity_id" {

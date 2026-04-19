@@ -126,6 +126,11 @@ variable "github_app_key_kv_secret_id" {
   type        = string
   default     = null
   description = "(Optional.) Versionless Key Vault secret URI for the GitHub App PEM. When set, the `application-key` secret is emitted as a KV reference."
+
+  validation {
+    condition     = var.github_app_key_kv_secret_id == null || (trimspace(coalesce(var.github_app_key_kv_secret_id, " ")) != "" && can(regex("^https://[^/]+\\.vault\\.azure\\.net/secrets/[^/]+/?$", var.github_app_key_kv_secret_id)))
+    error_message = "github_app_key_kv_secret_id, when set, must be a non-empty versionless Key Vault secret URI of the form https://<vault>.vault.azure.net/secrets/<name>."
+  }
 }
 
 variable "github_app_key_identity_id" {

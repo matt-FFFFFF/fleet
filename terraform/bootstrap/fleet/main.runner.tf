@@ -54,10 +54,48 @@ resource "azapi_resource" "runner_uami" {
   response_export_values = ["id", "properties.clientId", "properties.principalId"]
 }
 
+# --- Pre-apply validation ----------------------------------------------------
+#
+# The vendored module's own input validation fires late (inside child
+# submodules). We want a single, early, _fleet.yaml-anchored error
+# message when required runner networking IDs or GH App identifiers
+# are missing. Mirrors the precondition pattern used on the tfstate PE
+# in main.state.tf.
+
+resource "terraform_data" "runner_preconditions" {
+  input = {
+    runner_subnet_id        = local.networking.runner_subnet_id
+    runner_acr_pe_subnet_id = local.networking.runner_acr_pe_subnet_id
+    runner_acr_dns_zone_id  = local.networking.runner_acr_dns_zone_id
+    app_id                  = local.github_app_fleet_runners.app_id
+    installation_id         = local.github_app_fleet_runners.installation_id
+  }
+
+  lifecycle {
+    precondition {
+      condition     = local.networking.runner_subnet_id != null && local.networking.runner_subnet_id != ""
+      error_message = "networking.runner.subnet_id must be set in clusters/_fleet.yaml before applying bootstrap/fleet. See docs/adoption.md §5.1."
+    }
+    precondition {
+      condition     = local.networking.runner_acr_pe_subnet_id != null && local.networking.runner_acr_pe_subnet_id != ""
+      error_message = "networking.runner.container_registry_pe_subnet_id must be set in clusters/_fleet.yaml before applying bootstrap/fleet. See docs/adoption.md §5.1."
+    }
+    precondition {
+      condition     = local.networking.runner_acr_dns_zone_id != null && local.networking.runner_acr_dns_zone_id != ""
+      error_message = "networking.runner.container_registry_private_dns_zone_id must be set in clusters/_fleet.yaml (central privatelink.azurecr.io zone). See docs/adoption.md §5.1."
+    }
+    precondition {
+      condition     = local.github_app_fleet_runners.app_id != null && local.github_app_fleet_runners.app_id != "" && local.github_app_fleet_runners.installation_id != null && local.github_app_fleet_runners.installation_id != ""
+      error_message = "github_app.fleet_runners.{app_id, installation_id} must be set in clusters/_fleet.yaml before applying bootstrap/fleet. Run ./init-gh-apps.sh first. See docs/adoption.md §4 + §5.2."
+    }
+  }
+}
+
 # --- Runner pool (vendored AVM module with local extensions) -----------------
 
 module "runner" {
-  source = "../../modules/cicd-runners"
+  source     = "../../modules/cicd-runners"
+  depends_on = [terraform_data.runner_preconditions]
 
   postfix  = local.runner_postfix
   location = local.derived.acr_location
