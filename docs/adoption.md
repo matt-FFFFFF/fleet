@@ -256,12 +256,21 @@ GitHub items must be arranged out-of-band by the adopter org.
 - `GITHUB_TOKEN` exported with classic-PAT scopes `repo:admin`
   and `admin:org` (the latter only if `github_org` is an
   organization).
-- The GitHub Apps from §4 are **not** required for the initial
-  `bootstrap/fleet` apply. They become relevant for later
-  workflows / once Stage 0 wires the §16.4 inputs; at that point,
-  provide their credentials as `TF_VAR_*` env vars or in
-  `./.gh-apps.auto.tfvars`. `bootstrap/fleet` does not create,
-  write, or manage the GitHub App credentials.
+- The `fleet-meta` and `stage0-publisher` GitHub Apps from §4 are
+  **not** required for the initial `bootstrap/fleet` apply — they
+  become relevant for later workflows. Provide their credentials
+  as `TF_VAR_*` env vars or in `./.gh-apps.auto.tfvars` at that
+  point. `bootstrap/fleet` does not create, write, or manage the
+  GitHub App credentials.
+- The **`fleet-runners`** GitHub App **is** required up-front: the
+  vendored runner module validates that
+  `github_app.fleet_runners.{app_id, installation_id}` are non-empty
+  when `authentication_method = "github_app"`, so
+  `clusters/_fleet.yaml` must carry both numeric IDs before the
+  first `bootstrap/fleet` apply. The PEM itself is resolved at
+  runtime via Key Vault reference (Stage 0 seeds it), so its
+  absence does not block the first apply — only scale-out of the
+  runner pool.
 - The team-template repo (`<github_org>/<team_template_repo>`,
   default `team-repo-template`) must **not** pre-exist; it is
   created fresh with `prevent_destroy = true`.

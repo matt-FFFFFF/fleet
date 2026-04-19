@@ -786,10 +786,17 @@ seed `fleet-runners-app-pem` into the fleet KV it creates, (b) grant the
 `uami-fleet-runners` UAMI (output from `bootstrap/fleet` as
 `runner_uami_principal_id`) `Key Vault Secrets User` on the fleet KV,
 and (c) publish the `fleet-runners` App IDs as repo variables.
-`bootstrap/fleet` references the KV secret by id only, so Stage -1 is
-not blocked on `init-gh-apps.sh` (§16.4) — the Container App Job fails
-deterministically at runtime if the secret is missing. Tracked as an
-outside-PLAN scaffolding row in STATUS.md.
+
+**Ordering constraint:** `init-gh-apps.sh` (§16.4) must run **before**
+`bootstrap/fleet` — the vendored runner module's variable validation
+refuses empty `version_control_system_github_application_{id,installation_id}`
+when `authentication_method = "github_app"`, so
+`github_app.fleet_runners.{app_id, installation_id}` must be populated
+in `clusters/_fleet.yaml` before the first `bootstrap/fleet` apply.
+The PEM itself is only resolved at runtime (KV reference), so the
+first apply succeeds once the IDs are present; the Container App Job
+then fails deterministically at scale-out until Stage 0 seeds the
+PEM. Tracked as an outside-PLAN scaffolding row in STATUS.md.
 
 #### `bootstrap/environment/` — Actions-run via `env-bootstrap.yaml`
 
