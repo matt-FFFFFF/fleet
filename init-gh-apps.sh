@@ -265,13 +265,13 @@ create_app() {
   # cleanup closure, call it explicitly on the success path, and install a
   # narrowly-scoped EXIT trap that only runs if the script dies mid-function
   # (because `die` goes straight to `exit 1` without returning).
-  local cb_file port_file listener_pid=""
+  local cb_file port_file conv_file="" listener_pid=""
   cb_file=$(mktemp -t gh-apps-cb.XXXXXX)
   port_file=$(mktemp -t gh-apps-port.XXXXXX)
 
   _create_app_cleanup() {
     [[ -n "${listener_pid:-}" ]] && kill "$listener_pid" 2>/dev/null || true
-    rm -f "${cb_file:-}" "${port_file:-}"
+    rm -f "${cb_file:-}" "${port_file:-}" "${conv_file:-}"
     [[ -n "${form_dir:-}" ]] && rm -rf "$form_dir" || true
   }
   # Install as EXIT trap: only fires if we exit abnormally (die → exit 1).
@@ -414,10 +414,11 @@ PY
   # read the script body, and we can't interpolate it into a `'''...'''`
   # literal because Python would interpret its `\n` escapes (notably inside
   # `pem`) as real newlines before json.loads sees them.
-  local conv_file payload
+  # `conv_file` was declared at the top of the function and is cleaned up
+  # by `_create_app_cleanup` — no RETURN trap here (RETURN traps leak out
+  # of the function scope in bash; see the cleanup-strategy comment above).
+  local payload
   conv_file=$(mktemp -t gh-apps-conv.XXXXXX)
-  # shellcheck disable=SC2064
-  trap "rm -f '$conv_file'" RETURN
   printf '%s' "$conv_json" >"$conv_file"
   payload=$(python3 - "$conv_file" <<'PY'
 import json, sys
