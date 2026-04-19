@@ -25,8 +25,8 @@ tenant_id          = "__PROMPT__" # Entra tenant GUID
 # ---- GitHub -----------------------------------------------------------------
 
 github_org         = "__PROMPT__"
-github_repo        = "platform-fleet"     # fleet repo name
-team_template_repo = "team-repo-template" # team template repo name
+github_repo        = "__PROMPT__"         # fleet repo name
+team_template_repo = "__PROMPT__"         # team template repo name
 codeowners_owner   = ""                   # CODEOWNERS owner: empty → @<github_org>; else `<org>/<team>` or `<user>`
 
 # ---- Azure ------------------------------------------------------------------
