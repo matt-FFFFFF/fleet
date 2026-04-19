@@ -43,6 +43,7 @@ directory path under `clusters/`.
 | Cluster RG                | declared in `cluster.yaml` (`cluster.resource_group`)                 |                      |
 | UAMI — fleet stage0       | `uami-fleet-stage0`                                                   |                      |
 | UAMI — fleet meta         | `uami-fleet-meta`                                                     |                      |
+| UAMI — fleet runners      | `uami-fleet-runners`                                                  |                      |
 | UAMI — per-env CI         | `uami-fleet-<env>`                                                    |                      |
 | UAMI — Kargo mgmt         | `uami-kargo-mgmt`                                                     |                      |
 | UAMI — cluster CP         | `uami-<cluster.name>-cp`                                              |                      |
@@ -54,6 +55,8 @@ directory path under `clusters/`.
 | NSP                       | `nsp-<fleet.name>-<env>`                                              |                      |
 | Grafana PE                | `pe-amg-<fleet.name>-<env>`                                           |                      |
 | Action Group              | `ag-<fleet.name>-<env>`                                               |                      |
+| Runner ACR (per-pool)     | `acrfleetrunners` (module-derived from `postfix = "fleet-runners"`, hyphens stripped) | ≤ 50 chars, a-z0-9 |
+| Runner ACA environment    | `cae-fleet-runners`                                                   |                      |
 | Cluster DNS zone FQDN     | `<cluster.name>.<cluster.region>.<cluster.env>.<dns.fleet_root>`      |                      |
 
 ## Truncation

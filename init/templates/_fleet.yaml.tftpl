@@ -47,6 +47,30 @@ state:
   containers:
     fleet: tfstate-fleet                               # Stage 0 + bootstrap/{environment,team}
 
+networking:                                            # Private networking for Stage -1 / Stage 0
+  tfstate:
+    private_endpoint:
+      # Subnet (in rg-fleet-shared or the hub) that will host the PE for the
+      # tfstate storage account. Must have `privateEndpointNetworkPolicies`
+      # effectively disabled.
+      subnet_id: <resource-id>                         # TODO post-init
+      # Central privatelink.blob.core.windows.net zone (typically in the hub
+      # connectivity subscription). Leave as null to skip automatic DNS
+      # wiring — in that case the adopter is responsible for A-record
+      # registration.
+      private_dns_zone_id: null                        # TODO post-init (optional)
+  runner:
+    # Subnet that hosts the Azure Container Apps environment for the fleet
+    # runner pool. Delegated to Microsoft.App/environments, UDR egress via
+    # hub firewall.
+    subnet_id: <resource-id>                           # TODO post-init
+
+github_app:
+  fleet_runners:                                       # KEDA polling App (actions:read + metadata:read)
+    app_id: ""                                         # TODO post-init (numeric GitHub App ID)
+    installation_id: ""                                # TODO post-init
+    private_key_kv_secret: fleet-runners-app-pem       # Secret name in the fleet KV (Stage 0 seeds it)
+
 aad:
   argocd:
     display_name: ${fleet_name}-argocd
