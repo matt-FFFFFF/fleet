@@ -79,7 +79,14 @@ first Terraform apply — the file documents each with a `TODO` or
 - Per-env `networking.grafana_pe_subnet_id`, `grafana_pe_linked_vnet_ids`.
 - `networking.tfstate.private_endpoint.subnet_id` — subnet that will
   host the private endpoint for the fleet tfstate storage account
-  (typically `snet-pe-shared` in `rg-fleet-shared` or a hub subnet).
+  (typically `snet-pe-shared` in `rg-fleet-shared` or a peered hub
+  subnet). The `Microsoft.Network/privateEndpoints` resource itself
+  is created in the **shared subscription** (`rg-fleet-tfstate`);
+  cross-subscription PE-to-subnet references are supported, but the
+  subnet must be in the same Azure region as the storage account,
+  and the operator running `bootstrap/fleet` needs `Network
+  Contributor` (or the narrower `Microsoft.Network/virtualNetworks/
+  subnets/join/action` permission) on the target subnet.
 - `networking.tfstate.private_endpoint.private_dns_zone_id` — central
   `privatelink.blob.core.windows.net` zone (usually in the hub
   connectivity subscription). Optional; leave `null` to skip automatic

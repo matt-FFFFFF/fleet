@@ -9,17 +9,22 @@
 # can reference it):
 #
 #   1. Create the runner UAMI (`uami-fleet-runners`) in `rg-fleet-shared`.
-#   2. Grant the runner UAMI `Key Vault Secrets User` on the fleet Key Vault
-#      scope (fleet KV itself is created by Stage 0; role assignment here
-#      is scope-by-id only, so applies cleanly before the KV exists).
-#   3. Invoke the vendored ACA+KEDA runner module with:
+#   2. Invoke the vendored ACA+KEDA runner module with:
 #        - bring-your-own VNet (networking.*)
 #        - no NAT / no public IP (UDR + hub firewall own egress)
 #        - per-pool private ACR (module default)
 #        - KV-reference for the GitHub App PEM (vendor extension — see
 #          terraform/modules/cicd-runners/VENDORING.md §4)
 #
-# Stage 0 later seeds the PEM into the fleet KV under the secret name
+# The `Key Vault Secrets User` role assignment that binds this UAMI to
+# the fleet KV is **owned by Stage 0**, not this stage: the fleet KV
+# does not exist yet at Stage -1 (Stage 0 creates it), and ARM rejects
+# Microsoft.Authorization/roleAssignments PUT against a non-existent
+# scope with a 404. Stage 0 reads the runner UAMI principal id from
+# the `runner_uami_principal_id` output below and issues the role
+# assignment against the KV it creates.
+#
+# Stage 0 also seeds the PEM into the fleet KV under the secret name
 # `local.github_app_fleet_runners.private_key_kv_secret` (default
 # `fleet-runners-app-pem`) and publishes the `fleet-runners` App IDs as
 # repo variables. bootstrap/fleet itself never touches the PEM.
@@ -33,11 +38,7 @@ locals {
   # Versionless KV secret URI — constructed, not read. The fleet KV is
   # created by Stage 0, so no data lookup is possible or needed here; the
   # Container App Job resolves the secret at runtime via the attached UAMI.
-  fleet_kv_id                        = "/subscriptions/${local.derived.acr_subscription_id}/resourceGroups/${local.derived.acr_resource_group}/providers/Microsoft.KeyVault/vaults/${local.derived.fleet_kv_name}"
   fleet_runners_app_key_kv_secret_id = "https://${local.derived.fleet_kv_name}.vault.azure.net/secrets/${local.github_app_fleet_runners.private_key_kv_secret}"
-
-  # Azure built-in role GUID: Key Vault Secrets User.
-  role_kv_secrets_user = "4633458b-17de-408a-b874-0445c86b69e6"
 }
 
 # --- Runner UAMI -------------------------------------------------------------
@@ -51,32 +52,6 @@ resource "azapi_resource" "runner_uami" {
   body = {}
 
   response_export_values = ["id", "properties.clientId", "properties.principalId"]
-}
-
-# --- Key Vault Secrets User on the fleet KV ----------------------------------
-#
-# Scope is referenced by id — the fleet KV itself does not yet exist at this
-# stage; Stage 0 creates it and seeds `fleet-runners-app-pem`. The role
-# assignment plans cleanly because azapi issues it as a PUT against
-# Microsoft.Authorization/roleAssignments with the target scope as a
-# string, not a resource reference that must resolve at plan time.
-
-resource "azapi_resource" "runner_kv_secrets_user" {
-  type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
-  name      = uuidv5("url", "${local.fleet_kv_id}|${local.runner_uami_name}|kv-secrets-user")
-  parent_id = local.fleet_kv_id
-
-  body = {
-    properties = {
-      roleDefinitionId = "/subscriptions/${local.derived.acr_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_kv_secrets_user}"
-      principalId      = azapi_resource.runner_uami.output.properties.principalId
-      principalType    = "ServicePrincipal"
-    }
-  }
-
-  lifecycle {
-    ignore_changes = [name]
-  }
 }
 
 # --- Runner pool (vendored AVM module with local extensions) -----------------

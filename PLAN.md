@@ -745,8 +745,11 @@ Key design choices:
   `actions:read` + `metadata:read`. The PEM lives in the fleet KV under
   `fleet-runners-app-pem` (seeded by Stage 0) and is resolved into the
   Container App Job as a **Key Vault secret reference** (`{ keyVaultUrl,
-  identity }`) via a callsite-created `uami-fleet-runners` UAMI that holds
-  `Key Vault Secrets User` on the fleet KV. The PEM never enters Terraform
+  identity }`) via a callsite-created `uami-fleet-runners` UAMI. Stage 0
+  grants that UAMI `Key Vault Secrets User` on the fleet KV it creates
+  (role assignment lives in Stage 0, not `bootstrap/fleet` — ARM rejects
+  Microsoft.Authorization/roleAssignments against a scope that does not
+  yet exist). The PEM never enters Terraform
   state. Vendor patch documented in `modules/cicd-runners/VENDORING.md` §4.
 - **Private tfstate SA**: `bootstrap/fleet/main.state.tf` sets
   `publicNetworkAccess = var.allow_public_state_during_bootstrap ? "Enabled"
@@ -778,12 +781,15 @@ Key design choices:
   tfstate.private_endpoint.*}`. See `docs/adoption.md` §3 + §5.1 for the
   full list of post-init fields.
 
-**Stage 0 implication (follow-up, not in Stage -1):** Stage 0 must seed
-`fleet-runners-app-pem` into the fleet KV and publish the `fleet-runners`
-App IDs as repo variables. `bootstrap/fleet` references the KV secret by
-id only, so Stage -1 is not blocked on `init-gh-apps.sh` (§16.4) — the
-Container App Job fails deterministically at runtime if the secret is
-missing. Tracked as an outside-PLAN scaffolding row in STATUS.md.
+**Stage 0 implication (follow-up, not in Stage -1):** Stage 0 must (a)
+seed `fleet-runners-app-pem` into the fleet KV it creates, (b) grant the
+`uami-fleet-runners` UAMI (output from `bootstrap/fleet` as
+`runner_uami_principal_id`) `Key Vault Secrets User` on the fleet KV,
+and (c) publish the `fleet-runners` App IDs as repo variables.
+`bootstrap/fleet` references the KV secret by id only, so Stage -1 is
+not blocked on `init-gh-apps.sh` (§16.4) — the Container App Job fails
+deterministically at runtime if the secret is missing. Tracked as an
+outside-PLAN scaffolding row in STATUS.md.
 
 #### `bootstrap/environment/` — Actions-run via `env-bootstrap.yaml`
 

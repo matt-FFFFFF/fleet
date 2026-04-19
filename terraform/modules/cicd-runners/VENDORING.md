@@ -52,9 +52,10 @@ the existing `azuread` carveout for `modules/github-repo/`.
 Two new optional inputs on the **root** module and the
 **container-app-job** submodule:
 
-- `github_app_key_kv_secret_id` — versioned Key Vault secret URI
-  (`https://<vault>.vault.azure.net/secrets/<name>/<version>`) holding
-  the GitHub App private key (PEM).
+- `github_app_key_kv_secret_id` — versionless Key Vault secret URI
+  (`https://<vault>.vault.azure.net/secrets/<name>`) holding the
+  GitHub App private key (PEM). Container Apps resolves the latest
+  version at runtime.
 - `github_app_key_identity_id` — resource ID of the UAMI that Container
   Apps uses to read the secret (must have `Key Vault Secrets User` on
   the target vault and be attached to the job).
