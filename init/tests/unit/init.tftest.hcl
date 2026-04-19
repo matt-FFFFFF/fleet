@@ -37,8 +37,13 @@ variables {
 run "render_happy_path_fleet_yaml" {
   command = apply
 
-  # Pre-compute the yamldecoded document once so assertions below stay
-  # small. locals{} in run blocks are test-only and cheap.
+  # Each assert below re-runs `yamldecode(local_file.fleet_yaml.content)`.
+  # `run` blocks do not support `locals{}` (only variables/module/providers/
+  # assert/expect_failures/state_key/parallel/command/plan_options — see
+  # https://developer.hashicorp.com/terraform/language/tests#run-blocks),
+  # so there is no in-test way to hoist the decode. The cost is trivial:
+  # local_file.fleet_yaml.content is a string attribute already in state
+  # by the time assertions run, and yamldecode on ~60 lines is sub-ms.
   assert {
     condition     = yamldecode(local_file.fleet_yaml.content).fleet.name == "acme"
     error_message = "Rendered _fleet.yaml must carry fleet.name = var.fleet_name."
