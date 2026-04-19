@@ -132,7 +132,7 @@ resource "azapi_resource" "state_pe" {
   lifecycle {
     precondition {
       condition     = local.networking.tfstate_pe_subnet_id != null && local.networking.tfstate_pe_subnet_id != ""
-      error_message = "networking.tfstate.private_endpoint.subnet_id must be set in clusters/_fleet.yaml before applying bootstrap/fleet. See docs/adoption.md §5.1."
+      error_message = "clusters/_fleet.yaml: networking.tfstate.private_endpoint.subnet_id is unset or still a `<...>` placeholder. Replace it with the full /subscriptions/.../subnets/<name> id of the subnet that will host the tfstate storage account's private endpoint. See docs/adoption.md §3 + §5.1."
     }
   }
 }
