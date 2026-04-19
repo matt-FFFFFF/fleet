@@ -58,4 +58,12 @@ locals {
       substr("kv-${local.fleet.name}-fleet", 0, 24),
     )
   }
+
+  # Private-networking identifiers read from _fleet.yaml.networking.
+  # `try(...)` keeps older _fleet.yaml docs (pre-networking-schema) parseable
+  # during validate — an adopter must fill these in before applying.
+  networking = {
+    tfstate_pe_subnet_id           = try(local.fleet_doc.networking.tfstate.private_endpoint.subnet_id, null)
+    tfstate_pe_private_dns_zone_id = try(local.fleet_doc.networking.tfstate.private_endpoint.private_dns_zone_id, null)
+  }
 }
