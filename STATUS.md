@@ -165,6 +165,17 @@ adoption docs extended accordingly.
 - [x] `.github/workflows/tflint.yaml` + `.tflint.hcl` — recursive
       tflint on every PR; `terraform_unused_declarations` and
       `terraform_naming_convention` enforced. Kept in adopter repos.
+- [x] `terraform test` unit suites (template-side; deleted with the
+      rest of the template scaffolding by `init-fleet.sh`):
+  - `init/tests/unit/init.tftest.hcl` — mocks `hashicorp/local`;
+    round-trips rendered `_fleet.yaml` / CODEOWNERS / README /
+    marker content; exercises every `validation {}` block in
+    `init/variables.tf` via `expect_failures`.
+  - `terraform/modules/fleet-identity/tests/unit/fleet_identity.tftest.hcl`
+    — derivation contract (docs/naming.md) against the canonical
+    fixture, overrides, 24-char truncation, networking try-paths.
+  - Wired into `.github/workflows/template-selftest.yaml` ahead of
+    the `init-fleet.sh` run.
 
 ## §11 Operator UX
 
@@ -255,6 +266,12 @@ adoption docs extended accordingly.
       variable on `bootstrap/fleet` (tfstate SA
       `publicNetworkAccess` toggle; defaults `false`; network ACLs
       remain `defaultAction = "Deny"`).
+- [x] `terraform/modules/fleet-identity/` — pure-function module
+      (no providers) that derives the fleet's canonical resource
+      names + networking identifiers + GH-App coordinates from a
+      parsed `_fleet.yaml`. Called from both `bootstrap/fleet` and
+      `bootstrap/environment`; covered by
+      `tests/unit/fleet_identity.tftest.hcl`.
 
 ## Next likely units of work
 
