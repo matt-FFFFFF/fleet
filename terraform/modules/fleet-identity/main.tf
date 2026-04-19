@@ -8,10 +8,12 @@
 locals {
   fleet = var.fleet_doc.fleet
 
-  # Derived names. `coalesce(... "")` pattern lets an explicit override
-  # win; when the override is empty/absent the formula result is used.
-  # `substr(..., 0, 24)` enforces Azure's 24-char ceiling on KV and SA
-  # names. Formulas mirror docs/naming.md §"Derived names".
+  # Derived names. `coalesce(override, formula)` pattern lets an explicit
+  # override win; when the override is empty/absent the formula result is
+  # used. For KV and SA names, `substr(..., 0, 24)` truncates only the
+  # formula-derived fallback; non-empty overrides pass through unchanged
+  # and must already satisfy Azure's length constraints. Formulas mirror
+  # docs/naming.md §"Derived names".
   derived = {
     # ----- tfstate storage ------------------------------------------------
     state_storage_account = coalesce(
