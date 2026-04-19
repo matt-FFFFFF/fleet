@@ -2,19 +2,24 @@
 #
 # Human-run, one-time (per PLAN §4 Stage -1 `bootstrap/fleet/`). Creates:
 #
-#   1. rg-fleet-tfstate + state SA + tfstate-fleet container
-#   2. rg-fleet-shared (Stage 0 will land ACR + fleet KV here)
-#   3. uami-fleet-stage0 + uami-fleet-meta + their FICs
-#   4. Azure RBAC: fleet-stage0 Contributor on rg-fleet-shared + Blob
+#   1. rg-fleet-tfstate + state SA + tfstate-fleet container (private endpoint)
+#   2. rg-fleet-shared (Stage 0 will land the ACR here)
+#   3. Fleet Key Vault + private endpoint + DNS A-record registration
+#      (Stage 0 seeds Argo + GH App secrets into it)
+#   4. uami-fleet-stage0 + uami-fleet-meta + uami-fleet-runners + FICs
+#   5. Azure RBAC: fleet-stage0 Contributor on rg-fleet-shared + Blob
 #      Contributor on tfstate-fleet; fleet-meta Blob Contributor on
-#      tfstate-fleet. Subscription-scope assignments for fleet-meta are
-#      deferred to bootstrap/environment (one per env subscription).
-#   5. Entra `Application Administrator` on both UAMIs.
-#   6. Fleet GitHub repo + branch protection; team-repo-template repo.
-#   7. fleet-stage0 + fleet-meta GitHub environments with env variables.
+#      tfstate-fleet; fleet-runners Key Vault Secrets User on the fleet KV.
+#      Subscription-scope assignments for fleet-meta are deferred to
+#      bootstrap/environment (one per env subscription).
+#   6. Entra `Application Administrator` on both UAMIs.
+#   7. Fleet GitHub repo + branch protection; team-repo-template repo.
+#   8. fleet-stage0 + fleet-meta GitHub environments with env variables.
+#   9. Self-hosted GitHub Actions runner pool (ACA + KEDA) with per-pool
+#      private ACR, KV-reference for the GH App PEM.
 #
 # Files intentionally omitted from this stage (move to later stages):
-#   - ACR, fleet KV → Stage 0
+#   - ACR → Stage 0
 #   - Per-env state containers + env UAMIs → bootstrap/environment
 #   - Fleet-meta GH App + stage0-publisher GH App minting → see main.github.tf
 #     TODO comment; these are currently manual preconditions.
@@ -57,5 +62,27 @@ locals {
       try(local.fleet_doc.keyvault.name_override, ""),
       substr("kv-${local.fleet.name}-fleet", 0, 24),
     )
+    fleet_kv_resource_group = try(local.fleet_doc.keyvault.resource_group, local.fleet_doc.acr.resource_group)
+    fleet_kv_location       = try(local.fleet_doc.keyvault.location, local.fleet.primary_region)
+  }
+
+  # Private-networking identifiers read from _fleet.yaml.networking.
+  # `try(...)` keeps older _fleet.yaml docs (pre-networking-schema) parseable
+  # during validate — an adopter must fill these in before applying.
+  networking = {
+    tfstate_pe_subnet_id           = try(local.fleet_doc.networking.tfstate.private_endpoint.subnet_id, null)
+    tfstate_pe_private_dns_zone_id = try(local.fleet_doc.networking.tfstate.private_endpoint.private_dns_zone_id, null)
+    runner_subnet_id               = try(local.fleet_doc.networking.runner.subnet_id, null)
+    runner_acr_pe_subnet_id        = try(local.fleet_doc.networking.runner.container_registry_pe_subnet_id, null)
+    runner_acr_dns_zone_id         = try(local.fleet_doc.networking.runner.container_registry_private_dns_zone_id, null)
+    fleet_kv_pe_subnet_id          = try(local.fleet_doc.networking.fleet_kv.private_endpoint.subnet_id, null)
+    fleet_kv_pe_dns_zone_id        = try(local.fleet_doc.networking.fleet_kv.private_endpoint.private_dns_zone_id, null)
+  }
+
+  # fleet-runners GitHub App (KEDA polling). See docs/adoption.md §4.
+  github_app_fleet_runners = {
+    app_id                = try(local.fleet_doc.github_app.fleet_runners.app_id, "")
+    installation_id       = try(local.fleet_doc.github_app.fleet_runners.installation_id, "")
+    private_key_kv_secret = try(local.fleet_doc.github_app.fleet_runners.private_key_kv_secret, "fleet-runners-app-pem")
   }
 }

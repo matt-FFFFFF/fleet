@@ -77,6 +77,50 @@ first Terraform apply — the file documents each with a `TODO` or
 - Per-env `aks.admin_groups`, `rbac_cluster_admins`, `rbac_readers`.
 - Per-env `grafana.admins`, `grafana.editors`.
 - Per-env `networking.grafana_pe_subnet_id`, `grafana_pe_linked_vnet_ids`.
+- `networking.tfstate.private_endpoint.subnet_id` — subnet that will
+  host the private endpoint for the fleet tfstate storage account
+  (typically `snet-pe-shared` in `rg-fleet-shared` or a peered hub
+  subnet). The `Microsoft.Network/privateEndpoints` resource itself
+  is created in the **shared subscription** (`rg-fleet-tfstate`);
+  cross-subscription PE-to-subnet references are supported, but the
+  subnet must be in the same Azure region as the storage account,
+  and the operator running `bootstrap/fleet` needs `Network
+  Contributor` (or the narrower `Microsoft.Network/virtualNetworks/
+  subnets/join/action` permission) on the target subnet.
+- `networking.tfstate.private_endpoint.private_dns_zone_id` — central
+  `privatelink.blob.core.windows.net` zone (usually in the hub
+  connectivity subscription). Optional; leave `null` to skip automatic
+  A-record wiring and register DNS out-of-band.
+- `networking.runner.subnet_id` — subnet that hosts the fleet runner
+  pool's Azure Container Apps environment (typically `snet-runners`
+  in `rg-fleet-shared`). Must be delegated to
+  `Microsoft.App/environments`; hub-firewall egress via UDR.
+- `networking.runner.container_registry_pe_subnet_id` — subnet for
+  the runner pool's per-pool private ACR private endpoint. May be the
+  same subnet as `networking.tfstate.private_endpoint.subnet_id`.
+- `networking.runner.container_registry_private_dns_zone_id` — central
+  `privatelink.azurecr.io` zone (symmetric with the tfstate zone
+  above; typically in the hub connectivity subscription). The runner
+  pool **does not create this zone** — it must pre-exist, and the
+  operator running `bootstrap/fleet` needs **Private DNS Zone
+  Contributor** on it so the module can register the per-pool ACR
+  PE's A record via the private endpoint's DNS zone group.
+- `networking.fleet_kv.private_endpoint.subnet_id` — subnet that
+  hosts the private endpoint for the **fleet Key Vault** (created
+  by `bootstrap/fleet`; see §5 below for the ownership change from
+  Stage 0). May reuse the tfstate PE subnet.
+- `networking.fleet_kv.private_endpoint.private_dns_zone_id` — central
+  `privatelink.vaultcore.azure.net` zone. Optional; leave `null` to
+  register DNS out-of-band. Same operator-permission model as the
+  two zones above.
+- `github_app.fleet_runners.{app_id, installation_id}` — numeric IDs
+  of the `fleet-runners` GitHub App (KEDA polling; created by §4
+  below). The private key PEM is seeded into the fleet Key Vault by
+  `init-gh-apps.sh` under the secret name `private_key_kv_secret`
+  (default `fleet-runners-app-pem`). Because the KV is strictly
+  private, `init-gh-apps.sh` must run from a host with data-plane
+  reach to the vault (jump host, VPN, Bastion, or the fleet runners
+  themselves once online).
 
 Commit the initialized repo:
 
@@ -88,7 +132,7 @@ git push
 
 ## 4. Provision the GitHub Apps
 
-The fleet uses two GitHub Apps with deliberately different blast
+The fleet uses three GitHub Apps with deliberately different blast
 radius (rationale in `PLAN.md` §4 Stage -1):
 
 - **`fleet-meta`** (admin-class) — used by env-bootstrap and
@@ -98,6 +142,14 @@ radius (rationale in `PLAN.md` §4 Stage -1):
 - **`stage0-publisher`** (narrow) — used by the Stage 0 workflow
   to publish outputs as repo variables.
   Permissions: `variables:write` only.
+- **`fleet-runners`** (narrow) — used by the KEDA scaler inside the
+  fleet runner pool to poll for queued runner jobs on this repo.
+  Permissions: `actions:read`, `metadata:read`. Installed on the
+  fleet repo only. Private key PEM is seeded into the fleet Key Vault
+  by `init-gh-apps.sh` (post-bootstrap step); `bootstrap/fleet` owns
+  the KV itself and references the secret via a versionless KV URI
+  resolved at runtime by the Container App Job's managed identity
+  (see `networking` / `github_app.fleet_runners` in `_fleet.yaml`).
 
 Neither App can be created headlessly: the GitHub Apps API requires
 a one-time browser handshake (the App Manifest flow) so a human can
@@ -122,14 +174,16 @@ export GITHUB_TOKEN=<PAT with repo:admin + admin:org>
 ```
 
 The script writes the resulting App IDs / PEMs / webhook secrets to
-`./.gh-apps.auto.tfvars` (gitignored) at the repo root. This file is
-a tfvars overlay consumed by **Stage 0** (`terraform/stages/0-fleet`,
-not `bootstrap/fleet`): Stage 0 creates the fleet Key Vault, writes
-the PEMs + webhook secrets into it, and publishes the App IDs /
-client IDs as repo variables. `bootstrap/fleet` itself does **not**
-touch GH App credentials — its only GH-App involvement is creating
-the `fleet-stage0` / `fleet-meta` GitHub environments that Stage 0
-later populates. The on-disk `.gh-apps.auto.tfvars` and
+`./.gh-apps.auto.tfvars` (gitignored) at the repo root. `bootstrap/
+fleet` (Stage -1) owns the fleet Key Vault, and the `fleet-runners`
+PEM is seeded into it by this script via `az keyvault secret set`
+after bootstrap completes (script host must have private-network
+reach to the KV). Stage 0 seeds the remaining PEMs + webhook secrets
+and publishes the App IDs / client IDs as repo variables.
+`bootstrap/fleet` itself does **not** touch GH App credentials
+directly — its only GH-App involvement is provisioning the vault the
+PEM lands in and the `fleet-stage0` / `fleet-meta` GitHub environments
+that Stage 0 later populates. The on-disk `.gh-apps.auto.tfvars` and
 `.gh-apps.state.json` remain on disk (both gitignored) after Stage 0
 applies; the adopter may delete them manually once the fleet KV
 holds authoritative copies.
@@ -173,6 +227,43 @@ GitHub items must be arranged out-of-band by the adopter org.
   chars, globally unique), resource groups `rg-fleet-tfstate` and
   `rg-fleet-shared`.
 
+**Networking (Stage -1 runner pool + private tfstate SA)**
+
+- Pre-existing VNet in `rg-fleet-shared` (or the hub connectivity
+  subscription, peered to the fleet subscription).
+- Subnet for the runner pool (`snet-runners` by convention),
+  delegated to `Microsoft.App/environments`, with a UDR that routes
+  egress through the hub firewall. `nat_gateway_creation_enabled` and
+  `public_ip_creation_enabled` are both **off** at the module
+  callsite — there is no runner-local NAT or public IP.
+- Subnet for the tfstate private endpoint (`snet-pe-shared` by
+  convention).
+- Central `privatelink.blob.core.windows.net` private DNS zone
+  (typically in the hub connectivity subscription; shared with every
+  other storage account in the tenant). `bootstrap/fleet` references
+  it by resource id when registering the PE's A-record; leave
+  `networking.tfstate.private_endpoint.private_dns_zone_id = null`
+  to skip and register the A-record out-of-band.
+- Central `privatelink.azurecr.io` private DNS zone (same hub/
+  connectivity sub as the blob zone; shared with every other ACR PE
+  in the tenant). The runner pool **does not create this zone**; it
+  only registers the per-pool ACR PE's A-record into it via the
+  PE's DNS zone group.
+- Role assignment: **`Private DNS Zone Contributor`** on the central
+  blob zone *and* on the central ACR zone — for the operator on the
+  first apply, **and** for the `fleet-stage0` UAMI for every
+  subsequent re-run.
+- **VNet-reachable workstation for every re-run**: jump host,
+  Azure Bastion, or VPN into the fleet VNet. The tfstate SA is
+  private-only after the first apply — Terraform cannot reach it
+  from a laptop over the public internet.
+- **First-apply-only escape hatch**: set
+  `allow_public_state_during_bootstrap = true` for the very first
+  `bootstrap/fleet` apply. This leaves the storage account's
+  public endpoint Enabled (with `defaultAction = "Deny"` still in
+  place) long enough to seed the PE and DNS zone group; flip it back
+  to `false` on the second apply. Do not leave it on.
+
 **GitHub**
 
 - Fleet repo already exists (created via "Use this template" in
@@ -180,12 +271,21 @@ GitHub items must be arranged out-of-band by the adopter org.
 - `GITHUB_TOKEN` exported with classic-PAT scopes `repo:admin`
   and `admin:org` (the latter only if `github_org` is an
   organization).
-- The GitHub Apps from §4 are **not** required for the initial
-  `bootstrap/fleet` apply. They become relevant for later
-  workflows / once Stage 0 wires the §16.4 inputs; at that point,
-  provide their credentials as `TF_VAR_*` env vars or in
-  `./.gh-apps.auto.tfvars`. `bootstrap/fleet` does not create,
-  write, or manage the GitHub App credentials.
+- The `fleet-meta` and `stage0-publisher` GitHub Apps from §4 are
+  **not** required for the initial `bootstrap/fleet` apply — they
+  become relevant for later workflows. Provide their credentials
+  as `TF_VAR_*` env vars or in `./.gh-apps.auto.tfvars` at that
+  point. `bootstrap/fleet` does not create, write, or manage the
+  GitHub App credentials.
+- The **`fleet-runners`** GitHub App **is** required up-front: the
+  vendored runner module validates that
+  `github_app.fleet_runners.{app_id, installation_id}` are non-empty
+  when `authentication_method = "github_app"`, so
+  `clusters/_fleet.yaml` must carry both numeric IDs before the
+  first `bootstrap/fleet` apply. The PEM itself is resolved at
+  runtime via Key Vault reference (Stage 0 seeds it), so its
+  absence does not block the first apply — only scale-out of the
+  runner pool.
 - The team-template repo (`<github_org>/<team_template_repo>`,
   default `team-repo-template`) must **not** pre-exist; it is
   created fresh with `prevent_destroy = true`.
@@ -201,6 +301,12 @@ GitHub items must be arranged out-of-band by the adopter org.
 ```sh
 cd terraform/bootstrap/fleet
 terraform init
+
+# First apply — leave the tfstate SA's public endpoint Enabled long
+# enough to seed the private endpoint + DNS zone group.
+terraform apply -var allow_public_state_during_bootstrap=true
+
+# Every subsequent apply (from a VNet-reachable workstation):
 terraform apply
 ```
 

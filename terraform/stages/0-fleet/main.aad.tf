@@ -96,7 +96,7 @@ resource "azuread_application_password" "argocd" {
 resource "azapi_resource" "argocd_oidc_client_secret" {
   type      = "Microsoft.KeyVault/vaults/secrets@2023-07-01"
   name      = "argocd-oidc-client-secret"
-  parent_id = azapi_resource.fleet_kv.id
+  parent_id = local.fleet_kv_id
 
   body = {
     properties = {

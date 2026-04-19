@@ -10,6 +10,17 @@ terraform {
       source  = "hashicorp/azuread"
       version = "~> 3.8"
     }
+    # NOTE: azurerm is a narrow carveout — it is used ONLY transitively by
+    # the vendored `modules/cicd-runners/` module (see PLAN §1 and
+    # `terraform/modules/cicd-runners/VENDORING.md`). bootstrap/fleet itself
+    # does not declare any `azurerm_*` resources or data sources; everything
+    # this stage authors is `azapi_*`. The provider block below exists only
+    # because Terraform requires the parent to configure every provider that
+    # any child module references.
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 4.20"
+    }
     github = {
       source  = "integrations/github"
       version = "~> 6.11"
@@ -40,6 +51,13 @@ provider "azapi" {
 provider "azuread" {
   tenant_id = local.fleet.tenant_id
   use_cli   = true
+}
+
+provider "azurerm" {
+  tenant_id       = local.fleet.tenant_id
+  subscription_id = local.fleet_doc.acr.subscription_id
+  use_cli         = true
+  features {}
 }
 
 provider "github" {
