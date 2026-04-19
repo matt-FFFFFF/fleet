@@ -10,7 +10,7 @@ locals {
   # (value passed via github_app_key_kv_secret_id) rather than inline values.
   # Entries in sensitive_environment_variables whose container_app_secret_name
   # is in this list must NOT be filtered out for having a null value.
-  _kv_backed_secret_names = var.github_app_key_kv_secret_id != null ? ["application-key"] : []
+  kv_backed_secret_names = var.github_app_key_kv_secret_id != null ? ["application-key"] : []
 
   environment_variables = [for env in var.environment_variables : {
     name  = env.name
@@ -24,26 +24,26 @@ locals {
   secret_environment_variables = [for env in var.sensitive_environment_variables : {
     name      = env.name
     secretRef = env.container_app_secret_name
-  } if(env.value != null && env.value != "") || contains(local._kv_backed_secret_names, env.container_app_secret_name)]
+  } if(env.value != null && env.value != "") || contains(local.kv_backed_secret_names, env.container_app_secret_name)]
 
   # Plain (inline-value) secrets: as upstream, but skip KV-backed names.
-  _plain_secrets = [for env in var.sensitive_environment_variables : {
+  plain_secrets = [for env in var.sensitive_environment_variables : {
     name  = env.container_app_secret_name
     value = env.value
-  } if env.value != null && env.value != "" && !contains(local._kv_backed_secret_names, env.container_app_secret_name)]
+  } if env.value != null && env.value != "" && !contains(local.kv_backed_secret_names, env.container_app_secret_name)]
 
   # Vendor extension: Key Vault-reference secrets. Emits the Container Apps
   # secret shape {name, keyVaultUrl, identity} so the PEM is resolved at
   # runtime from Key Vault and never enters Terraform state.
-  _kv_secrets = var.github_app_key_kv_secret_id != null ? [{
+  kv_secrets = var.github_app_key_kv_secret_id != null ? [{
     name        = "application-key"
     keyVaultUrl = var.github_app_key_kv_secret_id
     identity    = var.github_app_key_identity_id
   }] : []
 
   secrets = concat(
-    local._plain_secrets,
-    local._kv_secrets,
+    local.plain_secrets,
+    local.kv_secrets,
     var.registry_password == null ? [] : [{
       name  = "registry-password"
       value = var.registry_password
