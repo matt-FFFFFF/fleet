@@ -148,8 +148,9 @@ adoption docs extended accordingly.
 
 ## §9 RBAC
 
-- [x] Design locked; per-env group bindings expressed as `<…>`
-      placeholders in rendered `_fleet.yaml` for post-init fill-in.
+- [x] Design locked; per-env group bindings expressed as empty `[]`
+      with `TODO` comments in rendered `_fleet.yaml` for post-init
+      fill-in (bootstrap preconditions detect unfilled fields).
 
 ## §10 CI/CD
 
@@ -222,12 +223,17 @@ adoption docs extended accordingly.
 
 - [x] §16.1 Single source of truth (`clusters/_fleet.yaml` generated).
 - [x] §16.2 Bootstrap TF reads yaml (both stacks refactored).
-- [x] §16.3 `init-fleet.sh` wrapper over `init/` TF module.
+- [x] §16.3 `init-fleet.sh` wrapper over `init/` TF module. Adopter
+      walkthrough hardening: awk-based hint extraction (BSD-sed
+      portability), `github_repo` / `team_template_repo` prompted
+      (not silently defaulted).
 - [x] §16.4 `init-gh-apps.sh` — implemented at repo root; manifest
       flow for `fleet-meta` / `stage0-publisher` / `fleet-runners`
       Apps, writes `./.gh-apps.state.json` + `./.gh-apps.auto.tfvars`,
       patches `clusters/_fleet.yaml` with runner IDs, self-deletes
       on success. Stage 0 wiring of the tfvars overlay remains TODO.
+      Adopter walkthrough hardening: manifest JSON handed to python
+      via argv rather than stdin (heredoc-vs-pipe clash).
 - [x] §16.5 GitHub template mechanics; `import` block for fleet repo.
 - [x] §16.6 `docs/naming.md` drafted.
   - [ ] CI diff between `load.sh` and bootstrap HCL locals — deferred.
