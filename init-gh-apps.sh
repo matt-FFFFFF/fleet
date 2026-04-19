@@ -18,7 +18,9 @@
 #   3. Print + open(1) the manifest URL.
 #   4. Capture the redirect with the temp code.
 #   5. Exchange the code via `gh api .../conversions` for App credentials.
-#   6. Install the App on the fleet repo.
+#   6. Guide installation of the App on the selected owner; record the
+#      resulting installation id. (The operator chooses the repo selection
+#      in the browser; the script does not verify repo inclusion.)
 #   7. Persist credentials to ./.gh-apps.state.json (mode 0600, gitignored).
 #
 # After all three Apps exist, the script:
@@ -219,7 +221,10 @@ PY
 
 # ---- App definitions --------------------------------------------------------
 #
-# Tuple per App: <slug> <permissions-json> <events-json> <tfvars-prefix>
+# Per-app metadata lives in two parallel arrays (slugs and permissions).
+# Portable bash lacks ordered associative arrays, and the tfvars emitter
+# in the main loop carries its own slug→prefix mapping, so we intentionally
+# don't maintain a separate prefix array here.
 # Permissions reference: https://docs.github.com/rest/apps/apps#permissions
 #
 # Permission keys MUST match the App Manifest schema exactly (singular,
@@ -234,11 +239,8 @@ apps_runners_perms='{"actions":"read","metadata":"read"}'
 # fleet-meta and stage0-publisher write to the repo only; fleet-runners reads.
 # All three are repo-scoped (no organization permissions requested).
 
-# We expose a parallel array because portable bash lacks associative-array
-# ordering guarantees.
 APP_SLUGS=("fleet-meta" "stage0-publisher" "fleet-runners")
 APP_PERMS=("$apps_meta_perms" "$apps_stage0_perms" "$apps_runners_perms")
-APP_PREFIX=("fleet_meta_app" "stage0_publisher_app" "fleet_runners_app")
 
 # ---- manifest flow per App --------------------------------------------------
 

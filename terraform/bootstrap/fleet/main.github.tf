@@ -196,10 +196,14 @@ module "team_template_repo" {
 # at the repo root (PLAN §16.4, implemented).
 #
 # The helper creates all three Apps (`fleet-meta`, `stage0-publisher`,
-# `fleet-runners`), installs them on the fleet repo, and writes
+# `fleet-runners`), records their installation metadata, and writes
 # `./.gh-apps.auto.tfvars` for Stage 0 to consume. It also patches
 # `clusters/_fleet.yaml` with `github_app.fleet_runners.{app_id,
 # installation_id}` so this stage's runner module validation passes.
+# The installation's repository selection must include the fleet repo
+# (`local.fleet.github_repo`); the helper does not enforce this, so a
+# mis-scoped install will surface here or in Stage 0 rather than during
+# `init-gh-apps.sh` itself.
 #
 # TODO(phase2-stage0-gh-apps): declare matching `variable` blocks in
 # terraform/stages/0-fleet/ and wire tf-apply.yaml to symlink the tfvars

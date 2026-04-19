@@ -159,7 +159,10 @@ consent to the requested permissions. The `init-gh-apps.sh` helper
 tree on self-cleanup — automates everything around that single
 click: building the manifest from `_fleet.yaml`, opening a localhost
 listener for the redirect, exchanging the temp code for the App
-credentials, and installing all three Apps on the fleet repo.
+credentials, and guiding the installation flow for all three Apps
+(the operator chooses the repo selection in the GitHub install UI;
+the script records the owner-scoped installation id but does not
+verify repo-selection coverage).
 
 > **Status:** `init-gh-apps.sh` is implemented at the repo root
 > (PLAN §16.4). The command block below is the actual adopter
