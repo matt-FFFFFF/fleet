@@ -167,6 +167,23 @@ case "$owner_type" in
     ;;
 esac
 
+# For user-owned fleets, `/user/installations` is scoped to the
+# AUTHENTICATED user — not $github_org. If the caller is logged in as a
+# different user, the installation lookup later will fail with an opaque
+# "could not resolve installation id" error. Assert upfront for a clearer
+# failure. (Best-effort: a PAT without the `read:user` scope may prevent
+# `/user` from returning a login — in that case we skip the check and let
+# the lookup surface its own error.)
+if [[ "$owner_type" == "User" ]]; then
+  if auth_login="$(gh api user -q .login 2>/dev/null)" && [[ -n "$auth_login" ]]; then
+    if [[ "$auth_login" != "$github_org" ]]; then
+      die "authenticated as '$auth_login' but fleet.github_org is '$github_org' (User-owned). For user-owned fleets you must be logged in as that user — run 'gh auth login' as '$github_org'."
+    fi
+  else
+    warn "could not verify authenticated user matches '$github_org' (gh api user failed); continuing"
+  fi
+fi
+
 # ---- state-file helpers -----------------------------------------------------
 
 state_get() {
@@ -427,10 +444,14 @@ install_app() {
   app_id=$(state_get "$slug" "id")
   [[ -n "$app_id" ]] || die "internal: no id recorded for $slug"
 
-  # Check whether the App is already installed on the fleet repo.
+  # Check whether we've already recorded an installation id for this App.
+  # Note: installation_id is owner-scoped; it does not by itself guarantee
+  # that $github_org/$github_repo is included in the install's repo
+  # selection (which the operator can change at any time via the Apps UI).
+  # The subsequent bootstrap/Stage-0 apply will surface any access gap.
   existing_install=$(state_get "$slug" "installation_id")
   if [[ -n "$existing_install" ]]; then
-    info "✓ $slug install already recorded (id=$existing_install)"
+    info "✓ $slug installation already recorded (id=$existing_install)"
     return 0
   fi
 
@@ -532,9 +553,14 @@ lines = [
 for slug, prefix in mapping:
     a = s[slug]
     lines += [
+        # Installation IDs are intentionally NOT emitted here: PLAN §16.4
+        # step 7's prescribed tfvars shape does not include them, and Stage
+        # 0 variable blocks aren't declared yet (see bootstrap/fleet
+        # main.github.tf TODO(phase2-stage0-gh-apps)). The fleet-runners
+        # installation_id is written into clusters/_fleet.yaml below; the
+        # others remain in .gh-apps.state.json for when Stage 0 lands.
         f'{prefix}_id              = "{a["id"]}"',
         f'{prefix}_client_id       = "{a["client_id"]}"',
-        f'{prefix}_installation_id = "{a["installation_id"]}"',
         f'{prefix}_pem             = <<EOT',
         a["pem"].rstrip("\n"),
         "EOT",
@@ -572,8 +598,10 @@ def replace(text, key, value):
     pat = re.compile(rf'^(\s+){re.escape(key)}:\s*"[^"]*"(\s*(?:#.*)?)$', re.MULTILINE)
     new, n = pat.subn(rf'\g<1>{key}: "{value}"\g<2>', text, count=1)
     if n == 0:
-        sys.stderr.write(f"could not find '{key}' in {yaml_path}; leave manual edit\n")
-        return text
+        raise SystemExit(
+            f"init-gh-apps: could not find required key '{key}' in {yaml_path}; "
+            "template may have drifted — fix the file or re-run init-fleet.sh before continuing"
+        )
     return new
 
 text = replace(text, "app_id", app_id)
