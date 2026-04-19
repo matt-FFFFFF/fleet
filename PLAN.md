@@ -42,7 +42,7 @@ manage upgrades, and add Kargo promotion.
 | Kargo GitHub auth               | Dedicated GitHub App; PEM in Key Vault; synced by ESO                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Kargo RBAC                      | Same `oidcGroup` as Argo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Container registry              | One ACR per fleet; hosts images and Helm OCI charts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Key Vault                       | Two-tier: one **fleet KV** (Stage 0) strictly for secrets consumed by more than one cluster (e.g., Argo GitHub App PEM, Argo OIDC client secret); **one cluster KV per cluster** (Stage 1) for cluster-local secrets. Mgmt-cluster-only secrets (Kargo GitHub App PEM, Kargo OIDC client secret) live in the mgmt cluster's KV, not the fleet KV.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Key Vault                       | Two-tier: one **fleet KV** created by `bootstrap/fleet` (Stage -1, alongside the tfstate SA and runner pool — ownership relocated from Stage 0 to break the runner-pool KV-reference cycle; see §4 Stage -1 Implementation status 2026-04-19) strictly for secrets consumed by more than one cluster (e.g., Argo GitHub App PEM, Argo OIDC client secret, runner-pool GH App PEM); **one cluster KV per cluster** (Stage 1) for cluster-local secrets. Stage 0 still owns *seeding and rotating* secrets into the fleet KV (`Key Vault Secrets Officer` role assignment on the vault), it just no longer creates the vault itself. Mgmt-cluster-only secrets (Kargo GitHub App PEM, Kargo OIDC client secret) live in the mgmt cluster's KV, not the fleet KV.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | AAD app registrations           | Managed by Terraform (Stage 0) — one for Argo, one for Kargo. Each app carries **Federated Identity Credentials** keyed off every cluster's OIDC issuer URL (subjects: Argo/Kargo ServiceAccounts) so workload→AAD calls are secret-less. A **single residual `client_secret` per app** remains, used **only** by the OIDC RP auth-code flow for human login (Argo/Dex upstream don't yet support `client_assertion` RP auth); auto-rotated on every Stage 0 apply with a short TTL.                                                                                    |
 | Residual long-lived secrets     | **Exactly one class**: the Argo and Kargo AAD-app `client_secret` values used by their OIDC RP auth-code flows (human login). Stored in fleet KV, rotated on every Stage 0 apply (`end_date_relative` short TTL), reflected to cluster via ESO, picked up by Argo/Kargo on restart. All other fleet credentials — CI→Azure, workload→Azure, CI→Graph, AAD-app→Azure (`client_credentials`) — are federated and secret-less. Tracked in §15 with upstream removal trigger.                                                                                               |
 | Metrics                         | **Azure Managed Prometheus** — one **Azure Monitor Workspace per env** (created by `bootstrap/environment`) plus a **Data Collection Endpoint** per env; both are members of a per-env **Network Security Perimeter** (no public ingress). Each cluster gets a DCR + DCRA in Stage 1 pointing at its env's DCE+AMW; AKS `azureMonitorProfile.metrics` enabled; the env NSP inbound rule admits the env subscription so cluster addon identities can ingest.                                                                                                             |
@@ -235,7 +235,9 @@ node_pools:
 platform:
   # keyvault is NOT declared per cluster. The cluster KV is created by
   # Stage 1 and named `kv-<cluster.name>` (derived). The fleet KV is
-  # resolved from Stage 0 remote state.
+  # owned by `bootstrap/fleet` (Stage -1); its id/name flow to Stage 1
+  # via the `vars.FLEET_KEYVAULT_{ID,NAME}` repo variables published
+  # by Stage 0.
   acr:                                                           # fleet-wide; resolved from Stage 0 outputs
     login_server: acmefleet.azurecr.io
     resource_id: /subscriptions/.../registries/acmefleet
@@ -293,11 +295,16 @@ acr:
   location: eastus
   sku: Premium
 
-keyvault: # FLEET KV (one, created by Stage 0)
+keyvault: # FLEET KV (one, created by bootstrap/fleet — Stage -1)
   name: kv-acme-fleet
   resource_group: rg-fleet-shared
   location: eastus
-  # Stores: Argo/Kargo GH App PEMs, AAD OIDC client secrets, fleet-wide pull creds.
+  # Stores: Argo/Kargo GH App PEMs, AAD OIDC client secrets, fleet-wide
+  # pull creds, fleet-runners GH App PEM. Strictly private: public
+  # network access disabled, default-deny network ACLs, private
+  # endpoint supplied via networking.fleet_kv.private_endpoint.*
+  # (operator-owned subnet + central privatelink.vaultcore.azure.net
+  # zone, symmetric with the tfstate SA and runner ACR).
   # Per-cluster KVs are created by Stage 1 and named kv-<cluster.name>.
 
 aad:
@@ -532,14 +539,16 @@ structure and Azure-resource names.
 > (`networking.fleet_kv.private_endpoint.private_dns_zone_id`,
 > symmetric with the tfstate and runner-ACR zones). Stage 0 still
 > holds `Key Vault Secrets Officer` on the vault (for rotating
-> `argocd-oidc-client-secret`) but no longer creates it — it references
-> the KV by a derived id reconstructed from `_fleet.yaml`. PEM seeding
-> moves from Stage 0 to the post-bootstrap `init-gh-apps.sh` helper,
-> which must run from a host with data-plane reach to the KV. The
-> prose further down in §4 (Stage 0 "Fleet Key Vault" bullet; §16.4
-> PEM seeding; §10 runner-pool KV wiring) still reads as if Stage 0
-> created the vault; those paragraphs will be reconciled in a
-> follow-up pass rather than rewritten opportunistically.
+> `argocd-oidc-client-secret` and seeding GH App PEMs) but no longer
+> creates it — it references the KV by a derived id reconstructed
+> from `_fleet.yaml`. The `uami-fleet-runners` identity and its
+> `Key Vault Secrets User` role assignment on the vault also live in
+> `bootstrap/fleet` (same apply graph as the runner module's KV
+> reference). PEM seeding of `fleet-runners-app-pem` moves from Stage 0
+> to the post-bootstrap `init-gh-apps.sh` helper, which must run from
+> a host with data-plane reach to the KV. The prose further down in
+> §4 Stage 0, §16.4, and §10 has been reconciled to match (this
+> callout remains as the change-record).
 
 Three TF roots, each run rarely. Bootstrap exists to create the
 identities and GitHub scaffolding that CI-run stages depend on.
@@ -679,9 +688,11 @@ messages; the rest must be arranged out-of-band by the adopter org.
 - **Future (once §16.4 lands):** `init-gh-apps.sh` (at the repo
   root) has been run successfully and its outputs are available
   as `./.gh-apps.auto.tfvars` for **Stage 0** — see §16.4 for the
-  exact variable names. The fleet Key Vault is created and these
-  secrets are seeded in Stage 0; `bootstrap/fleet` does not write
-  or manage the GitHub App credentials.
+  exact variable names. The fleet Key Vault is created by
+  `bootstrap/fleet`; **Stage 0 seeds the GH App PEMs + webhook
+  secrets into it** (Stage 0 holds `Key Vault Secrets Officer` on
+  the vault). `bootstrap/fleet` does not write or manage the GitHub
+  App credentials.
   **Today (Phase 1):** not a prerequisite — `bootstrap/fleet` has
   no GH App input variables and Stage 0 has not yet added the
   §16.4 GH App input variables / KV-seed resources either.
@@ -708,12 +719,14 @@ Creates:
   `init-gh-apps.sh` helper (§16.4) before this stage runs, because
   the GitHub App Manifest flow requires a one-time browser consent
   click that no API can bypass. **`bootstrap/fleet` does not touch
-  GH App credentials** — the fleet Key Vault is created in Stage 0
-  (§4 Stage 0), and storing the PEMs / webhook secrets there is
-  therefore Stage 0's job. `bootstrap/fleet`'s only involvement
-  with the Apps is creating the `fleet-stage0` / `fleet-meta`
-  GitHub environments that Stage 0 later populates with
-  App-derived variables.
+  GH App credentials** — the fleet Key Vault is created by
+  `bootstrap/fleet` itself (§4 Stage -1 Implementation status
+  2026-04-19), but storing the PEMs / webhook secrets there is
+  Stage 0's job (Stage 0 holds `Key Vault Secrets Officer` on the
+  vault for exactly this purpose). `bootstrap/fleet`'s only
+  involvement with the Apps is creating the `fleet-stage0` /
+  `fleet-meta` GitHub environments that Stage 0 later populates
+  with App-derived variables.
   - Required permissions per App (asserted by the manifest):
     - `fleet-meta`: `administration:write`, `environments:write`,
       `variables:write`, `secrets:write`, `contents:write` —
@@ -767,13 +780,17 @@ Key design choices:
   `fleet-runners` GitHub App (third App in the inventory alongside
   `fleet-meta` and `stage0-publisher` — see §16.4). Permissions:
   `actions:read` + `metadata:read`. The PEM lives in the fleet KV under
-  `fleet-runners-app-pem` (seeded by Stage 0) and is resolved into the
+  `fleet-runners-app-pem` (seeded post-bootstrap by `init-gh-apps.sh`;
+  see §16.4) and is resolved into the
   Container App Job as a **Key Vault secret reference** (`{ keyVaultUrl,
-  identity }`) via a callsite-created `uami-fleet-runners` UAMI. Stage 0
-  grants that UAMI `Key Vault Secrets User` on the fleet KV it creates
-  (role assignment lives in Stage 0, not `bootstrap/fleet` — ARM rejects
-  Microsoft.Authorization/roleAssignments against a scope that does not
-  yet exist). The PEM never enters Terraform
+  identity }`) via a callsite-created `uami-fleet-runners` UAMI.
+  `bootstrap/fleet` grants that UAMI `Key Vault Secrets User` on the
+  fleet KV it creates in the same apply graph (the KV, the secret
+  path, and the role assignment must all exist before ACA validates
+  the Container App Job's KV reference at PUT time — this is the
+  deploy-time cycle that motivated relocating fleet-KV ownership from
+  Stage 0 to Stage -1; see §4 Stage -1 Implementation status
+  2026-04-19). The PEM never enters Terraform
   state. Vendor patch documented in `modules/cicd-runners/VENDORING.md` §4.
 - **Private tfstate SA**: `bootstrap/fleet/main.state.tf` sets
   `publicNetworkAccess = var.allow_public_state_during_bootstrap ? "Enabled"
@@ -805,11 +822,14 @@ Key design choices:
   tfstate.private_endpoint.*}`. See `docs/adoption.md` §3 + §5.1 for the
   full list of post-init fields.
 
-**Stage 0 implication (follow-up, not in Stage -1):** Stage 0 must (a)
-seed `fleet-runners-app-pem` into the fleet KV it creates, (b) grant the
-`uami-fleet-runners` UAMI (output from `bootstrap/fleet` as
-`runner_uami_principal_id`) `Key Vault Secrets User` on the fleet KV,
-and (c) publish the `fleet-runners` App IDs as repo variables.
+**Stage 0 implication (follow-up, not in Stage -1):** `bootstrap/fleet`
+creates the fleet KV and grants `uami-fleet-runners` `Key Vault Secrets
+User` on it, but does **not** write any secret material. Stage 0 must
+(a) seed `fleet-runners-app-pem` (plus the other GH App PEMs and
+webhook secrets) into the fleet KV — it holds `Key Vault Secrets
+Officer` on the vault via a role assignment granted in `bootstrap/fleet`
+to the `fleet-stage0` UAMI — and (b) publish the `fleet-runners` App
+IDs as repo variables.
 
 **Ordering constraint:** `init-gh-apps.sh` (§16.4) must run **before**
 `bootstrap/fleet` — the vendored runner module's variable validation
@@ -992,24 +1012,36 @@ Creates:
   geo-replication + OCI artifact / Helm chart support). Single registry
   for all fleet images and Helm charts; teams push to
   `<acr>.azurecr.io/<team>/<image>` and `<acr>.azurecr.io/helm/<chart>`.
-- **Fleet Key Vault** (`azapi_resource`
-  `Microsoft.KeyVault/vaults`, Standard SKU, RBAC authorization mode,
-  purge protection on). Stores **only truly fleet-wide secrets** —
-  values that must be read by more than one cluster. Per-cluster or
-  single-cluster secrets belong in that cluster's own KV.
+- **Fleet Key Vault secrets** — the vault itself
+  (`Microsoft.KeyVault/vaults`, Standard SKU, RBAC authorization mode,
+  purge protection on, strictly private) is created by `bootstrap/fleet`
+  (Stage -1); Stage 0 references it by a derived id reconstructed from
+  `_fleet.yaml` (no data-source lookup — avoids needing read-plane
+  permissions at plan time) and holds `Key Vault Secrets Officer` on
+  the vault (role assignment granted to the `fleet-stage0` UAMI in
+  `bootstrap/fleet`). Stage 0 is responsible for **seeding and
+  rotating** the fleet-wide secret material — values that must be read
+  by more than one cluster. Per-cluster or single-cluster secrets
+  belong in that cluster's own KV.
   - `argocd-github-app-pem` — every cluster's ArgoCD reads it to
     authenticate to GitHub for platform-gitops pulls.
   - `argocd-oidc-client-secret` — every cluster's ArgoCD reads it for
     human SSO auth-code flow.
   - `fleet-meta-app-pem`, `fleet-meta-webhook-secret`,
-    `stage0-publisher-app-pem`, `stage0-publisher-webhook-secret` —
-    the two GH Apps created out-of-band by `init-gh-apps.sh` (§16.4).
-    Values are consumed from the repo-root `.gh-apps.auto.tfvars`
-    overlay this stage reads in addition to its normal tfvars.json.
-    bootstrap/fleet does not create the fleet KV, so seeding these
-    secrets is Stage 0's responsibility; downstream workflows read
-    them at run time via the `fleet-meta` / `stage0-publisher`
-    UAMIs.
+    `stage0-publisher-app-pem`, `stage0-publisher-webhook-secret`,
+    `fleet-runners-app-pem`, `fleet-runners-webhook-secret` —
+    the three GH Apps created out-of-band by `init-gh-apps.sh`
+    (§16.4). Values are consumed from the repo-root
+    `.gh-apps.auto.tfvars` overlay this stage reads in addition to
+    its normal tfvars.json. Downstream workflows read them at run
+    time via the `fleet-meta` / `stage0-publisher` UAMIs; the
+    `fleet-runners-app-pem` is consumed by the runner-pool
+    Container App Job via Key Vault secret reference (never
+    plaintext in state, never via Terraform read). `bootstrap/fleet`
+    creates the vault with no secrets in it; the runner pool's
+    Container App Job deterministically fails scale-out until
+    Stage 0 seeds the PEM (tracked as an ordering constraint in
+    §4 Stage -1 `bootstrap/fleet` → *Runner infrastructure*).
   - additional fleet-wide secrets added over time.
   Kargo GitHub App PEM and Kargo OIDC client secret are **not** here
   — only the mgmt cluster uses them, so they live in the mgmt
@@ -1166,9 +1198,13 @@ helm values and the `platform-identity` secret. Managing them as code
 keeps redirect URI additions PR-reviewed and tracked alongside cluster
 onboarding.
 
-Stage 0 depends on: nothing (seed stage). It creates the fleet KV but
-**does not** create per-cluster KVs — those are created in Stage 1
-when the owning cluster is provisioned.
+Stage 0 depends on: `bootstrap/fleet` (Stage -1) — the fleet KV it
+seeds secrets into, and the `fleet-stage0` UAMI + GitHub environment
+it runs under, are all created there. Stage 0 does **not** create
+per-cluster KVs — those are created in Stage 1 when the owning cluster
+is provisioned. It also no longer creates the fleet KV itself; it only
+seeds / rotates secrets inside it and publishes its id/name as repo
+variables for downstream consumption.
 
 ### Stage 1 — `terraform/stages/1-cluster`
 
@@ -1235,9 +1271,11 @@ environments.<env>.aks.admin_groups` — pure break-glass; members
     Blast radius is this one zone; no cross-cluster write access.
   - **Key Vault Secrets User on the cluster KV** → ESO UAMI. Primary
     source of cluster-local secrets.
-  - **Key Vault Secrets User on the fleet KV** (read from Stage 0
-    remote state) → ESO UAMI. Needed for fleet-wide secrets (GH App
-    PEMs if consumed in-cluster, any additional fleet secrets).
+  - **Key Vault Secrets User on the fleet KV** (scope id consumed via
+    `vars.FLEET_KEYVAULT_ID`, published by Stage 0; the KV itself is
+    owned by `bootstrap/fleet`) → ESO UAMI. Needed for fleet-wide
+    secrets (GH App PEMs if consumed in-cluster, any additional fleet
+    secrets).
   - **`AcrPull` on the fleet ACR** → cluster kubelet identity (read from
     Stage 0 remote state output `acr_resource_id`).
   - **`Azure Kubernetes Service RBAC Cluster Admin`** on the AKS
@@ -1984,8 +2022,13 @@ Each environment holds its own `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
 - `_defaults.yaml` at fleet level; `_fleet.yaml` with ACR name + fleet
   KV name + AAD app display names + DNS root.
 - `terraform/bootstrap/fleet` — human runs locally with tenant-admin
-  credentials. Produces: fleet TF state SA, `fleet-stage0` +
-  `fleet-meta` UAMIs, `fleet-meta` + `stage0-publisher` GH Apps,
+  credentials. Produces: fleet TF state SA (private endpoint),
+  **fleet Key Vault (private endpoint)**, `uami-fleet-runners` UAMI +
+  `Key Vault Secrets User` role assignment on the fleet KV,
+  shared self-hosted GH Actions runner pool (ACA+KEDA) + per-pool
+  ACR + LAW, `fleet-stage0` + `fleet-meta` UAMIs (plus
+  `Key Vault Secrets Officer` on the fleet KV for `fleet-stage0`),
+  `fleet-meta` + `stage0-publisher` + `fleet-runners` GH Apps,
   `fleet-stage0` + `fleet-meta` GH environments, team-repo template
   repo, branch protection on fleet repo.
 - `terraform/bootstrap/environment` — invoked via `env-bootstrap.yaml`
@@ -2098,9 +2141,18 @@ Each environment holds its own `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
   images under `<team>/<image>` and Helm charts under `helm/<chart>`.
   Created in Stage 0. Kubelet identity on every cluster gets `AcrPull`.
 - **Key Vaults**: two-tier.
-  - **Fleet KV** (`kv-<fleet.name>-fleet`) created by Stage 0; stores
-    GH App PEMs and AAD OIDC client secrets. One instance for the
-    whole fleet.
+  - **Fleet KV** (`kv-<fleet.name>-fleet`) created by `bootstrap/fleet`
+    (Stage -1, alongside the tfstate SA and runner pool — ownership
+    relocated from Stage 0 to break the runner-pool KV-reference
+    deploy-time cycle; see §4 Stage -1 Implementation status
+    2026-04-19). Strictly private: `publicNetworkAccess = Disabled`,
+    `networkAcls.defaultAction = Deny`, private endpoint on an
+    operator-supplied subnet registering into a central BYO
+    `privatelink.vaultcore.azure.net` zone. Stores GH App PEMs
+    (Argo, fleet-meta, stage0-publisher, fleet-runners) and AAD
+    OIDC client secrets. Secret seeding and rotation remain
+    Stage 0's responsibility (it holds `Key Vault Secrets Officer`
+    on the vault). One instance for the whole fleet.
   - **Cluster KV** (`kv-<cluster.name>`) created by Stage 1; one per
     cluster; stores cluster-local secrets (TLS wildcard, observability
     keys, team-owned app secrets). ESO on each cluster binds via
@@ -2379,13 +2431,16 @@ Steps, per App:
    ```
 
    **Stage 0** declares matching `variable` blocks (not
-   `bootstrap/fleet`: bootstrap/fleet does not create the fleet
-   KV). Stage 0's tf-apply workflow symlinks or copies
-   `.gh-apps.auto.tfvars` into `terraform/stages/0-fleet/` so
-   `terraform plan/apply` picks it up as an additional variable
-   source. Stage 0 then writes the PEMs + webhook secrets into the
-   fleet KV it creates (including the `fleet-runners` PEM at the
-   secret name referenced by `_fleet.yaml`
+   `bootstrap/fleet`: `bootstrap/fleet` creates the empty fleet KV
+   but does not write secret material into it). Stage 0's tf-apply
+   workflow symlinks or copies `.gh-apps.auto.tfvars` into
+   `terraform/stages/0-fleet/` so `terraform plan/apply` picks it up
+   as an additional variable source. Stage 0 then writes the PEMs +
+   webhook secrets into the fleet KV created by `bootstrap/fleet`
+   (Stage 0 holds `Key Vault Secrets Officer` on the vault; the role
+   assignment is created in `bootstrap/fleet` to the `fleet-stage0`
+   UAMI), including the `fleet-runners` PEM at the secret name
+   referenced by `_fleet.yaml`
    `github_app.fleet_runners.private_key_kv_secret`, which the
    runner pool's ACA job reads at scale-out via KV reference — see
    §4 Stage -1 `bootstrap/fleet` → *Runner infrastructure*), and
