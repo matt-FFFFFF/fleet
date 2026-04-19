@@ -161,12 +161,12 @@ click: building the manifest from `_fleet.yaml`, opening a localhost
 listener for the redirect, exchanging the temp code for the App
 credentials, and installing both Apps on the fleet repo.
 
-> **Status:** `init-gh-apps.sh` is specified but **not yet
-> implemented** as of Phase 1. The command block below describes
-> the intended adopter experience once the helper lands. Until it
-> does, follow the manual-creation steps further down.
+> **Status:** `init-gh-apps.sh` is implemented at the repo root
+> (PLAN §16.4). The command block below is the actual adopter
+> experience. Stage 0 wiring that consumes `./.gh-apps.auto.tfvars`
+> is still pending.
 
-### Future (once `init-gh-apps.sh` ships)
+### Running `init-gh-apps.sh`
 
 ```sh
 export GITHUB_TOKEN=<PAT with repo:admin + admin:org>

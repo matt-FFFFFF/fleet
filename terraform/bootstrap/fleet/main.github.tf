@@ -192,17 +192,18 @@ module "team_template_repo" {
 #
 # The `integrations/github` provider does not create GitHub Apps themselves —
 # only installations/permissions on an existing App. GH Apps must be created
-# out-of-band via the UI (or the `init-gh-apps.sh` manifest-flow helper
-# specified in PLAN §16.4 but not yet implemented).
+# out-of-band via the UI or via the `init-gh-apps.sh` manifest-flow helper
+# at the repo root (PLAN §16.4, implemented).
 #
-# Phase 1 scaffold: document the required Apps + their permissions here, and
-# commit to minting them manually before running this stage. Their App IDs
-# and PEMs are supplied as `-var` inputs to Stage 0 (not this stage — the
-# fleet KV that stores the PEMs is created by Stage 0), which installs them
-# on the fleet repo and stores their PEMs there.
+# The helper creates all three Apps (`fleet-meta`, `stage0-publisher`,
+# `fleet-runners`), installs them on the fleet repo, and writes
+# `./.gh-apps.auto.tfvars` for Stage 0 to consume. It also patches
+# `clusters/_fleet.yaml` with `github_app.fleet_runners.{app_id,
+# installation_id}` so this stage's runner module validation passes.
 #
-# TODO(phase1-bootstrap-gh-apps): implement `init-gh-apps.sh` per PLAN §16.4
-# and `github_app_installation` wiring once the manifest-flow helper lands.
+# TODO(phase2-stage0-gh-apps): declare matching `variable` blocks in
+# terraform/stages/0-fleet/ and wire tf-apply.yaml to symlink the tfvars
+# overlay into that stage's working directory.
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
