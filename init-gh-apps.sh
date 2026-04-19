@@ -42,7 +42,7 @@
 #   - `gh` CLI authenticated with `repo` + `admin:org` scopes
 #     (e.g. `gh auth login --scopes 'repo,admin:org'`, or equivalent
 #     $GH_TOKEN / $GITHUB_TOKEN env var).
-#   - python3, git.
+#   - python3.
 #
 # See PLAN §16.4 and docs/adoption.md §4.
 
@@ -81,7 +81,6 @@ fi
 
 command -v python3 >/dev/null 2>&1 || die "python3 is required"
 command -v gh      >/dev/null 2>&1 || die "gh CLI is required (https://cli.github.com)"
-command -v git     >/dev/null 2>&1 || die "git is required"
 
 repo_root="$(cd "$(dirname "$0")" && pwd)"
 cd "$repo_root"
@@ -153,12 +152,19 @@ github_repo=$(read_yaml_scalar "$fleet_yaml" fleet.github_repo) \
 
 info "Target org/repo: $github_org/$github_repo"
 
-# Determine if the org is actually an org (vs a user); affects which manifest
-# URL the operator is sent to and which install endpoint applies.
-owner_type="$(gh api "users/$github_org" -q .type 2>/dev/null || echo Organization)"
+# Determine if the fleet is owned by an org (vs a user); affects which
+# manifest URL the operator is sent to and which install endpoint applies.
+# Don't silently default on API failure — send a clear warning first.
+if ! owner_type="$(gh api "users/$github_org" -q .type 2>/dev/null)"; then
+  warn "failed to resolve owner type for '$github_org' via GitHub API — defaulting to Organization"
+  owner_type="Organization"
+fi
 case "$owner_type" in
   Organization|User) : ;;
-  *) warn "could not resolve owner type for $github_org; defaulting to Organization" ;;
+  *)
+    warn "unexpected owner type '$owner_type' for '$github_org'; defaulting to Organization"
+    owner_type="Organization"
+    ;;
 esac
 
 # ---- state-file helpers -----------------------------------------------------
@@ -438,16 +444,22 @@ install_app() {
   #   - User:         GET /user/installations          (authenticated user;
   #     `/users/{user}/installations` is not a real route). For the user
   #     case, the authenticated caller must BE the user that owns the repo.
+  #
+  # Surface any API error (auth, missing scope, transient network) with a
+  # clear message — `gh api` failures here are otherwise trapped silently
+  # by the command substitution under `set -euo pipefail`.
   lookup_install_id() {
-    local base
+    local base result
     if [[ "$owner_type" == "Organization" ]]; then
       base="/orgs/$github_org/installations"
     else
       base="/user/installations"
     fi
-    gh api --paginate "$base" \
-      --jq ".installations[]? // .[] | select(.app_id==$app_id) | .id" \
-      2>/dev/null | head -n1
+    if ! result=$(gh api --paginate "$base" \
+      --jq ".installations[]? // .[] | select(.app_id==$app_id) | .id" 2>&1); then
+      die "failed to query GitHub App installations via 'gh api $base': $result. For org installs the caller must be an org admin and the token must include 'admin:org'."
+    fi
+    printf '%s\n' "$result" | head -n1
   }
 
   local install_id
