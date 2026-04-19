@@ -36,6 +36,27 @@ jobs:
           terraform_version: 1.11.4
           terraform_wrapper: false
 
+      # `terraform test` on the init/ module. Runs BEFORE init-fleet.sh
+      # (which deletes init/) and exercises every `validation {}` block
+      # in init/variables.tf plus rendered-artefact invariants. Uses
+      # mock_provider "local" {} so no files are written to the runner
+      # filesystem.
+      - name: terraform test (init/)
+        working-directory: init
+        run: |
+          terraform init -test-directory=tests/unit -backend=false
+          terraform test -test-directory=tests/unit
+
+      # `terraform test` on the fleet-identity module — the pure-function
+      # derivation module shared by bootstrap/fleet and bootstrap/environment.
+      # Exercises name derivation, overrides, 24-char truncation, and the
+      # networking try-path defaults. No providers required.
+      - name: terraform test (modules/fleet-identity)
+        working-directory: terraform/modules/fleet-identity
+        run: |
+          terraform init -test-directory=tests/unit -backend=false
+          terraform test -test-directory=tests/unit
+
       - name: Run init-fleet.sh (non-interactive)
         run: |
           ./init-fleet.sh --non-interactive --force \

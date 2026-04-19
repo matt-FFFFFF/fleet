@@ -15,8 +15,17 @@
 locals {
   fleet_yaml_path = "${path.module}/../../../clusters/_fleet.yaml"
   fleet_doc       = yamldecode(file(local.fleet_yaml_path))
+}
 
-  fleet = local.fleet_doc.fleet
+# Derivation lives in the pure-function `modules/fleet-identity` module.
+# Shared with `bootstrap/fleet`; testable in isolation. See docs/naming.md.
+module "identity" {
+  source    = "../../modules/fleet-identity"
+  fleet_doc = local.fleet_doc
+}
+
+locals {
+  fleet = module.identity.fleet
   # Direct lookup — var.env is guarded by a validation block in variables.tf
   # that asserts it exists in _fleet.yaml.environments before any evaluation
   # of locals/providers/resources.
@@ -26,24 +35,5 @@ locals {
 
   location = var.location != "" ? var.location : local.fleet.primary_region
 
-  derived = {
-    state_storage_account = coalesce(
-      try(local.fleet_doc.state.storage_account_name_override, ""),
-      substr("st${local.fleet.name}tfstate", 0, 24),
-    )
-    state_resource_group = local.fleet_doc.state.resource_group
-    state_subscription   = local.fleet_doc.state.subscription_id
-
-    acr_name = coalesce(
-      try(local.fleet_doc.acr.name_override, ""),
-      "acr${local.fleet.name}shared",
-    )
-    acr_resource_group  = local.fleet_doc.acr.resource_group
-    acr_subscription_id = local.fleet_doc.acr.subscription_id
-
-    fleet_kv_name = coalesce(
-      try(local.fleet_doc.keyvault.name_override, ""),
-      substr("kv-${local.fleet.name}-fleet", 0, 24),
-    )
-  }
+  derived = module.identity.derived
 }
