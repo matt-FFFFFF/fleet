@@ -154,6 +154,12 @@ module "fleet_repo" {
         pull_request = {
           required_approving_review_count = 1
           require_code_owner_review       = true
+          # The GitHub provider's ruleset schema requires at least one
+          # entry here. The repo resource above sets allow_squash_merge=true
+          # and disables merge commits + rebase merges, so `squash` is the
+          # only method both allowed and consistent with the rest of the
+          # config.
+          allowed_merge_methods = ["squash"]
         }
         required_status_checks = {
           strict_required_status_checks_policy = true
