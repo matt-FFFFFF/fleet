@@ -57,6 +57,9 @@ manage upgrades, and add Kargo promotion.
 | Bootstrap model                 | `bootstrap/fleet` run locally once; `bootstrap/environment` and `bootstrap/team` run via GH Actions under the `fleet-meta` environment (2-reviewer gate).                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Stage 0 output propagation      | Published to repo variables by the Stage 0 workflow; Stage 1 consumes `vars.*`. **`terraform_remote_state` is never used.** Cross-stage values flow as follows: Stage 0 → Stage 1 via repo variables (fleet-wide, fan-out to many clusters); Stage 1 → Stage 2 via **in-job `terraform output -json` piped into `stage2.auto.tfvars.json`** (single cluster, single CI job). Stage 2 therefore makes zero Azure data-source calls at plan time. Fleet-wide singletons needed by per-cluster stages (e.g., the Kargo mgmt UAMI `principalId`) live in Stage 0 so they flow through the existing publish path — no Stage 1-to-Stage 1 cross-cluster propagation is required.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | DNS for ingress                 | Opinionated: single `fleet_root` in `clusters/_fleet.yaml`; each cluster's private zone FQDN auto-derived from its directory path as `<name>.<region>.<env>.<fleet_root>`; linked to supplied VNets; external-dns scoped to its own zone only                                                                                                                                                                                                                                                                                                                           |
+| Self-hosted CI runners          | Single shared repo-scoped GitHub Actions runner pool on **Azure Container Apps + KEDA** (label `self-hosted`), created by `bootstrap/fleet` via a vendored `Azure/terraform-azurerm-avm-ptn-cicd-agents-and-runners` module. Trust boundary is the GitHub Environment + federated credential (not the VNet). Per-pool private ACR; LAW; no NAT / no public IP (egress via UDR through the hub firewall). A dedicated `fleet-runners` GitHub App (`actions:read` + `metadata:read`) drives KEDA polling; its PEM lives in the fleet KV and is referenced into the Container App Job as a Key Vault secret reference (never plaintext). |
+| `azurerm` carveout (runners)    | Narrow, **module-internal-only** carveout inside the vendored `terraform/modules/cicd-runners/` tree, mirroring the existing `azuread` carveout rationale: the upstream AVM module relies on `azurerm_container_app_job`, `azurerm_private_dns_*`, `azurerm_nat_*`, `azurerm_public_ip`, and the `Azure/avm-res-containerregistry-registry` child module. `bootstrap/fleet` itself authors zero `azurerm_*` resources or data sources — the `provider "azurerm"` block in `bootstrap/fleet/providers.tf` exists only because Terraform requires the parent to configure every provider any child references. |
+| Secret retrieval                | Key Vault-reference on workload resources wherever the target service supports it (e.g. Container App Job `secret { keyVaultUrl + identity }`); **ephemeral `azapi_resource_action`** (confirmed on `azapi ~> 2.9`) whenever Terraform itself must read a KV secret to make an Azure API call that takes the plaintext. Plaintext KV secret values **never** enter Terraform state. Driver: `azurerm_container_app_job.secret.value` has no `write_only` on `azurerm 4.69.0`; `azurerm_key_vault_secret.value_wo` is present and is the preferred path for writes. |
 
 ---
 
@@ -557,6 +560,34 @@ messages; the rest must be arranged out-of-band by the adopter org.
   groups `rg-fleet-tfstate` and `rg-fleet-shared` in the shared
   subscription must not pre-exist with conflicting state.
 
+**Networking (Stage -1 runner pool + private tfstate SA)**
+
+- Pre-existing VNet in `rg-fleet-shared` (or in the hub
+  connectivity subscription, peered to the fleet subscription)
+  with two subnets: one delegated to `Microsoft.App/environments`
+  for the runner pool (`snet-runners` by convention), and one for
+  private endpoints (`snet-pe-shared`). The runner subnet must
+  carry a UDR routing egress through the hub firewall; the module
+  callsite sets `nat_gateway_creation_enabled = false` and
+  `public_ip_creation_enabled = false`, so there is no runner-
+  local NAT or public IP.
+- Central `privatelink.blob.core.windows.net` private DNS zone in
+  the hub connectivity subscription (shared across the tenant).
+  Referenced by resource id from
+  `_fleet.yaml.networking.tfstate.private_endpoint.private_dns_zone_id`.
+- Tenant-scope role: **`Private DNS Zone Contributor`** on the
+  central zone — for the operator on first apply, and for the
+  `fleet-stage0` UAMI (for subsequent re-runs).
+- VNet-reachable workstation (jump host / Azure Bastion / VPN)
+  for every re-run of `bootstrap/fleet` after the first apply;
+  the tfstate storage account is PE-only once Stage -1 has run.
+- One-time first-apply escape hatch:
+  `var.allow_public_state_during_bootstrap = true` leaves the
+  tfstate SA's public endpoint Enabled (with `networkAcls.defaultAction
+  = "Deny"` still in place) long enough to seed the PE + DNS zone
+  group. The flag must be flipped back to `false` on the second
+  apply. No long-lived public exposure.
+
 **GitHub**
 
 - Fleet repo already exists on github.com — the adopter clicks
@@ -681,6 +712,61 @@ RBAC, change fleet-repo settings owned by this stage (branch protection,
 module version, or add a new fleet-wide meta identity. Adding a new
 environment does **not** require re-running Stage -1 — that is handled
 entirely by `bootstrap/environment`.
+
+##### Runner infrastructure
+
+`bootstrap/fleet` also stands up the fleet's **single shared self-hosted
+GitHub Actions runner pool** so every downstream tfstate-writing workflow
+(`env-bootstrap.yaml`, `team-bootstrap.yaml`, `tf-plan.yaml`, `tf-apply.yaml`,
+`stage0.yaml`) can run inside the adopter's VNet and reach the private-only
+tfstate storage account. Implementation lives in
+`terraform/bootstrap/fleet/main.runner.tf` and calls the vendored
+`terraform/modules/cicd-runners/` module (see its `VENDORING.md` for the
+delta against upstream `Azure/terraform-azurerm-avm-ptn-cicd-agents-and-runners@v0.5.2`).
+
+Key design choices:
+
+- **Single pool, repo-scoped**, label `self-hosted`. The trust boundary for
+  what each workflow can touch is the GitHub Environment + federated credential
+  (per-env `fleet-<env>` UAMI, `fleet-meta` for env/team bootstrap,
+  `fleet-stage0` for Stage 0), **not** network reachability. A shared pool
+  keeps runner plumbing off the critical path for new envs.
+- **GH App authentication for KEDA polling**, driven by a dedicated
+  `fleet-runners` GitHub App (third App in the inventory alongside
+  `fleet-meta` and `stage0-publisher` — see §16.4). Permissions:
+  `actions:read` + `metadata:read`. The PEM lives in the fleet KV under
+  `fleet-runners-app-pem` (seeded by Stage 0) and is resolved into the
+  Container App Job as a **Key Vault secret reference** (`{ keyVaultUrl,
+  identity }`) via a callsite-created `uami-fleet-runners` UAMI that holds
+  `Key Vault Secrets User` on the fleet KV. The PEM never enters Terraform
+  state. Vendor patch documented in `modules/cicd-runners/VENDORING.md` §4.
+- **Private tfstate SA**: `bootstrap/fleet/main.state.tf` sets
+  `publicNetworkAccess = var.allow_public_state_during_bootstrap ? "Enabled"
+  : "Disabled"` (default `false`) with `networkAcls.defaultAction = "Deny"`
+  always, and seeds a `Microsoft.Network/privateEndpoints` + optional
+  `privateDnsZoneGroups` child referencing the central
+  `privatelink.blob.core.windows.net` zone from `_fleet.yaml`. **Two-phase
+  first apply** (see Prerequisites above): first apply with
+  `allow_public_state_during_bootstrap = true` to seed the PE / DNS zone
+  group; second apply (and every subsequent re-run) with the flag flipped
+  back to `false`, from a VNet-reachable workstation.
+- **Per-pool private ACR + per-pool LAW** (`container_registry_creation_enabled
+  = true`, `log_analytics_workspace_creation_enabled = true`). Keeps the
+  runner plumbing off the fleet-ACR ABAC delegation path and gives each
+  pool its own observability scope.
+- **No NAT, no public IP** at the module callsite. Egress flows through the
+  hub firewall via a UDR on `snet-runners`; adopter responsibility.
+- **Bring-your-own VNet**: `virtual_network_creation_enabled = false` with
+  subnet IDs sourced from `_fleet.yaml.networking.{vnet_id, runner.*,
+  tfstate.private_endpoint.*}`. See `docs/adoption.md` §3 + §5.1 for the
+  full list of post-init fields.
+
+**Stage 0 implication (follow-up, not in Stage -1):** Stage 0 must seed
+`fleet-runners-app-pem` into the fleet KV and publish the `fleet-runners`
+App IDs as repo variables. `bootstrap/fleet` references the KV secret by
+id only, so Stage -1 is not blocked on `init-gh-apps.sh` (§16.4) — the
+Container App Job fails deterministically at runtime if the secret is
+missing. Tracked as an outside-PLAN scaffolding row in STATUS.md.
 
 #### `bootstrap/environment/` — Actions-run via `env-bootstrap.yaml`
 
@@ -1593,6 +1679,21 @@ they like provided their namespaces start with `<team>-`.
 
 ## 10. CI/CD
 
+### Runner selection
+
+Every workflow that writes to Terraform state — `env-bootstrap.yaml`,
+`team-bootstrap.yaml`, `tf-plan.yaml`, `tf-apply.yaml`, `stage0.yaml`, and
+the (deferred) `fleet-bootstrap-rerun.yaml` — **must** use
+`runs-on: [self-hosted]`. The fleet tfstate SA and the fleet KV are
+private-only; GitHub-hosted runners cannot reach them. The self-hosted
+runner pool is the single pool created by `bootstrap/fleet` (§4 Stage -1,
+"Runner infrastructure").
+
+Template-level workflows that do **not** touch tfstate — `validate.yaml`,
+`tflint.yaml`, `template-selftest.yaml`, `status-check.yaml` — stay on
+`runs-on: ubuntu-latest`. They are deleted from adopter repos by
+`init-fleet.sh` anyway.
+
 ### Workflows
 
 - **`validate.yaml`** (`pull_request`):
@@ -2021,6 +2122,15 @@ Each environment holds its own `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
   resources that already exist for the workload→AAD direction —
   same pattern, now covering RP auth too — and delete the fleet KV
   entry.
+- **`fleet-bootstrap-rerun.yaml` workflow** — `bootstrap/fleet` is
+  run locally today (§4 Stage -1). Moving it to a self-hosted runner
+  in CI would require a fourth privileged UAMI with Entra
+  **Privileged Role Administrator** (to self-assign the
+  `Application Administrator` role onto `fleet-stage0` /
+  `fleet-meta` on subsequent runs), plus a `bootstrap/fleet`-scoped
+  GH App / OIDC FIC. Trade-off: strictly more standing privilege
+  than the current "run locally once" model. Deferred until the
+  operator UX demand justifies the extra privileged identity.
 
 ## 16. Template-repo adoption model
 
@@ -2144,7 +2254,10 @@ Interactive wizard by default; `--non-interactive` plus optional
 ### 16.4 `init-gh-apps.sh` — GitHub App provisioning helper
 
 Two GitHub Apps (`fleet-meta`, `stage0-publisher`; rationale and
-permission split in §4 Stage -1 `bootstrap/fleet`) must exist on the
+permission split in §4 Stage -1 `bootstrap/fleet`) plus a third
+(`fleet-runners`; repo-scoped `actions:read` + `metadata:read` used
+by the self-hosted runner pool's KEDA scaler — see §4 Stage -1
+`bootstrap/fleet` → *Runner infrastructure*) must exist on the
 fleet repo before `bootstrap/fleet` runs. The GitHub Apps API has
 **no headless creation endpoint** — every App must be born through
 the App Manifest flow, which requires a one-time browser handshake to
@@ -2159,9 +2272,9 @@ gone.
 
 Run order: after `init-fleet.sh` (so `_fleet.yaml` exists) and before
 `terraform -chdir=terraform/bootstrap/fleet apply`. Idempotent: if
-both apps already exist on `<fleet.github_org>` and their PEMs are
-already captured in the state file (`./.gh-apps.state.json` at repo
-root, gitignored), the script exits 0 with a "nothing to do"
+all three apps already exist on `<fleet.github_org>` and their PEMs
+are already captured in the state file (`./.gh-apps.state.json` at
+repo root, gitignored), the script exits 0 with a "nothing to do"
 message.
 
 Steps, per App:
@@ -2202,6 +2315,13 @@ Steps, per App:
    <pem>
    EOT
    stage0_publisher_app_webhook_secret  = "<webhook_secret>"
+
+   fleet_runners_app_id                 = "<id>"
+   fleet_runners_app_client_id          = "<client_id>"
+   fleet_runners_app_pem                = <<EOT
+   <pem>
+   EOT
+   fleet_runners_app_webhook_secret     = "<webhook_secret>"
    ```
 
    **Stage 0** declares matching `variable` blocks (not
@@ -2210,9 +2330,14 @@ Steps, per App:
    `.gh-apps.auto.tfvars` into `terraform/stages/0-fleet/` so
    `terraform plan/apply` picks it up as an additional variable
    source. Stage 0 then writes the PEMs + webhook secrets into the
-   fleet KV it creates, and publishes the App ids / client ids as
-   fleet-repo variables (see §4 Stage 0 outputs) so downstream
-   workflows can mint installation tokens.
+   fleet KV it creates (including the `fleet-runners` PEM at the
+   secret name referenced by `_fleet.yaml`
+   `github_app.fleet_runners.private_key_kv_secret`, which the
+   runner pool's ACA job reads at scale-out via KV reference — see
+   §4 Stage -1 `bootstrap/fleet` → *Runner infrastructure*), and
+   publishes the App ids / client ids as fleet-repo variables (see
+   §4 Stage 0 outputs) so downstream workflows can mint installation
+   tokens.
 
 Failure modes the script handles explicitly:
 
@@ -2229,9 +2354,10 @@ Failure modes the script handles explicitly:
   `gh api -X POST /apps/<slug>/keys` and re-run).
 
 Self-cleanup: the script `rm`s itself after a successful run in
-which both Apps exist, are installed, and the tfvars overlay has
-been written. The state file (`./.gh-apps.state.json`) and tfvars
-overlay (`./.gh-apps.auto.tfvars`) remain on disk (both gitignored)
+which all three Apps exist, are installed, and the tfvars overlay
+has been written. The state file (`./.gh-apps.state.json`) and
+tfvars overlay (`./.gh-apps.auto.tfvars`) remain on disk (both
+gitignored)
 until Stage 0 has successfully applied — their authoritative storage
 post-Stage-0 is the fleet KV (PEMs/webhook secrets) and fleet-repo
 variables (ids/client ids). The adopter may delete both files

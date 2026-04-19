@@ -12,10 +12,13 @@
 > Legend: `[x]` done · `[~]` in progress / scaffolded but unapplied
 > `[ ]` not started · `[-]` deferred.
 
-Last updated: 2026-04-18 · vendored `terraform-github-repository-and-content`
-into `terraform/modules/github-repo`; `bootstrap/{fleet,environment,team}`
-refactored onto it; `main`-branch protection migrated to ruleset;
-Terraform floor bumped to `~> 1.11`.
+Last updated: 2026-04-19 · vendored `avm-ptn-cicd-agents-and-runners`
+v0.5.2 into `terraform/modules/cicd-runners` (telemetry stripped,
+GH-App PEM via KV reference); `bootstrap/fleet` gains a single
+repo-scoped self-hosted runner pool (ACA+KEDA) and a private
+endpoint on the tfstate SA with first-apply-only
+`allow_public_state_during_bootstrap` escape hatch; schema and
+adoption docs extended accordingly.
 
 ---
 
@@ -52,16 +55,27 @@ Terraform floor bumped to `~> 1.11`.
 ### Stage -1 — `terraform/bootstrap/`
 
 - [~] `bootstrap/fleet/` — scaffolded (state SA, stage0 + meta UAMIs,
-      FICs, GH repo + `main`-branch **ruleset**, env variables).
-      Delivered via the vendored `terraform/modules/github-repo` module.
+      FICs, GH repo + `main`-branch **ruleset**, env variables,
+      private tfstate SA endpoint, self-hosted runner pool).
+      Delivered via the vendored `terraform/modules/github-repo` and
+      `terraform/modules/cicd-runners` modules.
       **Not yet applied against a live tenant.**
   - [x] yamldecode locals; no `var.fleet`.
   - [x] `import` block for `module.fleet_repo.github_repository.this[0]`.
   - [x] OIDC subject claims use ID-based keys
         (`repository_owner_id`, `repository_id`, `environment`).
-  - [ ] GH Apps (`fleet-meta`, `stage0-publisher`) — documented as
-        TODO in `main.github.tf`; manifest-flow helper not written.
+  - [ ] GH Apps (`fleet-meta`, `stage0-publisher`, `fleet-runners`) —
+        documented as TODO in `main.github.tf`; manifest-flow helper
+        not written.
   - [ ] PEMs → fleet KV wiring (deferred; KV created in Stage 0).
+  - [~] Private endpoint on tfstate SA + Deny-default network ACLs
+        with first-apply-only `allow_public_state_during_bootstrap`
+        escape hatch. Scaffolded; awaits live apply.
+  - [~] Self-hosted runner pool (ACA+KEDA, GH App auth via KV ref,
+        bring-your-own VNet, per-pool ACR + LAW, no NAT/public IP).
+        Scaffolded via `module "runner"` in `main.runner.tf`. Awaits
+        Stage 0 (fleet KV) + operator-supplied PEM before first
+        scale-out succeeds.
 - [~] `bootstrap/environment/` — scaffolded (state container, env
       UAMI, GH env + variables, observability RG/AG/AMG/AMW/DCE/NSP).
       GH env + UAMI delivered via the vendored
@@ -130,6 +144,8 @@ Terraform floor bumped to `~> 1.11`.
 
 - [ ] `validate.yaml`, `tf-plan.yaml`, `tf-apply.yaml`,
       `env-bootstrap.yaml`, `team-bootstrap.yaml` — not yet written.
+      Runner selection (`runs-on: [self-hosted]` vs `ubuntu-latest`)
+      per PLAN §10 → *Runner selection* to be encoded at that time.
 - [x] `.github/workflows/template-selftest.yaml` — implemented
       (template-side only; removed by `init-fleet.sh` for adopters).
 - [x] `.github/workflows/status-check.yaml` — enforces STATUS
@@ -216,6 +232,18 @@ Terraform floor bumped to `~> 1.11`.
 - [x] `main`-branch protection on the fleet repo migrated from
       `github_branch_protection` to the vendored `modules/ruleset`
       (Kargo-bot bypass deferred per PLAN §10 / §15).
+- [x] `terraform/modules/cicd-runners/` — vendored fork of
+      `Azure/terraform-azurerm-avm-ptn-cicd-agents-and-runners`
+      `v0.5.2` (root + `modules/container-app-job` +
+      `modules/container-app-environment` + `modules/container-app-acr`).
+      Repo-local extensions: `github_app_key_kv_secret_id` +
+      `github_app_key_identity_id` inputs (KV-reference form);
+      telemetry stripped; providers pinned to repo convention. See
+      `VENDORING.md` for upstream diff.
+- [x] `allow_public_state_during_bootstrap` first-apply-only
+      variable on `bootstrap/fleet` (tfstate SA
+      `publicNetworkAccess` toggle; defaults `false`; network ACLs
+      remain `defaultAction = "Deny"`).
 
 ## Next likely units of work
 
