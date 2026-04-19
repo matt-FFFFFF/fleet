@@ -37,8 +37,11 @@ resource "azapi_resource" "state_sa" {
       networkAcls = {
         # Deny-by-default even while publicNetworkAccess is transiently
         # "Enabled" for the first apply; access always flows through the
-        # private endpoint seeded below.
-        bypass              = "AzureServices"
+        # private endpoint seeded below. bypass = "None" is deliberate —
+        # we do not want Azure trusted services (including Azure Monitor,
+        # Backup, Policy) reaching the SA via its public endpoint even
+        # during the first-apply escape hatch window.
+        bypass              = "None"
         defaultAction       = "Deny"
         ipRules             = []
         virtualNetworkRules = []

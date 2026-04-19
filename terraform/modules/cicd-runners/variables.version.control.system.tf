@@ -126,8 +126,8 @@ identity with `Key Vault Secrets User` (or equivalent) on the secret in
 DESCRIPTION
 
   validation {
-    condition     = var.github_app_key_kv_secret_id == null || var.github_app_key_identity_id != null
-    error_message = "github_app_key_identity_id is required when github_app_key_kv_secret_id is set."
+    condition     = var.github_app_key_kv_secret_id == null || (var.github_app_key_identity_id != null && trimspace(coalesce(var.github_app_key_identity_id, " ")) != "")
+    error_message = "github_app_key_identity_id is required (non-empty) when github_app_key_kv_secret_id is set."
   }
 }
 
