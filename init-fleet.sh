@@ -149,7 +149,7 @@ if [[ -n "$pending" ]]; then
   for key in $pending; do
     # Pull the inline # comment from the tfvars line for use as the prompt.
     hint="$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$tfvars" \
-            | sed -E 's/^[^#]*#[[:space:]]*//;t;d' || true)"
+            | awk -F'#' 'NF>1 { sub(/^[[:space:]]+/, "", $2); print $2; exit }' || true)"
     while true; do
       if [[ -n "$hint" ]]; then
         read -r -p "  ${key} (${hint}): " val </dev/tty
