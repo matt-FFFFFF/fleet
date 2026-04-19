@@ -39,8 +39,8 @@
 #
 # Prereqs:
 #   - clusters/_fleet.yaml exists (run ./init-fleet.sh first).
-#   - $GITHUB_TOKEN exported with `repo:admin` + `admin:org` scopes.
-#   - `gh` CLI authenticated as the same identity.
+#   - `gh` CLI authenticated with `repo:admin` + `admin:org` scopes
+#     (via `gh auth login`, or $GH_TOKEN / $GITHUB_TOKEN env var).
 #   - python3, git.
 #
 # See PLAN §16.4 and docs/adoption.md §4.
@@ -83,13 +83,13 @@ tfvars_file="$repo_root/.gh-apps.auto.tfvars"
 
 [[ -f "$fleet_yaml" ]] || die "clusters/_fleet.yaml not found — run ./init-fleet.sh first"
 
-if [[ -z "${GITHUB_TOKEN:-}" ]]; then
-  die "GITHUB_TOKEN is not set. Export a PAT with 'repo:admin' + 'admin:org' scopes."
-fi
-
-# `gh` reads GITHUB_TOKEN automatically; sanity-check that auth resolves.
+# Auth: don't hard-require $GITHUB_TOKEN — `gh` resolves credentials from
+# `gh auth login` (keyring), $GH_TOKEN, or $GITHUB_TOKEN in that order.
+# Just verify that `gh api` actually works; the prereq scopes
+# (repo:admin + admin:org) are enforced by the first failing call, which
+# is fine — we want to fail fast *here* on the smoke test, not mid-flow.
 if ! gh api user -q .login >/dev/null 2>&1; then
-  die "gh CLI cannot authenticate with the current GITHUB_TOKEN"
+  die "gh CLI cannot authenticate — run 'gh auth login' or export GH_TOKEN / GITHUB_TOKEN (requires 'repo:admin' + 'admin:org' scopes)"
 fi
 
 # ---- load _fleet.yaml -------------------------------------------------------
@@ -223,10 +223,25 @@ create_app() {
   # Listener: random port if PORT==0; bind to 127.0.0.1 only; 5-minute timeout.
   # We launch the listener as a background python3 invocation that writes the
   # captured redirect query string to a temp file then exits.
-  local cb_file port_file listener_pid
+  #
+  # Cleanup strategy: avoid `trap ... RETURN` — RETURN traps set inside a
+  # function interact unpredictably with `set -u` and with later function
+  # invocations (see Copilot review feedback). Instead, define a local
+  # cleanup closure, call it explicitly on the success path, and install a
+  # narrowly-scoped EXIT trap that only runs if the script dies mid-function
+  # (because `die` goes straight to `exit 1` without returning).
+  local cb_file port_file listener_pid=""
   cb_file=$(mktemp -t gh-apps-cb.XXXXXX)
   port_file=$(mktemp -t gh-apps-port.XXXXXX)
-  trap 'kill "$listener_pid" 2>/dev/null || true; rm -f "$cb_file" "$port_file"' RETURN
+
+  _create_app_cleanup() {
+    [[ -n "${listener_pid:-}" ]] && kill "$listener_pid" 2>/dev/null || true
+    rm -f "${cb_file:-}" "${port_file:-}" "${form_file:-}"
+  }
+  # Install as EXIT trap: only fires if we exit abnormally (die → exit 1).
+  # The final explicit call at the bottom of this function clears it via
+  # `trap - EXIT` before returning normally.
+  trap _create_app_cleanup EXIT
 
   # Random nonce so we can verify the redirect is the one we initiated.
   local nonce
@@ -302,7 +317,7 @@ PY
   # "Create GitHub App" once, after which they are redirected to our listener.
   # We pre-build a tiny HTML form because the manifest payload exceeds query-
   # string limits.
-  local form_html form_file
+  local form_file=""
   form_file=$(mktemp -t gh-apps-form.XXXXXX).html
   python3 - "$github_org" "$owner_type" "$nonce" "$manifest_json" "$form_file" <<'PY'
 import html, json, sys
@@ -335,12 +350,11 @@ PY
     xdg-open "file://$form_file" >/dev/null 2>&1 || true
   fi
 
-  # Wait for the listener to capture the code.
+  # Wait for the listener to capture the code. On timeout, `die` triggers
+  # the EXIT trap which runs _create_app_cleanup.
   if ! wait "$listener_pid"; then
-    rm -f "$form_file"
     die "listener timed out waiting for the redirect — re-run when ready"
   fi
-  rm -f "$form_file"
 
   local code
   code=$(cat "$cb_file")
@@ -373,6 +387,11 @@ PY
 )
   state_set "$slug" "$payload"
   info "✓ $slug created and saved to .gh-apps.state.json"
+
+  # Normal-path cleanup: remove temp files and clear the EXIT trap so it
+  # doesn't fire on the next function's scope.
+  _create_app_cleanup
+  trap - EXIT
 }
 
 install_app() {
@@ -389,18 +408,27 @@ install_app() {
     return 0
   fi
 
-  info "Locating installation of $app_slug on $github_org/$github_repo"
-  # The App owner can list its installations directly. JWT-authenticated
-  # endpoints aren't reachable via gh's PAT auth; instead, query the repo's
-  # installations and filter by App ID.
-  local install_id=""
-  install_id=$(gh api "repos/$github_org/$github_repo/installation" \
-    -q ".id" 2>/dev/null || echo "")
+  info "Locating installation of $app_slug (app_id=$app_id) on $github_org"
 
-  if [[ -z "$install_id" || "$install_id" == "null" ]]; then
+  # Find the installation_id for THIS specific App on the fleet org/user.
+  # The obvious-looking `repos/<org>/<repo>/installation` endpoint requires
+  # App-JWT auth (not a PAT) and returns 404 with PAT auth. Instead, list
+  # all App installations on the owner scope and filter by app_id — this
+  # works with the `admin:org` PAT scope the script already requires.
+  lookup_install_id() {
+    local base="/users/$github_org/installations"
+    [[ "$owner_type" == "Organization" ]] && base="/orgs/$github_org/installations"
+    gh api --paginate "$base" \
+      --jq ".installations[]? // .[] | select(.app_id==$app_id) | .id" \
+      2>/dev/null | head -n1
+  }
+
+  local install_id
+  install_id=$(lookup_install_id)
+
+  if [[ -z "$install_id" ]]; then
     # Not installed yet. Direct the operator to install it.
-    local install_url
-    install_url="https://github.com/apps/$app_slug/installations/new"
+    local install_url="https://github.com/apps/$app_slug/installations/new"
     echo ""
     echo "  Install '$app_slug' on $github_org/$github_repo:"
     echo "    $install_url"
@@ -411,11 +439,11 @@ install_app() {
       fi
     fi
     read -r -p "  Press Enter once you've completed the install... " _ </dev/tty || true
-    install_id=$(gh api "repos/$github_org/$github_repo/installation" -q ".id" 2>/dev/null || echo "")
+    install_id=$(lookup_install_id)
   fi
 
-  [[ -n "$install_id" && "$install_id" != "null" ]] \
-    || die "could not resolve installation id for $app_slug on $github_org/$github_repo"
+  [[ -n "$install_id" ]] \
+    || die "could not resolve installation id for $app_slug (app_id=$app_id) on $github_org"
 
   # Patch state file with installation_id.
   python3 - "$state_file" "$slug" "$install_id" <<'PY'
