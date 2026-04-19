@@ -48,9 +48,6 @@ state:
     fleet: tfstate-fleet                               # Stage 0 + bootstrap/{environment,team}
 
 networking:                                            # Private networking for Stage -1 / Stage 0
-  # Fleet VNet that hosts every private endpoint and the runner subnet below.
-  # Typically in rg-fleet-shared or peered from the hub connectivity sub.
-  vnet_id: <resource-id>                               # TODO post-init
   tfstate:
     private_endpoint:
       # Subnet (in rg-fleet-shared or the hub) that will host the PE for the
@@ -70,6 +67,13 @@ networking:                                            # Private networking for 
     # Subnet for the runner's per-pool private ACR private endpoint. May be
     # the same as networking.tfstate.private_endpoint.subnet_id.
     container_registry_pe_subnet_id: <resource-id>     # TODO post-init
+    # Central privatelink.azurecr.io zone (typically in the hub
+    # connectivity subscription, symmetric with tfstate above). The runner
+    # pool does NOT create this zone — it must pre-exist and the operator
+    # running bootstrap/fleet needs Private DNS Zone Contributor on it so
+    # the module can register the PE's A record via the PE's DNS zone
+    # group.
+    container_registry_private_dns_zone_id: <resource-id>  # TODO post-init
 
 github_app:
   fleet_runners:                                       # KEDA polling App (actions:read + metadata:read)

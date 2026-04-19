@@ -114,11 +114,19 @@ module "runner" {
   user_assigned_managed_identity_principal_id     = azapi_resource.runner_uami.output.properties.principalId
 
   # Networking --------------------------------------------------------------
-  use_private_networking                        = true
-  virtual_network_creation_enabled              = false
-  virtual_network_id                            = local.networking.vnet_id
-  container_app_subnet_id                       = local.networking.runner_subnet_id
-  container_registry_private_endpoint_subnet_id = local.networking.runner_acr_pe_subnet_id
+  #
+  # BYO central DNS: the `privatelink.azurecr.io` zone pre-exists (typically
+  # in the hub connectivity sub, symmetric with the tfstate PE's
+  # `privatelink.blob.core.windows.net`). We tell the module NOT to create
+  # a zone, and point it at the central one so the PE's DNS zone group
+  # registers the A record there. No VNet→zone link is created by this
+  # module, and therefore no `virtual_network_id` input is required.
+  use_private_networking                               = true
+  virtual_network_creation_enabled                     = false
+  container_app_subnet_id                              = local.networking.runner_subnet_id
+  container_registry_private_endpoint_subnet_id        = local.networking.runner_acr_pe_subnet_id
+  container_registry_private_dns_zone_creation_enabled = false
+  container_registry_dns_zone_id                       = local.networking.runner_acr_dns_zone_id
 
   # Hub firewall handles egress via UDR on the runner subnet; no NAT or
   # public IP owned by this module.

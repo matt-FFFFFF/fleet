@@ -575,9 +575,17 @@ messages; the rest must be arranged out-of-band by the adopter org.
   the hub connectivity subscription (shared across the tenant).
   Referenced by resource id from
   `_fleet.yaml.networking.tfstate.private_endpoint.private_dns_zone_id`.
-- Tenant-scope role: **`Private DNS Zone Contributor`** on the
-  central zone — for the operator on first apply, and for the
-  `fleet-stage0` UAMI (for subsequent re-runs).
+- Central `privatelink.azurecr.io` private DNS zone in the same
+  hub/connectivity sub (shared with every other ACR PE in the
+  tenant). Referenced by resource id from
+  `_fleet.yaml.networking.runner.container_registry_private_dns_zone_id`.
+  The runner-pool module is invoked with
+  `container_registry_private_dns_zone_creation_enabled = false`
+  and only registers A-records into this zone via the PE's DNS
+  zone group — no zone is ever created by this repo.
+- Tenant-scope role: **`Private DNS Zone Contributor`** on *both*
+  central zones (blob + ACR) — for the operator on first apply,
+  and for the `fleet-stage0` UAMI (for subsequent re-runs).
 - VNet-reachable workstation (jump host / Azure Bastion / VPN)
   for every re-run of `bootstrap/fleet` after the first apply;
   the tfstate storage account is PE-only once Stage -1 has run.
@@ -753,11 +761,20 @@ Key design choices:
 - **Per-pool private ACR + per-pool LAW** (`container_registry_creation_enabled
   = true`, `log_analytics_workspace_creation_enabled = true`). Keeps the
   runner plumbing off the fleet-ACR ABAC delegation path and gives each
-  pool its own observability scope.
+  pool its own observability scope. The per-pool ACR's private endpoint
+  registers into a **pre-existing central `privatelink.azurecr.io` zone**
+  (typically in the hub connectivity sub, symmetric with the tfstate
+  zone); the module explicitly sets
+  `container_registry_private_dns_zone_creation_enabled = false` and
+  passes `container_registry_dns_zone_id` from
+  `_fleet.yaml.networking.runner.container_registry_private_dns_zone_id`.
+  No zone is created by this repo, and no VNet→zone link is created by
+  the module (hence no `virtual_network_id` input is required at the
+  callsite).
 - **No NAT, no public IP** at the module callsite. Egress flows through the
   hub firewall via a UDR on `snet-runners`; adopter responsibility.
 - **Bring-your-own VNet**: `virtual_network_creation_enabled = false` with
-  subnet IDs sourced from `_fleet.yaml.networking.{vnet_id, runner.*,
+  subnet IDs sourced from `_fleet.yaml.networking.{runner.*,
   tfstate.private_endpoint.*}`. See `docs/adoption.md` §3 + §5.1 for the
   full list of post-init fields.
 

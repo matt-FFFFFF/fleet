@@ -63,11 +63,11 @@ locals {
   # `try(...)` keeps older _fleet.yaml docs (pre-networking-schema) parseable
   # during validate — an adopter must fill these in before applying.
   networking = {
-    vnet_id                        = try(local.fleet_doc.networking.vnet_id, null)
     tfstate_pe_subnet_id           = try(local.fleet_doc.networking.tfstate.private_endpoint.subnet_id, null)
     tfstate_pe_private_dns_zone_id = try(local.fleet_doc.networking.tfstate.private_endpoint.private_dns_zone_id, null)
     runner_subnet_id               = try(local.fleet_doc.networking.runner.subnet_id, null)
     runner_acr_pe_subnet_id        = try(local.fleet_doc.networking.runner.container_registry_pe_subnet_id, null)
+    runner_acr_dns_zone_id         = try(local.fleet_doc.networking.runner.container_registry_private_dns_zone_id, null)
   }
 
   # fleet-runners GitHub App (KEDA polling). See docs/adoption.md §4.
