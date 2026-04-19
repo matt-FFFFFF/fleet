@@ -10,9 +10,13 @@
 # Fields that ship as `null` or `[]` with a `TODO` comment require
 # cloud-side identities (AAD group object IDs, VNet resource IDs, GitHub
 # App coordinates) that typically aren't known at init time. Fill each
-# one in before running the bootstrap stage that consumes it — the
-# corresponding stage has a `precondition` that fails with a message
-# naming the exact yaml path.
+# one in before running the stage that consumes it. `bootstrap/fleet`
+# guards its required fields with `precondition` blocks that name the
+# exact yaml path on failure; other stages (notably `bootstrap/
+# environment`) do not yet enforce every `TODO` field uniformly, so
+# leaving a per-env list empty may let an apply succeed while skipping
+# required wiring (e.g. no Private DNS zone VNet links). Treat the
+# `TODO` comments as the source of truth for what must be set.
 
 fleet:
   name: ${fleet_name}
