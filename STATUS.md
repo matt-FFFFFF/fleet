@@ -15,8 +15,10 @@
 Last updated: 2026-04-19 · vendored `avm-ptn-cicd-agents-and-runners`
 v0.5.2 into `terraform/modules/cicd-runners` (telemetry stripped,
 GH-App PEM via KV reference); `bootstrap/fleet` gains a single
-repo-scoped self-hosted runner pool (ACA+KEDA) and a private
-endpoint on the tfstate SA with first-apply-only
+repo-scoped self-hosted runner pool (ACA+KEDA), the **fleet Key
+Vault** (relocated from Stage 0 to break the runner-pool KV-reference
+cycle; private endpoint, deny-default ACLs), and a private endpoint
+on the tfstate SA with first-apply-only
 `allow_public_state_during_bootstrap` escape hatch; schema and
 adoption docs extended accordingly.
 
@@ -67,15 +69,20 @@ adoption docs extended accordingly.
   - [ ] GH Apps (`fleet-meta`, `stage0-publisher`, `fleet-runners`) —
         documented as TODO in `main.github.tf`; manifest-flow helper
         not written.
-  - [ ] PEMs → fleet KV wiring (deferred; KV created in Stage 0).
+  - [~] Fleet Key Vault **relocated from Stage 0** (PLAN §4 Stage -1
+        Implementation status 2026-04-19). Private-endpoint KV with
+        Deny-default ACLs and central `privatelink.vaultcore.azure.net`
+        DNS wiring; Key Vault Secrets User role assignment for
+        `uami-fleet-runners` issued in the same apply graph. PEM
+        seeding moves to post-bootstrap `init-gh-apps.sh`.
   - [~] Private endpoint on tfstate SA + Deny-default network ACLs
         with first-apply-only `allow_public_state_during_bootstrap`
         escape hatch. Scaffolded; awaits live apply.
   - [~] Self-hosted runner pool (ACA+KEDA, GH App auth via KV ref,
         bring-your-own VNet, per-pool ACR + LAW, no NAT/public IP).
-        Scaffolded via `module "runner"` in `main.runner.tf`. Awaits
-        Stage 0 (fleet KV) + operator-supplied PEM before first
-        scale-out succeeds.
+        Scaffolded via `module "runner"` in `main.runner.tf`. First
+        job execution awaits operator-supplied PEM via
+        `init-gh-apps.sh`.
 - [~] `bootstrap/environment/` — scaffolded (state container, env
       UAMI, GH env + variables, observability RG/AG/AMG/AMW/DCE/NSP).
       GH env + UAMI delivered via the vendored
@@ -93,7 +100,11 @@ adoption docs extended accordingly.
 
 - [~] Scaffolded; **not yet applied**:
   - [x] ACR (Premium, zone-redundant, admin disabled).
-  - [x] Fleet Key Vault (RBAC-auth, purge protection, soft-delete 90d).
+  - [x] Fleet Key Vault **consumed, not created** — KV owned by
+        `bootstrap/fleet` (PLAN §4 Stage -1 Implementation status
+        2026-04-19); this stage references the KV by derived id and
+        holds `Key Vault Secrets Officer` at vault scope for
+        rotations.
   - [x] Argo AAD application + service principal.
   - [x] Argo RP `client_secret` rotation (60d cadence via `time_rotating`,
         `create_before_destroy`, `.value` written to fleet KV).

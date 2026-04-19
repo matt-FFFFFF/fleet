@@ -16,18 +16,17 @@
 #        - KV-reference for the GitHub App PEM (vendor extension — see
 #          terraform/modules/cicd-runners/VENDORING.md §4)
 #
-# The `Key Vault Secrets User` role assignment that binds this UAMI to
-# the fleet KV is **owned by Stage 0**, not this stage: the fleet KV
-# does not exist yet at Stage -1 (Stage 0 creates it), and ARM rejects
-# Microsoft.Authorization/roleAssignments PUT against a non-existent
-# scope with a 404. Stage 0 reads the runner UAMI principal id from
-# the `runner_uami_principal_id` output below and issues the role
-# assignment against the KV it creates.
+# The fleet KV and the `Key Vault Secrets User` role assignment that
+# binds this UAMI to it are both owned by this stage (see main.kv.tf).
+# ACA's KV reference resolution happens at runtime via the attached UAMI,
+# not at PUT time, but we still sequence the runner module after the
+# role assignment so the first job execution finds a working grant.
 #
-# Stage 0 also seeds the PEM into the fleet KV under the secret name
+# The PEM itself is seeded into the KV under the secret name
 # `local.github_app_fleet_runners.private_key_kv_secret` (default
-# `fleet-runners-app-pem`) and publishes the `fleet-runners` App IDs as
-# repo variables. bootstrap/fleet itself never touches the PEM.
+# `fleet-runners-app-pem`) by the `init-gh-apps.sh` helper (PLAN §16.4),
+# which runs after bootstrap/fleet completes. bootstrap/fleet itself
+# never touches the PEM.
 
 locals {
   runner_uami_name      = "uami-fleet-runners"
@@ -35,10 +34,11 @@ locals {
   runner_postfix        = "fleet-runners"
   runner_pool_name      = "fleet-runners"
 
-  # Versionless KV secret URI — constructed, not read. The fleet KV is
-  # created by Stage 0, so no data lookup is possible or needed here; the
-  # Container App Job resolves the secret at runtime via the attached UAMI.
-  fleet_runners_app_key_kv_secret_id = "https://${local.derived.fleet_kv_name}.vault.azure.net/secrets/${local.github_app_fleet_runners.private_key_kv_secret}"
+  # Versionless KV secret URI — points at the fleet KV created in
+  # main.kv.tf. The Container App Job resolves the secret at runtime via
+  # the attached UAMI; the PEM itself is seeded post-bootstrap by
+  # init-gh-apps.sh.
+  fleet_runners_app_key_kv_secret_id = "${azapi_resource.fleet_kv.output.properties.vaultUri}secrets/${local.github_app_fleet_runners.private_key_kv_secret}"
 }
 
 # --- Runner UAMI -------------------------------------------------------------
@@ -67,6 +67,7 @@ resource "terraform_data" "runner_preconditions" {
     runner_subnet_id        = local.networking.runner_subnet_id
     runner_acr_pe_subnet_id = local.networking.runner_acr_pe_subnet_id
     runner_acr_dns_zone_id  = local.networking.runner_acr_dns_zone_id
+    fleet_kv_pe_subnet_id   = local.networking.fleet_kv_pe_subnet_id
     app_id                  = local.github_app_fleet_runners.app_id
     installation_id         = local.github_app_fleet_runners.installation_id
   }
@@ -85,6 +86,10 @@ resource "terraform_data" "runner_preconditions" {
       error_message = "networking.runner.container_registry_private_dns_zone_id must be set in clusters/_fleet.yaml (central privatelink.azurecr.io zone). See docs/adoption.md §5.1."
     }
     precondition {
+      condition     = local.networking.fleet_kv_pe_subnet_id != null && local.networking.fleet_kv_pe_subnet_id != ""
+      error_message = "networking.fleet_kv.private_endpoint.subnet_id must be set in clusters/_fleet.yaml (hosts the PE for the fleet KV created in this stage). See docs/adoption.md §5.1."
+    }
+    precondition {
       condition     = local.github_app_fleet_runners.app_id != null && local.github_app_fleet_runners.app_id != "" && local.github_app_fleet_runners.installation_id != null && local.github_app_fleet_runners.installation_id != ""
       error_message = "github_app.fleet_runners.{app_id, installation_id} must be set in clusters/_fleet.yaml before applying bootstrap/fleet. Run ./init-gh-apps.sh first. See docs/adoption.md §4 + §5.2."
     }
@@ -94,8 +99,12 @@ resource "terraform_data" "runner_preconditions" {
 # --- Runner pool (vendored AVM module with local extensions) -----------------
 
 module "runner" {
-  source     = "../../modules/cicd-runners"
-  depends_on = [terraform_data.runner_preconditions]
+  source = "../../modules/cicd-runners"
+  depends_on = [
+    terraform_data.runner_preconditions,
+    azapi_resource.ra_runner_kv_secrets_user,
+    azapi_resource.fleet_kv_pe_dns_zone_group,
+  ]
 
   postfix  = local.runner_postfix
   location = local.derived.acr_location

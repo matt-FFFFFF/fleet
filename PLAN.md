@@ -516,6 +516,30 @@ structure and Azure-resource names.
 >   cycle.
 > - GH Apps (`fleet-meta`, `stage0-publisher`) and their PEMs → KV
 >   wiring remain TODO as previously tracked.
+>
+> **Implementation status (2026-04-19) — fleet KV ownership.** The fleet
+> Key Vault has been **relocated from Stage 0 to `bootstrap/fleet`
+> (Stage -1)** to break a deploy-time cycle: the Stage -1 runner pool's
+> Container App Job holds a Key Vault reference to `fleet-runners-app-
+> pem`, which ACA validates (via the attached UAMI) at PUT time —
+> requiring the KV, the secret path, and the `Key Vault Secrets User`
+> role assignment to exist in the same apply graph as the runner
+> module. The vault is now strictly private (`publicNetworkAccess =
+> Disabled`, `networkAcls.defaultAction = Deny`, `bypass = None`) with
+> a PE on a new operator-supplied subnet
+> (`networking.fleet_kv.private_endpoint.subnet_id`) and A-record
+> registration in a new central BYO zone
+> (`networking.fleet_kv.private_endpoint.private_dns_zone_id`,
+> symmetric with the tfstate and runner-ACR zones). Stage 0 still
+> holds `Key Vault Secrets Officer` on the vault (for rotating
+> `argocd-oidc-client-secret`) but no longer creates it — it references
+> the KV by a derived id reconstructed from `_fleet.yaml`. PEM seeding
+> moves from Stage 0 to the post-bootstrap `init-gh-apps.sh` helper,
+> which must run from a host with data-plane reach to the KV. The
+> prose further down in §4 (Stage 0 "Fleet Key Vault" bullet; §16.4
+> PEM seeding; §10 runner-pool KV wiring) still reads as if Stage 0
+> created the vault; those paragraphs will be reconciled in a
+> follow-up pass rather than rewritten opportunistically.
 
 Three TF roots, each run rarely. Bootstrap exists to create the
 identities and GitHub scaffolding that CI-run stages depend on.

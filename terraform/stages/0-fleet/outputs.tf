@@ -30,12 +30,12 @@ output "acr_resource_id" {
 
 output "fleet_keyvault_id" {
   description = "Fleet KV resource id. Consumed by Stage 1 for Key Vault Secrets User role assignments on ESO UAMIs."
-  value       = azapi_resource.fleet_kv.id
+  value       = local.fleet_kv_id
 }
 
 output "fleet_keyvault_name" {
   description = "Fleet KV name. Consumed by Stage 2 for the platform-identity secret and ESO ClusterSecretStore config."
-  value       = azapi_resource.fleet_kv.name
+  value       = local.derived.fleet_kv_name
 }
 
 output "fleet_resource_group_name" {

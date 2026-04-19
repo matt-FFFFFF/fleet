@@ -1,57 +1,56 @@
 # main.kv.tf
 #
-# Fleet Key Vault — exactly ONE per fleet, and it stores ONLY secrets that
-# must be read by more than one cluster and are managed in Stage 0. Current
-# Stage 0 tenant:
+# Fleet Key Vault — created by bootstrap/fleet (Stage -1) so the runner
+# pool's KV-reference for the GH App PEM resolves at module-apply time.
+# See terraform/bootstrap/fleet/main.kv.tf for the resource definition,
+# private-endpoint wiring, and the Key Vault Secrets User role
+# assignment granted to `uami-fleet-runners`.
 #
-#   argocd-oidc-client-secret   — every cluster's Argo reads it
-#                                 (managed here; rotates on a 60d cadence
-#                                  and is updated on applies after the
-#                                  rotation boundary; see main.aad.tf)
+# Stage 0 consumes the existing KV: the vault id is fully derivable from
+# `_fleet.yaml` via the same naming contract bootstrap/fleet uses, so no
+# `data "azapi_resource"` lookup is required (and avoiding the read-time
+# permission requirement keeps this stage executable as soon as the KV
+# exists, regardless of whether the Stage 0 identity has KV data-plane
+# reads).
 #
-# PLAN §4 Stage 0 additionally assigns Stage 0 the GH App PEM / webhook
-# secret seeding (`fleet-meta-app-pem`, `fleet-meta-webhook-secret`,
-# `stage0-publisher-app-pem`, `stage0-publisher-webhook-secret`) and the
-# `argocd-github-app-pem` secret. Those KV-secret resources land together
-# with the `init-gh-apps.sh` helper (PLAN §16.4); see the implementation-
-# status callout in PLAN §16. They intentionally do not ship in this
-# scaffold.
+# What Stage 0 owns on the KV:
 #
-# Mgmt-only secrets (kargo-github-app-pem, kargo-oidc-client-secret) live
-# in the mgmt cluster's own KV (Stage 1), not here. Per-cluster secrets
-# live in each cluster's own KV (Stage 1).
+#   - `Key Vault Secrets Officer` at vault scope for the Stage 0 executor
+#     (this file). Rotations (argocd-oidc-client-secret, per PLAN §4 Stage
+#     0) need to write new secret versions.
 #
-# Soft-delete + purge protection are mandatory. RBAC authorization mode
-# (no access policies) is mandatory.
+# What Stage 0 seeds into the KV (in sibling files):
+#
+#   - argocd-oidc-client-secret   main.aad.tf (60d rotation)
+#   - argocd-github-app-pem       via `init-gh-apps.sh` (PLAN §16.4); not
+#                                 in this scaffold yet, see PLAN §16
+#                                 implementation-status callout.
+#
+# The fleet-runners PEM (`fleet-runners-app-pem`) is consumed by Stage -1
+# and seeded by `init-gh-apps.sh` as a post-bootstrap operator step; it
+# is not a Stage 0 responsibility.
+#
+# Mgmt-only secrets (kargo-*) live in the mgmt cluster's KV (Stage 1).
 
-resource "azapi_resource" "fleet_kv" {
-  type      = "Microsoft.KeyVault/vaults@2023-07-01"
-  name      = local.derived.fleet_kv_name
-  parent_id = local.derived.fleet_shared_rg_id
-  location  = local.derived.fleet_kv_location
+locals {
+  # Reconstructed KV id. Same derivation as bootstrap/fleet + the KV is
+  # colocated with the ACR in rg-fleet-shared.
+  fleet_kv_id = join("/", [
+    "/subscriptions", local.derived.acr_subscription_id,
+    "resourceGroups", local.derived.fleet_kv_resource_group,
+    "providers/Microsoft.KeyVault/vaults", local.derived.fleet_kv_name,
+  ])
 
-  body = {
-    properties = {
-      tenantId                  = local.fleet.tenant_id
-      sku                       = { family = "A", name = "standard" }
-      enableRbacAuthorization   = true
-      enablePurgeProtection     = true
-      enableSoftDelete          = true
-      softDeleteRetentionInDays = 90
-      publicNetworkAccess       = "Enabled" # TODO: PE + Disabled once hub is online
-      networkAcls = {
-        bypass        = "AzureServices"
-        defaultAction = "Allow"
-      }
-    }
-  }
+  # Built-in role guid:
+  #   Key Vault Secrets Officer  b86a8fe4-44ce-4948-aee5-eccb2c155cd7
+  role_kv_secrets_officer = "b86a8fe4-44ce-4948-aee5-eccb2c155cd7"
+}
 
-  response_export_values = ["id", "properties.vaultUri"]
+# Surface _fleet.yaml drift early: the RG colocation contract is the
+# same one bootstrap/fleet relies on.
+resource "terraform_data" "fleet_kv_preconditions" {
+  input = { fleet_kv_id = local.fleet_kv_id }
 
-  # The fleet KV must live in the same RG as the ACR (rg-fleet-shared) so
-  # bootstrap/environment can reconstruct its id from acr.* alone. Surface
-  # any drift in `_fleet.yaml.keyvault.resource_group` early instead of
-  # letting Stage 0 silently ignore the field.
   lifecycle {
     precondition {
       condition     = lower(local.derived.fleet_kv_resource_group) == lower(local.fleet_doc.acr.resource_group)
@@ -62,21 +61,16 @@ resource "azapi_resource" "fleet_kv" {
 
 # --- RBAC for the Stage 0 executor -------------------------------------------
 #
-# Stage 0 runs as the `fleet-stage0` UAMI (bootstrap/fleet). It needs
-# `Key Vault Secrets Officer` on the fleet KV so it can write the rotated
-# Argo OIDC client secret as a secret version. Built-in role guid:
-#   Key Vault Secrets Officer  b86a8fe4-44ce-4948-aee5-eccb2c155cd7
+# Stage 0 runs as the `fleet-stage0` UAMI in CI (or the operator's OIDC
+# identity locally). Grant it `Key Vault Secrets Officer` at vault scope
+# so it can write rotated Argo OIDC client secrets.
 
 data "azuread_client_config" "current" {}
 
-locals {
-  role_kv_secrets_officer = "b86a8fe4-44ce-4948-aee5-eccb2c155cd7"
-}
-
 resource "azapi_resource" "ra_stage0_kv_secrets_officer" {
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
-  name      = uuidv5("url", "stage0-kv-secrets-officer-${azapi_resource.fleet_kv.id}")
-  parent_id = azapi_resource.fleet_kv.id
+  name      = uuidv5("url", "stage0-kv-secrets-officer-${local.fleet_kv_id}")
+  parent_id = local.fleet_kv_id
 
   body = {
     properties = {
@@ -85,4 +79,6 @@ resource "azapi_resource" "ra_stage0_kv_secrets_officer" {
       principalType    = "ServicePrincipal"
     }
   }
+
+  depends_on = [terraform_data.fleet_kv_preconditions]
 }

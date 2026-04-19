@@ -29,12 +29,20 @@ acr:
   location: ${primary_region}
   sku: Premium
 
-keyvault:                                              # FLEET KV (one; Stage 0)
+keyvault:                                              # FLEET KV (one; bootstrap/fleet)
   # Default name derived: kv-<fleet.name>-fleet. Override via `name_override`.
   name_override: ""
   resource_group: rg-fleet-shared
   location: ${primary_region}
-  # Stores ONLY fleet-wide secrets:
+  # Created by Stage -1 (bootstrap/fleet) so the runner pool's KV-reference
+  # for the GitHub App PEM resolves at deploy time. Stage 0 consumes the
+  # existing vault and seeds additional secrets. The vault is strictly
+  # private — publicNetworkAccess=Disabled, defaultAction=Deny — with a
+  # private endpoint on the subnet below and DNS registered in the
+  # central privatelink.vaultcore.azure.net zone.
+  #
+  # Stores fleet-wide secrets:
+  #   fleet-runners-app-pem        (Stage -1; this pool's GH App PEM; seeded by init-gh-apps.sh)
   #   argocd-github-app-pem        (every cluster's Argo reads it)
   #   argocd-oidc-client-secret    (every cluster's Argo reads it; rotated 60d by Stage 0)
   # Mgmt-only Kargo secrets live in the mgmt cluster's KV, not here.
@@ -74,12 +82,23 @@ networking:                                            # Private networking for 
     # the module can register the PE's A record via the PE's DNS zone
     # group.
     container_registry_private_dns_zone_id: <resource-id>  # TODO post-init
+  fleet_kv:
+    private_endpoint:
+      # Subnet (in rg-fleet-shared or the hub) that will host the PE for
+      # the fleet Key Vault. Must have `privateEndpointNetworkPolicies`
+      # effectively disabled. May be the same subnet as the tfstate PE.
+      subnet_id: <resource-id>                         # TODO post-init
+      # Central privatelink.vaultcore.azure.net zone (typically in the hub
+      # connectivity subscription, symmetric with tfstate + runner ACR).
+      # Leave as null to skip automatic DNS wiring — in that case the
+      # adopter is responsible for A-record registration.
+      private_dns_zone_id: null                        # TODO post-init (optional)
 
 github_app:
   fleet_runners:                                       # KEDA polling App (actions:read + metadata:read)
     app_id: ""                                         # TODO post-init (numeric GitHub App ID)
     installation_id: ""                                # TODO post-init
-    private_key_kv_secret: fleet-runners-app-pem       # Secret name in the fleet KV (Stage 0 seeds it)
+    private_key_kv_secret: fleet-runners-app-pem       # Secret name in the fleet KV (init-gh-apps.sh seeds it post-bootstrap)
 
 aad:
   argocd:
