@@ -77,6 +77,9 @@ first Terraform apply — the file documents each with a `TODO` or
 - Per-env `aks.admin_groups`, `rbac_cluster_admins`, `rbac_readers`.
 - Per-env `grafana.admins`, `grafana.editors`.
 - Per-env `networking.grafana_pe_subnet_id`, `grafana_pe_linked_vnet_ids`.
+- `networking.vnet_id` — fleet VNet resource id (hosts every private
+  endpoint and the runner subnet; typically in `rg-fleet-shared` or
+  peered from the hub).
 - `networking.tfstate.private_endpoint.subnet_id` — subnet that will
   host the private endpoint for the fleet tfstate storage account
   (typically `snet-pe-shared` in `rg-fleet-shared` or a hub subnet).
@@ -88,6 +91,9 @@ first Terraform apply — the file documents each with a `TODO` or
   pool's Azure Container Apps environment (typically `snet-runners`
   in `rg-fleet-shared`). Must be delegated to
   `Microsoft.App/environments`; hub-firewall egress via UDR.
+- `networking.runner.container_registry_pe_subnet_id` — subnet for
+  the runner pool's per-pool private ACR private endpoint. May be the
+  same subnet as `networking.tfstate.private_endpoint.subnet_id`.
 - `github_app.fleet_runners.{app_id, installation_id}` — numeric IDs
   of the `fleet-runners` GitHub App (KEDA polling; created by §4
   below). The private key PEM is seeded into the fleet Key Vault by

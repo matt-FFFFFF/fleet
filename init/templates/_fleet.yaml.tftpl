@@ -48,6 +48,9 @@ state:
     fleet: tfstate-fleet                               # Stage 0 + bootstrap/{environment,team}
 
 networking:                                            # Private networking for Stage -1 / Stage 0
+  # Fleet VNet that hosts every private endpoint and the runner subnet below.
+  # Typically in rg-fleet-shared or peered from the hub connectivity sub.
+  vnet_id: <resource-id>                               # TODO post-init
   tfstate:
     private_endpoint:
       # Subnet (in rg-fleet-shared or the hub) that will host the PE for the
@@ -64,6 +67,9 @@ networking:                                            # Private networking for 
     # runner pool. Delegated to Microsoft.App/environments, UDR egress via
     # hub firewall.
     subnet_id: <resource-id>                           # TODO post-init
+    # Subnet for the runner's per-pool private ACR private endpoint. May be
+    # the same as networking.tfstate.private_endpoint.subnet_id.
+    container_registry_pe_subnet_id: <resource-id>     # TODO post-init
 
 github_app:
   fleet_runners:                                       # KEDA polling App (actions:read + metadata:read)
