@@ -409,14 +409,20 @@ PY
   fi
 
   # Persist credentials to state immediately — the API returns them once.
-  # Pipe the raw JSON via stdin so no interpolation into a Python source
-  # string happens: embedding JSON in a `'''...'''` literal makes Python
-  # interpret its `\n` escapes (notably inside `pem`) as real newlines
-  # before json.loads sees them, which corrupts the parse.
-  local payload
-  payload=$(printf '%s' "$conv_json" | python3 - <<'PY'
+  # Write the raw JSON to a temp file and pass its path as argv[1]; we can't
+  # pipe it on stdin because `python3 - <<'PY'` already consumes stdin to
+  # read the script body, and we can't interpolate it into a `'''...'''`
+  # literal because Python would interpret its `\n` escapes (notably inside
+  # `pem`) as real newlines before json.loads sees them.
+  local conv_file payload
+  conv_file=$(mktemp -t gh-apps-conv.XXXXXX)
+  # shellcheck disable=SC2064
+  trap "rm -f '$conv_file'" RETURN
+  printf '%s' "$conv_json" >"$conv_file"
+  payload=$(python3 - "$conv_file" <<'PY'
 import json, sys
-c = json.loads(sys.stdin.read())
+with open(sys.argv[1]) as f:
+    c = json.load(f)
 out = {
     "id": c.get("id"),
     "slug": c.get("slug"),
