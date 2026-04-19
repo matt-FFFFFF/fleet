@@ -159,17 +159,28 @@ consent to the requested permissions. The `init-gh-apps.sh` helper
 tree on self-cleanup — automates everything around that single
 click: building the manifest from `_fleet.yaml`, opening a localhost
 listener for the redirect, exchanging the temp code for the App
-credentials, and installing both Apps on the fleet repo.
+credentials, and guiding the installation flow for all three Apps
+(the operator chooses the repo selection in the GitHub install UI;
+the script records the owner-scoped installation id but does not
+verify repo-selection coverage).
 
-> **Status:** `init-gh-apps.sh` is specified but **not yet
-> implemented** as of Phase 1. The command block below describes
-> the intended adopter experience once the helper lands. Until it
-> does, follow the manual-creation steps further down.
+> **Status:** `init-gh-apps.sh` is implemented at the repo root
+> (PLAN §16.4). The command block below is the actual adopter
+> experience. Stage 0 wiring that consumes `./.gh-apps.auto.tfvars`
+> is still pending.
 
-### Future (once `init-gh-apps.sh` ships)
+### Running `init-gh-apps.sh`
+
+Authenticate `gh` first — the script uses `gh api` throughout and
+accepts any of its credential sources:
 
 ```sh
-export GITHUB_TOKEN=<PAT with repo:admin + admin:org>
+# Either: use the gh keyring
+gh auth login --scopes 'repo,admin:org'
+
+# Or: export a PAT (GH_TOKEN and GITHUB_TOKEN both work)
+export GH_TOKEN=<PAT with repo + admin:org>
+
 ./init-gh-apps.sh
 ```
 
