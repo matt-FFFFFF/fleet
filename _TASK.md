@@ -292,33 +292,72 @@
 
 ## Phase E — Stage 1 per-cluster subnets + AKS integration
 
-- [ ] `terraform/stages/1-cluster/main.network.tf` (new):
+**Landed 2026-04-20** as a focused **networking slice** of PLAN §4
+Stage 1 — the identity/RBAC/observability surface of PLAN §4 is
+explicitly deferred to a follow-up (tracked in STATUS §4 Stage 1).
+Design additions landed with this phase:
+
+- **CGNAT pod CIDR** — `pod_cidr_slot` (0..15, immutable, fleet-unique)
+  declared per env-region in `_fleet.yaml.networking.envs.*`; each
+  cluster carves a `/16` at
+  `100.[64 + pod_cidr_slot*16 + subnet_slot].0.0/16`. Wiring in
+  `init/`, `modules/fleet-identity/`, `config-loader/load.sh`,
+  consumed by Stage 1 `modules/aks-cluster/` as
+  `network_profile.pod_cidr`. Docs in `docs/naming.md` "Pod CIDR
+  allocation (CGNAT)" and PLAN §3.4.
+- **AKS passthrough shape** — curated typed (`cluster.aks.<key>` →
+  explicit variable in `modules/aks-cluster/variables.tf` → 1:1 AVM
+  input). No freeform `extra` escape hatch. PLAN §3.4 "Stage 1 AKS
+  module passthrough".
+- **azurerm + random provider carveout** from the azapi-only
+  invariant (PLAN §2) — required by the AVM AKS module's optional
+  `management_lock`, `role_assignment`, `diagnostic_settings`
+  features; we'll use the latter two in the RBAC + observability
+  follow-ups.
+
+- [x] `terraform/stages/1-cluster/main.network.tf`:
   - `azapi_resource.snet_aks_api` + `azapi_resource.snet_aks_nodes`
     as children of the env VNet (parent id from
     `var.env_region_vnet_resource_id`). CIDRs consumed from the
-    loader tfvars.
-- [ ] `terraform/modules/aks-cluster` (wrap AVM module):
-  - Agent-pool `networkProfile.applicationSecurityGroups = [var.node_asg_resource_id]`
-    **if supported** by the pinned module version.
-  - Wire the two new subnet ids into the AVM module's AKS network
-    profile inputs.
-- [ ] If ASG fallback path is in effect: add Stage 1 azapi author of
-      NSG rules on `nsg-pe-env-<env>-<region>` (scoped to the new
-      node subnet prefix); require `bootstrap/environment` to grant
-      `Network Contributor` on that NSG to `fleet-<env>`.
-- [ ] `terraform/modules/cluster-dns` (update):
-  - Derive `dns_linked_vnet_ids = [env_vnet_id, mgmt_vnet_id]`
-    (from repo vars) instead of reading the BYO list from
-    cluster.yaml.
-- [ ] `variables.tf` additions in `stages/1-cluster`:
-  - `env_region_vnet_resource_id` (string, required)
-  - `mgmt_vnet_resource_id` (string, required)
-  - `node_asg_resource_id` (string, required)
-  - `networking_subnet_slot` (number, required; echoes cluster.yaml)
+    loader tfvars. Lifecycle preconditions enforce `/28` on api,
+    `>= /25` on nodes.
+- [x] `terraform/modules/aks-cluster` (new AVM wrapper):
+  - `Azure/avm-res-containerservice-managedcluster/azurerm ~> 0.5`
+    (v0.5.3). Agent-pool
+    `network_profile.application_security_groups = [var.node_asg_ids]`
+    is supported natively — **no fallback path needed**. Apps pool
+    goes through the sibling `//modules/agentpool` submodule (AVM
+    v0.5 exposes only `default_agent_pool` at the root).
+  - Two subnet ids (`api`, `nodes`) wired into
+    `api_server_access_profile.subnet_id` (+ `enable_vnet_integration
+    = true`) and `default_agent_pool.vnet_subnet_id` respectively.
+  - Curated typed passthrough: `kubernetes_version`, `sku_tier`,
+    `auto_scaler_profile`, `auto_upgrade_profile`, `system_pool`,
+    `apps_pool` (all sourced from `_defaults.yaml` + `cluster.aks.*`
+    overrides).
+- [x] ~~ASG fallback path~~ — unnecessary; AVM v0.5.3 exposes
+      `application_security_groups` on agent pools directly.
+- [x] `terraform/modules/cluster-dns`:
+  - Zone + two `virtualNetworkLinks` (keyed `{env, mgmt}`) authored
+    via azapi. Link list takes `{env = <env vnet>, mgmt = <mgmt vnet>}`
+    from Stage 1 vars (replaces the BYO-list read from cluster.yaml).
+    Role assignment (external-dns UAMI → `Private DNS Zone
+    Contributor`) deferred to the identity/RBAC follow-up.
+- [x] `variables.tf` additions in `stages/1-cluster`:
+  - `env_region_vnet_resource_id` (string, required, ARM-id regex).
+  - `mgmt_vnet_resource_id` (string, required, ARM-id regex).
+  - `node_asg_resource_id` (string, required, ARM-id regex).
+  - `doc` (any) — the loader-produced merged JSON.
+  - ~~`networking_subnet_slot`~~ — not needed as a separate input;
+    `subnet_slot` is already carried in `var.doc.networking` and
+    asserted via lifecycle.precondition on
+    `terraform_data.network_preconditions`.
 - [ ] tf-apply workflow: pipe env vars
       `<ENV>_<REGION>_VNET_RESOURCE_ID`,
       `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`,
       `MGMT_VNET_RESOURCE_ID` into `TF_VAR_*` for each cluster leg.
+      **Deferred** — `tf-apply.yaml` does not yet exist (STATUS §10);
+      piping lands when that workflow is written.
 
 ## Phase F — PR-check (validate.yaml)
 

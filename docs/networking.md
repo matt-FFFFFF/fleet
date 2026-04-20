@@ -370,16 +370,58 @@ stage that owns it — no Stage 0 passthrough.
 
 The fleet assumes **Azure CNI Overlay + Cilium** on every AKS cluster:
 
-- Pod IPs come from `cluster.networking.pod_cidr` (a separate
-  per-cluster non-routable space), not from the nodes subnet.
+- Pod IPs come from a deterministic per-cluster `/16` in CGNAT
+  (`100.64.0.0/10`) — see "Pod CIDR allocation" below — not from
+  `cluster.networking.pod_cidr` in `_defaults.yaml` (the legacy key
+  is ignored by Stage 1 and will be removed in a cleanup commit).
 - Nodes subnet only holds nodes + internal load balancers → `/25` is
   comfortably sized for realistic node counts.
-- Services CIDR (`cluster.networking.service_cidr`) is also
-  non-routable and cluster-local.
+- Services CIDR is currently hard-coded to `10.0.0.0/16` inside
+  `modules/aks-cluster` (cluster-local, non-routable). Overridable
+  later if a conflict appears.
 
 If the fleet ever moves off CNI Overlay, the nodes subnet sizing
 needs to be re-derived against `nodes × (1 + max_pods)`; this is a
 PLAN §3.4 amendment plus changes in the three parity files.
+
+## Pod CIDR allocation (CGNAT)
+
+Pod IPs live in `100.64.0.0/10` (RFC 6598 CGNAT), completely disjoint
+from the VNet address plan. Allocation is two-dimensional:
+
+- **`pod_cidr_slot`** — integer `[0, 15]`, declared per env-region in
+  `_fleet.yaml.networking.envs.<env>.regions.<region>.pod_cidr_slot`.
+  Unique across the entire fleet; immutable once set. Reserves a
+  `/12` envelope at `100.[64 + pod_cidr_slot*16].0.0/12`.
+- **`subnet_slot`** — the per-cluster integer already declared in
+  `cluster.yaml.networking.subnet_slot`. The same slot indexes the
+  cluster's subnets *and* its pod CIDR.
+
+Per-cluster pod CIDR:
+
+```
+pod_cidr = 100.[64 + pod_cidr_slot*16 + subnet_slot].0.0/16
+```
+
+Worked examples (from `.github/fixtures/adopter-test.tfvars`):
+
+| env / region       | pod_cidr_slot | subnet_slot | pod_cidr             |
+| ------------------ | ------------- | ----------- | -------------------- |
+| mgmt / eastus      | 0             | 0           | `100.64.0.0/16`      |
+| nonprod / eastus   | 1             | 0           | `100.80.0.0/16`      |
+| nonprod / eastus   | 1             | 3           | `100.83.0.0/16`      |
+| prod / eastus      | 2             | 0           | `100.96.0.0/16`      |
+
+Capacity: 16 env-regions × 16 clusters × `/16` each (65 536 pod IPs
+per cluster → 262 nodes at the default `max_pods=250`). Operators
+hitting the 16-env-region cap add a second CGNAT pool by design
+change (PLAN §3.4 update required).
+
+Pod CIDRs are never routed outside the node (Overlay CNI encapsulates
+pod-to-pod traffic); no peering, UDR, or firewall configuration
+depends on them. The `pod_cidr_slot` × `subnet_slot` grid exists
+purely to keep debugging output (`kubectl get pods -o wide`) readable
+across clusters — prod vs nonprod pod IPs never overlap.
 
 ## Pre-Phase-B (legacy) note
 

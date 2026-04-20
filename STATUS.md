@@ -12,12 +12,44 @@
 > Legend: `[x]` done · `[~]` in progress / scaffolded but unapplied
 > `[ ]` not started · `[-]` deferred.
 
-Last updated: 2026-04-20 · **Two-pool subnet layout** (pre-Phase-E
-refactor) landed on `feat/networking-topology`. PLAN §3.4 rewrote the
-per-cluster CIDR math from "symmetric `/24` slot split into two `/25`s"
-to a two-pool design: each env-region VNet reserves its first `/24` for
-PE/runners, its second `/24` as the **API pool** (16 × `/28` delegated
-to `Microsoft.ContainerService/managedClusters` — AKS requires exactly
+Last updated: 2026-04-20 · **Phase E (Stage 1 networking slice)**
+landed on `feat/networking-topology`. `terraform/stages/1-cluster/`
+root now authors the per-cluster `/28` api + `/25` nodes subnets as
+`azapi_resource` children of the env VNet, invokes a new
+`terraform/modules/aks-cluster/` wrapper around
+`Azure/avm-res-containerservice-managedcluster/azurerm ~> 0.5`
+(curated-typed `cluster.aks.*` passthrough; Entra-only auth + OIDC
++ workload identity + private cluster + VNet integration + Azure CNI
+Overlay + Cilium hard-coded per PLAN §4), and creates the per-cluster
+private DNS zone via a new `terraform/modules/cluster-dns/` with
+`virtualNetworkLinks` to `[env, mgmt]`. Also this session:
+**per-cluster CGNAT pod CIDR** — new `pod_cidr_slot` (0..15, immutable,
+unique) per env-region block in `_fleet.yaml.networking.envs.*`
+reserves a `/12` at `100.[64 + slot*16].0.0/12`, and every cluster
+carves a `/16` at `100.[64 + pod_cidr_slot*16 + subnet_slot].0.0/16`.
+Wiring lands in `init/templates/_fleet.yaml.tftpl`, `init/variables.tf`
++ `inputs.auto.tfvars`, `modules/fleet-identity/main.tf` + outputs,
+`config-loader/load.sh` (python3 validator), and is consumed by Stage
+1 as `network_profile.pod_cidr`. Docs: `docs/naming.md` grew a new
+"Cluster pod CIDR" row + "Pod CIDR allocation (CGNAT)" subsection;
+also **fixed a stale capacity table** (`/21`=12 was `10`, `/22`=4 was
+`2`; HCL + template were already correct). `azurerm + random` carveout
+(PLAN §2) documented in provider files — AVM AKS module authors the
+cluster via azapi but ships optional `azurerm_management_lock` /
+`azurerm_role_assignment` / `azurerm_monitor_diagnostic_setting`, and
+the RBAC follow-up will use the latter two. Verification: Stage 1 +
+both new modules `terraform validate` clean; `fleet-identity` 8/8 +
+`init/` 33/33 (was 30/30) tests green. Remaining Stage-1 surface
+(cluster KV, UAMIs, role assignments, managed Prometheus DCR/DCRA +
+rules, Kargo mgmt rotation) tracked in §4 Stage 1; Phase F (PR-check)
++ Phase G (docs) + Phase H (cleanup) in `_TASK.md`.
+
+Prior: Two-pool subnet layout (pre-Phase-E refactor) landed on
+`feat/networking-topology`. PLAN §3.4 rewrote the per-cluster CIDR
+math from "symmetric `/24` slot split into two `/25`s" to a two-pool
+design: each env-region VNet reserves its first `/24` for PE/runners,
+its second `/24` as the **API pool** (16 × `/28` delegated to
+`Microsoft.ContainerService/managedClusters` — AKS requires exactly
 `/28`), and the remaining `/24`s as the **nodes pool** (2 × `/25` per
 `/24`, sized for Azure CNI Overlay + Cilium where pod IPs come from
 `pod_cidr`). `subnet_slot: i` now indexes both pools simultaneously.
@@ -27,10 +59,7 @@ layout diagram + prose, `docs/naming.md`, `config-loader/load.sh`
 python3 block, `modules/fleet-identity/main.tf` capacity locals +
 outputs.tf doc, `modules/fleet-identity/tests/unit/` (16 replaces 15
 at `/20`; new `/21`=12 and `/22`=4 assertions),
-`clusters/_template/cluster.yaml` comment. `terraform validate`
-passes on `bootstrap/{fleet,environment}`, `fleet-identity` 8/8 +
-`init/` 30/30 tests still green. Remaining: Phases E–H in `_TASK.md`
-(Stage 1 will consume the new CIDRs).
+`clusters/_template/cluster.yaml` comment.
 
 Prior: Phase D (bootstrap/environment env VNets +
 peerings + ASG) landed on `feat/networking-topology`. New
@@ -144,26 +173,35 @@ branch. Remaining implementation (Phases D–H) tracked in `_TASK.md`.
         python3 `ipaddress` helper. Missing: HCL consumers in
         `bootstrap/{fleet,environment}` + Stage 1 (Phases C/D/E).
 - [~] §3.4 Networking topology — **spec + derivation + schema flip +
-      mgmt VNet + env VNets/peerings/ASG.** Phase A (derivation):
+      mgmt VNet + env VNets/peerings/ASG + Stage 1 networking slice +
+      CGNAT pod CIDR.** Phase A (derivation):
       `fleet-identity` emits `networking_derived.{mgmt, envs}`;
       `load.sh` emits `.derived.networking.*` per cluster. Phase B
       (schema): `_fleet.yaml.tftpl` + `cluster.yaml` template +
       example clusters carry the new networking shape; `init/`
-      validates 9 new adopter fields. Phase C (mgmt VNet):
-      `bootstrap/fleet` authors mgmt VNet + subnets + NSGs + hub
-      peering via sub-vending `~> 0.2`; tfstate/KV/runner PEs
-      rewired to derived subnets + central PDZs; `fleet-meta` UAMI
+      validates 9 new adopter fields (now 12 with `pod_cidr_slot`).
+      Phase C (mgmt VNet): `bootstrap/fleet` authors mgmt VNet + subnets
+      + NSGs + hub peering via sub-vending `~> 0.2`; tfstate/KV/runner
+      PEs rewired to derived subnets + central PDZs; `fleet-meta` UAMI
       gets Network Contributor on the mgmt VNet;
       `MGMT_VNET_RESOURCE_ID` published to the `fleet-meta` GH
-      Environment. **Phase D (env VNets):** `bootstrap/environment`
+      Environment. Phase D (env VNets): `bootstrap/environment`
       authors `rg-net-<env>` + per-region env VNets + `snet-pe-env`
       + `nsg-pe-env-*` via sub-vending (mesh + hub peering); per-region
       `asg-nodes-*` ASG via azapi; mgmt↔env peerings via the peering
       AVM submodule with `create_reverse_peering = true`; Grafana PE
       rewired to derived `snet-pe-env` + central PDZ; per-region
-      `<ENV>_<REGION>_*` repo-env vars published. Remaining: Phase E
-      Stage 1 subnets + AKS ASG attachment, Phase F PR-check,
-      Phases G/H docs + cleanup. Tracked in `_TASK.md`.
+      `<ENV>_<REGION>_*` repo-env vars published. **Phase E
+      (Stage 1 networking):** `stages/1-cluster/` root +
+      `modules/aks-cluster/` + `modules/cluster-dns/` land per-cluster
+      subnets, AKS cluster (AVM wrapper with curated passthrough), and
+      private DNS zone with VNet links to `[env, mgmt]`. **CGNAT pod
+      CIDR** — `pod_cidr_slot` per env-region (0..15, immutable,
+      fleet-unique) reserves a `/12`; per-cluster `/16` at
+      `100.[64 + pod_cidr_slot*16 + subnet_slot].0.0/16`. Remaining:
+      Stage-1 identity/RBAC surface (cluster KV, UAMIs, role
+      assignments, managed Prometheus, Kargo rotation), Phase F
+      PR-check, Phases G/H docs + cleanup. Tracked in `_TASK.md`.
 - [x] Example clusters: `mgmt/eastus/aks-mgmt-01`,
       `nonprod/eastus/aks-nonprod-01` — networking blocks flipped to
       `subnet_slot: 0` (2026-04-20, Phase B); both in distinct env
@@ -304,19 +342,88 @@ branch. Remaining implementation (Phases D–H) tracked in `_TASK.md`.
 
 ### Stage 1 — `terraform/stages/1-cluster`
 
-- [ ] Stage body not written.
-- [~] `terraform/modules/aks-cluster` — AVM wrapper pending detail.
-- [x] `terraform/modules/cluster-dns` — present (zone + links + role
-      assignment). Will need link-list derivation update to
-      `[env VNet, mgmt VNet]` per PLAN §3.4.
-- [ ] `terraform/modules/cluster-identities` — not written.
-- [ ] Per-cluster subnets (`snet-aks-api-<name>` + `snet-aks-nodes-<name>`)
-      as azapi children of env VNet; AKS node-pool ASG attachment
-      (or NSG fallback). `networking.subnet_slot` consumed from
-      cluster.yaml. PLAN §3.4.
+- [~] **Phase E (networking slice) landed 2026-04-20** on
+      `feat/networking-topology`. Stage 1 root now exists with
+      `providers.tf`/`backend.tf`/`variables.tf`/`main.tf`/
+      `main.network.tf`/`main.aks.tf`/`outputs.tf`; consumes the
+      loader tfvars via `var.doc` (typed as `any` — loader contract is
+      the schema) plus three named repo-variable inputs
+      (`env_region_vnet_resource_id`, `mgmt_vnet_resource_id`,
+      `node_asg_resource_id`). `terraform_data.network_preconditions`
+      fail-fasts on the six required fields before any Azure call.
+      Remaining Stage-1 surface (cluster KV, UAMIs, role assignments,
+      managed Prometheus DCR/DCRA + rules, Kargo mgmt rotation, RBAC
+      Cluster Admin to `fleet-<env>` UAMI) stays TODO — tracked below
+      and lands in the identity/RBAC follow-up.
+- [x] Per-cluster subnets (`snet-aks-api-<name>` /28 delegated +
+      `snet-aks-nodes-<name>` /25) authored as `azapi_resource`
+      `Microsoft.Network/virtualNetworks/subnets@2023-11-01` children
+      of the env VNet (`parent_id = var.env_region_vnet_resource_id`).
+      Lifecycle preconditions enforce `/28` on api and `>= /25` on
+      nodes. PLAN §3.4 / §4 Stage 1.
+- [x] `terraform/modules/aks-cluster/` — wrapper around
+      `Azure/avm-res-containerservice-managedcluster/azurerm ~> 0.5`
+      (v0.5.3). **Curated typed passthrough** — explicit variables
+      (`kubernetes_version`, `sku_tier`, `auto_scaler_profile`,
+      `auto_upgrade_profile`, `system_pool`, `apps_pool`) map 1:1 to
+      AVM inputs; no freeform `extra` map. Hard-coded: Entra-only
+      auth (`disable_local_accounts`, `aad_profile.managed`,
+      `enable_azure_rbac`, tenant/admin groups from `_fleet.yaml`),
+      OIDC issuer on, workload identity on, private cluster with
+      api-server VNet integration on the `/28` subnet, Azure CNI
+      Overlay + Cilium, user-assigned cluster UAMI (`uami-aks-<name>`).
+      Apps pool authored via the sibling
+      `//modules/agentpool` submodule (AVM v0.5 exposes only
+      `default_agent_pool` at the root). Node pools attach to the
+      env-region ASG via `network_profile.application_security_groups
+      = [var.node_asg_resource_id]`. PLAN §3.4 / §4 Stage 1.
+- [x] `terraform/modules/cluster-dns/` — azapi-authored
+      `Microsoft.Network/privateDnsZones` + one
+      `virtualNetworkLinks` per entry in `linked_vnet_ids`
+      (Stage 1 passes `{env, mgmt}`). `registrationEnabled = false`
+      (external-dns owns record writes). Role assignment
+      (`Private DNS Zone Contributor` → external-dns UAMI) deferred
+      to the identity/RBAC phase. PLAN §3.4.
+- [x] **Pod CIDR derivation (CGNAT):** per-env-region `pod_cidr_slot`
+      (0..15, immutable, fleet-unique — validated in `init/`) reserves
+      a `/12` envelope at `100.[64 + slot*16].0.0/12`, and every cluster
+      carves a `/16` at `100.[64 + pod_cidr_slot*16 + subnet_slot].0.0/16`.
+      Wired in `init/templates/_fleet.yaml.tftpl` (3 new scalar keys),
+      `init/variables.tf` + `inputs.auto.tfvars`,
+      `modules/fleet-identity/main.tf` (`networking_derived.envs.<k>`
+      now emits `pod_cidr_slot` + `pod_cidr_envelope`),
+      `config-loader/load.sh` (python3 block validates [0,15] + third
+      octet ≤ 127; emits `.derived.networking.{pod_cidr, pod_cidr_slot}`),
+      and consumed by the Stage 1 AKS module
+      (`network_profile.pod_cidr`). 33/33 init tests + 8/8
+      fleet-identity tests pass. Also fixed stale
+      `docs/naming.md` capacity table (`/21`=12 was `10`, `/22`=4 was
+      `2`; `fleet-identity/main.tf` and the cluster.yaml template
+      were already correct — docs-only bug).
+- [~] Provider set: **azurerm + random carveout** (PLAN §2) declared
+      in `stages/1-cluster/providers.tf` + `modules/aks-cluster/terraform.tf`.
+      The AVM AKS module authors the cluster via azapi but ships
+      `azurerm_management_lock` / `azurerm_role_assignment` /
+      `azurerm_monitor_diagnostic_setting` as optional features; we
+      plan to use `diagnostic_settings` (→ Log Analytics) and
+      `role_assignments` in the RBAC follow-up, so propagating both
+      providers is intended not worked-around.
+- [ ] **Deferred Stage-1 surface (identity/RBAC follow-up):**
+      cluster Key Vault + KV Secrets User on ESO UAMI; UAMIs for
+      external-dns / ESO / per-team; role assignments (AcrPull on
+      kubelet, RBAC Cluster Admin for `fleet-<env>` UAMI + AAD groups,
+      RBAC Reader for Kargo mgmt UAMI on every workload cluster,
+      Private DNS Zone Contributor on the cluster zone, Monitoring
+      Metrics Publisher on env AMW); managed Prometheus DCR/DCRA +
+      `prometheusRuleGroups`; Kargo mgmt OIDC secret rotation + KV
+      write. PLAN §4 Stage 1.
+- [ ] `tf-apply.yaml` workflow (PLAN §10) — pipes `MGMT_VNET_RESOURCE_ID` +
+      `<ENV>_<REGION>_{VNET,NODE_ASG}_RESOURCE_ID` into `TF_VAR_*`
+      for each cluster leg. Today Stage 1 accepts them as ordinary
+      tfvars; workflow piping is documentation-only until §10 lands.
 - [ ] `validate.yaml` PR-check: `subnet_slot` present, integer,
       in-range, unique within env+region, immutable (change blocks
-      PR). PLAN §3.4.
+      PR). PLAN §3.4 Phase F.
 
 ### Stage 2 — `terraform/stages/2-bootstrap`
 

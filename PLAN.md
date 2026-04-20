@@ -521,6 +521,7 @@ the per-cluster tfvars.json before Terraform ever sees it:
 | `networking.snet_runners.cidr` | second `/26` of mgmt VNet's address_space (`snet-runners`, ACA-delegated)                     |
 | `networking.snet_aks_api.cidr` | i-th `/28` of the API pool (second `/24` of env VNet), where i = `networking.subnet_slot` |
 | `networking.snet_aks_nodes.cidr` | i-th `/25` of the nodes pool (3rd `/24` onward of env VNet), where i = `networking.subnet_slot` |
+| `networking.pod_cidr`     | `100.[64 + R*16 + i].0.0/16` where R = env-region's `pod_cidr_slot`, i = cluster's `subnet_slot` (CGNAT, Overlay CNI) |
 | `networking.peering_name.env_to_mgmt` | `peer-<env>-<region>-to-mgmt`                                                         |
 | `networking.peering_name.mgmt_to_env` | `peer-mgmt-to-<env>-<region>`                                                         |
 | `networking.node_asg_name`      | `asg-nodes-<env>-<region>` (one ASG per env-region, shared by all clusters in that VNet)   |
@@ -732,6 +733,81 @@ Design notes:
 | `<ENV>_<REGION>_VNET_RESOURCE_ID`                 | `bootstrap/environment`   | Stage 1 (per-cluster subnets parent; DNS zone link)              |
 | `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`             | `bootstrap/environment`   | Stage 1 (AKS node-pool ASG attachment, or NSG rule author)       |
 
+**Pod CIDR allocation (CGNAT 100.64.0.0/10).**
+
+Pod IPs come from a non-routable CGNAT space, completely disjoint from
+the VNet address plan. This keeps the (relatively cramped) VNet `/20`
+available for nodes / PEs / future subnets and means pod-to-pod traffic
+never needs a routing decision at the fabric layer — Azure CNI Overlay
++ Cilium handles it in-node.
+
+Allocation is indexed by two orthogonal slots:
+
+- `pod_cidr_slot` — integer `[0, 15]`, declared **per env-region** in
+  `_fleet.yaml.networking.envs.<env>.regions.<region>.pod_cidr_slot`.
+  Unique across the entire fleet (not just one env). Immutable once
+  set; changing it renumbers every cluster's pod CIDR, which AKS does
+  not support in place.
+- `subnet_slot` — the per-cluster integer `[0, capacity-1]` already
+  declared in `cluster.yaml.networking.subnet_slot` (see above). Same
+  value indexes the cluster's subnets and its pod CIDR; operators
+  reason about "cluster 3" not "cluster 3 api / cluster 3 nodes /
+  cluster 3 pods."
+
+```
+pod_cidr = 100.[64 + pod_cidr_slot*16 + subnet_slot].0.0/16
+         └─────────┬─────────┘ └─────┬─────┘
+         env-region /12 envelope     cluster offset within envelope
+```
+
+Concretely, for `pod_cidr_slot = 1` (nonprod/eastus) and
+`subnet_slot = 0` (first cluster): `pod_cidr = 100.80.0.0/16` — 65 536
+pod IPs, enough for 262 nodes at the default `max_pods = 250`.
+
+The full `100.64.0.0/10` carries 16 env-region envelopes (a single
+`/12`) × 16 cluster slots per envelope × `/16` pods per cluster.
+Capacity is intentionally ample; operators hitting the 16-env-region
+cap add a second CGNAT pool by design change (PLAN update required).
+
+Derivation parity: `config-loader/load.sh` (python3 `ipaddress` block,
+emits `.derived.networking.pod_cidr`) and
+`modules/fleet-identity/main.tf`
+(`networking_derived.envs.<k>.pod_cidr_envelope`) compute this
+independently and must agree. `docs/naming.md` is the derivation
+contract.
+
+**Stage 1 AKS module passthrough (`cluster.aks.*`).**
+
+Operators tune AKS behaviour via a **curated typed** surface declared
+in `terraform/modules/aks-cluster/variables.tf`. Each `cluster.aks.<key>`
+maps 1:1 to an input on the wrapped AVM module
+(`Azure/avm-res-containerservice-managedcluster/azurerm`). There is
+intentionally **no** freeform `extra` / `passthrough` map: adding a
+new knob means adding a variable to `modules/aks-cluster/variables.tf`
+plus a one-line assignment in its `main.tf`, keeping the contract
+between cluster YAML and AKS ARM inputs explicit and reviewable.
+
+Keys exposed at Phase E landing (expand commit-by-commit as needs
+arise): `kubernetes_version`, `sku_tier`, `auto_scaler_profile`,
+`auto_upgrade_profile`. The following are **hard-coded** inside
+`modules/aks-cluster` per this section's security/auth contract and
+are not overridable per cluster: `disable_local_accounts = true`,
+`aad_profile.managed = true`, `enable_azure_rbac = true`,
+`oidc_issuer_profile.enabled = true`,
+`security_profile.workload_identity.enabled = true`,
+`api_server_access_profile.{enable_private_cluster, enable_vnet_integration} = true`,
+`network_profile.{network_plugin=azure, network_plugin_mode=overlay, network_dataplane=cilium}`.
+
+**Provider carveout.** The AVM AKS module authors the managed
+cluster via `azapi_resource` but ships `azurerm_management_lock`,
+`azurerm_role_assignment`, and `azurerm_monitor_diagnostic_setting`
+as optional features. Stage 1 therefore declares both `azurerm ~> 4.46`
+and `random ~> 3.5` alongside `azapi ~> 2.9` in `providers.tf`. This
+is an intentional carveout from the azapi-only invariant in §2; the
+RBAC follow-up uses `role_assignments` and the observability phase
+uses `diagnostic_settings`, so the extra providers are load-bearing
+not worked-around.
+
 ---
 
 ## 4. Terraform stages
@@ -744,13 +820,23 @@ Design notes:
 > both halves of every mgmt↔env peering (via
 > `Azure/avm-res-network-virtualnetwork/azurerm//modules/peering` with
 > `create_reverse_peering = true`), and one `asg-nodes-<env>-<region>`
-> per env-region; Stage 1 owns per-cluster `/28` api + `/25` nodes
-> subnets (two-pool layout — see §3.4) as azapi children of the env
-> VNet and attaches the AKS node pool to the env-region ASG. `cluster.yaml.networking` lost `vnet_id`,
-> `subnet_name`, and `dns_linked_vnet_ids` — replaced by a single
-> **required** `networking.subnet_slot: <int>` operator-set at cluster
-> creation and immutable thereafter (PR-check enforced). Full design
-> in §3.4; remaining implementation tracked in `_TASK.md`.
+> per env-region. **Stage 1 Phase E landed 2026-04-20:** per-cluster
+> `/28` api + `/25` nodes subnets authored as azapi children of the
+> env VNet, AKS cluster via
+> `Azure/avm-res-containerservice-managedcluster/azurerm ~> 0.5`
+> (curated-typed `cluster.aks.*` passthrough — adding a knob = adding
+> a variable to `modules/aks-cluster/variables.tf`, no freeform
+> escape hatch), private DNS zone + `virtualNetworkLinks` to
+> `[env, mgmt]`. Node pools attach to the env-region ASG via
+> `network_profile.application_security_groups`. `cluster.yaml.networking`
+> lost `vnet_id`, `subnet_name`, and `dns_linked_vnet_ids` — replaced
+> by a single **required** `networking.subnet_slot: <int>`
+> operator-set at cluster creation and immutable thereafter
+> (PR-check enforced). **Remaining Stage-1 surface** (cluster KV,
+> UAMIs, role assignments, managed Prometheus DCR/DCRA + rules,
+> Kargo mgmt rotation) deferred to an identity/RBAC follow-up;
+> tracked in STATUS §4 Stage 1. Full design in §3.4; PR-check +
+> docs + cleanup phases still tracked in `_TASK.md`.
 
 ### Stage -1 — Bootstrap (`terraform/bootstrap/`)
 
