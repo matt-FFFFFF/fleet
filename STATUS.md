@@ -12,29 +12,28 @@
 > Legend: `[x]` done · `[~]` in progress / scaffolded but unapplied
 > `[ ]` not started · `[-]` deferred.
 
-Last updated: 2026-04-20 · Phase B (schema flip) landed on
-`feat/networking-topology`: `init/templates/_fleet.yaml.tftpl` emits
-the new `networking.{hub,private_dns_zones,vnets.mgmt,envs.<env>.regions.<region>}`
-shape and drops the legacy `networking.{tfstate,runner,fleet_kv}` +
-per-env `grafana_pe_*` BYO subnet fields; `init/variables.tf` adds
-9 typed+validated vars (hub ARM id, four PDZ ids with exact-zone-name
-checks, four address_space values with CIDR syntax / /20-minimum /
-RFC1918 / pairwise-distinct rules); `init/inputs.auto.tfvars` + the
-CI fixture carry the new `__PROMPT__` sentinels and a concrete
-10.50/60/70/80 /20 address-space plan; the `_template` cluster and
-both example clusters replace BYO `vnet_id`/`subnet_name`/
-`dns_linked_vnet_ids` with a single `networking.subnet_slot: 0`.
-Init unit tests extended to 30 runs (was 22) — `render_networking_shape`
-round-trips the new yaml plus 7 `expect_failures` runs covering
-every new validation rule; all pass. Phase A (derivation layer)
-previously landed: `modules/fleet-identity/` emits
-`networking_derived.{mgmt, envs[<env>/<region>]}` with 8 unit-test
-run blocks; `config-loader/load.sh` emits cluster-scope
-`.derived.networking`; `docs/naming.md` mirrors everything. Networking
-topology spec in PLAN §3.4; Pre-flight pins resolved (sub-vending
-`~> 0.2`, peering `~> 0.17` under `.../azurerm//modules/peering`, AKS
-agent-pool ASG supported in `...managedcluster/azurerm ~> 0.5`).
-Remaining implementation (Phases C–H) tracked in `_TASK.md`.
+Last updated: 2026-04-20 · Phase C (bootstrap/fleet mgmt VNet) landed
+on `feat/networking-topology`: new `main.network.tf` invokes
+`Azure/avm-ptn-alz-sub-vending/azure ~> 0.2` with
+`subscription_alias_enabled = false` (we run against the already-
+bootstrapped shared sub) to create `vnet-<fleet>-mgmt` in `rg-net-mgmt`
+with two reserved /26 subnets (`snet-pe-shared`, `snet-runners`), NSGs
+`nsg-pe-shared` + `nsg-runners`, ACA delegation on the runner subnet,
+and hub peering (`direction = both`) to `networking.hub.resource_id`.
+Three existing PE consumers rewired to the derived subnet +
+central-PDZ outputs: tfstate SA PE (blob), fleet KV PE (vaultcore),
+ACA runner pool (runner subnet + ACR PE subnet + azurecr zone).
+`fleet-meta` UAMI gets `Network Contributor` on the mgmt VNet scope
+so `bootstrap/environment` can author the reverse half of every
+mgmt↔env peering. `MGMT_VNET_RESOURCE_ID` published as a repo-env
+variable on the `fleet-meta` GitHub Environment (direct publish from
+bootstrap/fleet; no Stage 0 passthrough). `modules/fleet-identity`
+replaced its legacy `networking` output (all null after Phase B) with
+`networking_central` (hub + 4 PDZ ids); 8/8 tests still pass. CI
+fixture renders cleanly and `terraform validate` passes on
+`bootstrap/{fleet,environment}`; `tflint --recursive` clean. Phase B
+(schema flip) + Phase A (derivation layer) landed earlier on this
+branch. Remaining implementation (Phases D–H) tracked in `_TASK.md`.
 
 ---
 
@@ -75,15 +74,19 @@ Remaining implementation (Phases C–H) tracked in `_TASK.md`.
         subnet/peering/ASG names) landed in `load.sh` via an inline
         python3 `ipaddress` helper. Missing: HCL consumers in
         `bootstrap/{fleet,environment}` + Stage 1 (Phases C/D/E).
-- [~] §3.4 Networking topology — **spec + derivation layer + schema
-      flip.** Phase A (derivation): `fleet-identity` emits
+- [~] §3.4 Networking topology — **spec + derivation + schema flip +
+      mgmt VNet.** Phase A (derivation): `fleet-identity` emits
       `networking_derived.{mgmt, envs}`; `load.sh` emits
       `.derived.networking.*` per cluster. Phase B (schema):
       `_fleet.yaml.tftpl` + `cluster.yaml` template + example
       clusters carry the new networking shape; `init/` validates 9
-      new adopter fields; `.github/fixtures/adopter-test.tfvars`
-      + example clusters updated. Remaining: Phase C mgmt VNet in
-      `bootstrap/fleet`, Phase D env VNets + peerings + ASG in
+      new adopter fields. Phase C (mgmt VNet): `bootstrap/fleet`
+      authors mgmt VNet + subnets + NSGs + hub peering via
+      sub-vending `~> 0.2`; tfstate/KV/runner PEs rewired to
+      derived subnets + central PDZs; `fleet-meta` UAMI gets Network
+      Contributor on the mgmt VNet; `MGMT_VNET_RESOURCE_ID`
+      published to the `fleet-meta` GH Environment. Remaining:
+      Phase D env VNets + peerings + ASG in
       `bootstrap/environment`, Phase E Stage 1 subnets + AKS ASG
       attachment, Phase F PR-check, Phases G/H docs + cleanup.
       Tracked in `_TASK.md`.
@@ -117,23 +120,38 @@ Remaining implementation (Phases C–H) tracked in `_TASK.md`.
         seeding moves to post-bootstrap `init-gh-apps.sh`.
   - [~] Private endpoint on tfstate SA + Deny-default network ACLs
         with first-apply-only `allow_public_state_during_bootstrap`
-        escape hatch. Scaffolded; awaits live apply.
+        escape hatch. Scaffolded; awaits live apply. 2026-04-20
+        (Phase C): PE subnet rewired from BYO `networking.tfstate.*`
+        to derived `snet-pe-shared` in the repo-owned mgmt VNet; DNS
+        zone group now unconditional against `networking.private_dns_zones.blob`.
   - [~] Self-hosted runner pool (ACA+KEDA, GH App auth via KV ref,
         bring-your-own VNet, per-pool ACR + LAW, no NAT/public IP).
         Scaffolded via `module "runner"` in `main.runner.tf`. First
         job execution awaits operator-supplied PEM via
-        `init-gh-apps.sh`.
-  - [ ] Mgmt VNet (sub-vending N=1, no mesh, hub_peering) +
-        `rg-net-mgmt` + `snet-pe-shared` / `snet-runners` subnets +
-        NSGs. `Network Contributor` on mgmt VNet → `fleet-meta`
-        UAMI. `MGMT_VNET_RESOURCE_ID` publish. Rewire existing
-        tfstate/fleet-KV/fleet-ACR PEs and runner ACA subnet from
-        BYO `_fleet.yaml` ids to derived subnet outputs. PLAN §3.4.
+        `init-gh-apps.sh`. 2026-04-20 (Phase C): subnet inputs
+        rewired to derived `snet-runners` (ACA) + `snet-pe-shared`
+        (ACR PE); ACR DNS zone now `networking.private_dns_zones.azurecr`.
+  - [x] Mgmt VNet (sub-vending `~> 0.2`, N=1, no mesh, hub_peering
+        direction=both) + `rg-net-mgmt` + `snet-pe-shared` /
+        `snet-runners` subnets + NSGs `nsg-pe-shared` + `nsg-runners`
+        + ACA delegation on runner subnet. `Network Contributor` on
+        mgmt VNet → `fleet-meta` UAMI (for reverse-peering writes
+        from `bootstrap/environment`). `MGMT_VNET_RESOURCE_ID`
+        published to the `fleet-meta` GitHub Environment variables
+        directly from this stage. `main.network.tf` +
+        `terraform_data.network_preconditions`. tfstate SA / fleet
+        KV PEs rewired to `snet-pe-shared` + central PDZs. Fleet
+        ACR PE rewire deferred (owned by Stage 0). `bootstrap/fleet`
+        still not applied live. PLAN §3.4.
 - [~] `bootstrap/environment/` — scaffolded (state container, env
       UAMI, GH env + variables, observability RG/AG/AMG/AMW/DCE/NSP).
       GH env + UAMI delivered via the vendored
       `modules/github-repo/modules/environment` submodule. Not yet
-      applied.
+      applied. 2026-04-20 (Phase C): Grafana PE + per-env DNS zone
+      links still reference legacy `environment.networking.grafana_pe_*`
+      yaml fields (removed in Phase B); guarded with `try(..., null/[])`
+      so the file parses. Phase D rewires both call sites to the
+      derived `snet-pe-env` + central `networking.private_dns_zones.grafana`.
   - [x] yamldecode locals; `var.location` optional.
   - [x] Consumes `fleet_meta_principal_id` input from fleet outputs.
   - [x] OIDC subject claims match fleet (ID-based); FIC name preserved
@@ -171,8 +189,20 @@ Remaining implementation (Phases C–H) tracked in `_TASK.md`.
         `yamldecode`); mgmt redirects filtered on `cluster.role`.
   - [x] Outputs exported per PLAN §4 Stage 0 table (consumed as repo
         vars by Stage 1/2).
-  - [ ] `MGMT_VNET_RESOURCE_ID` passthrough output added to the
-        Stage 0 publish list (PLAN §3.4 / §4 Stage 0 table).
+  - [-] `MGMT_VNET_RESOURCE_ID` passthrough output — **not needed**.
+        Resolved 2026-04-20 (Phase C) by publishing the variable
+        directly from `bootstrap/fleet`'s `main.github.tf` onto the
+        `fleet-meta` GitHub Environment, rather than routing it
+        through Stage 0 (the VNet is authored by the stage that
+        publishes its id; no passthrough required). PLAN §4 Stage 0
+        outputs table unchanged.
+  - [ ] Fleet ACR private endpoint rewire — Stage 0 owns the ACR;
+        the PE currently references legacy BYO networking fields
+        that were removed in Phase B. Rewire to
+        `local.snet_pe_shared_id` (via a `MGMT_SNET_PE_SHARED_ID`
+        repo var output by `bootstrap/fleet`) + central
+        `networking.private_dns_zones.azurecr` DNS zone. Tracked
+        until Stage 0 is next touched.
 
 ### Stage 1 — `terraform/stages/1-cluster`
 
@@ -362,9 +392,12 @@ Remaining implementation (Phases C–H) tracked in `_TASK.md`.
       snet_pe_shared_cidr, snet_runners_cidr, cluster_slot_capacity}`
       and `envs["<env>/<region>"].{..., snet_pe_env_cidr,
       peering_env_to_mgmt_name, peering_mgmt_to_env_name,
-      node_asg_name, nsg_pe_name, cluster_slot_capacity}`. Legacy
-      `networking` output (BYO subnet ids) retained for pre-Phase-C
-      callsites; to be removed when bootstrap roots rewire.
+      node_asg_name, nsg_pe_name, cluster_slot_capacity}`. 2026-04-20
+      (Phase C): legacy `networking` output (BYO per-service subnet
+      ids, all null after Phase B) replaced by `networking_central`
+      exposing `hub_resource_id` + four `privatelink.*` PDZ ids
+      (blob, vaultcore, azurecr, grafana). Test suite kept at 8
+      runs; one now exercises `networking_central` passthrough.
 
 ## Next likely units of work
 

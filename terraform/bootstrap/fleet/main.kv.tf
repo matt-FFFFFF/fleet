@@ -57,16 +57,14 @@ resource "azapi_resource" "fleet_kv" {
   }
 
   response_export_values = ["id", "properties.vaultUri"]
-
-  lifecycle {
-    precondition {
-      condition     = local.networking.fleet_kv_pe_subnet_id != null && local.networking.fleet_kv_pe_subnet_id != ""
-      error_message = "networking.fleet_kv.private_endpoint.subnet_id must be set in clusters/_fleet.yaml before applying bootstrap/fleet. See docs/adoption.md §5.1."
-    }
-  }
 }
 
 # --- Private endpoint --------------------------------------------------------
+#
+# Lands in the mgmt VNet's `snet-pe-shared` subnet (repo-owned, created by
+# main.network.tf via the sub-vending module; PLAN §3.4). A-record
+# registers in the adopter-owned central `privatelink.vaultcore.azure.net`
+# zone from `networking.private_dns_zones.vaultcore`.
 
 resource "azapi_resource" "fleet_kv_pe" {
   type      = "Microsoft.Network/privateEndpoints@2023-11-01"
@@ -77,7 +75,7 @@ resource "azapi_resource" "fleet_kv_pe" {
   body = {
     properties = {
       subnet = {
-        id = local.networking.fleet_kv_pe_subnet_id
+        id = local.snet_pe_shared_id
       }
       privateLinkServiceConnections = [
         {
@@ -95,8 +93,6 @@ resource "azapi_resource" "fleet_kv_pe" {
 }
 
 resource "azapi_resource" "fleet_kv_pe_dns_zone_group" {
-  count = local.networking.fleet_kv_pe_dns_zone_id != null && local.networking.fleet_kv_pe_dns_zone_id != "" ? 1 : 0
-
   type      = "Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01"
   name      = "default"
   parent_id = azapi_resource.fleet_kv_pe.id
@@ -107,7 +103,7 @@ resource "azapi_resource" "fleet_kv_pe_dns_zone_group" {
         {
           name = "privatelink-vaultcore-azure-net"
           properties = {
-            privateDnsZoneId = local.networking.fleet_kv_pe_dns_zone_id
+            privateDnsZoneId = local.networking_central.pdz_vaultcore
           }
         }
       ]

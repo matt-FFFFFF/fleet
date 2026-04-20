@@ -42,30 +42,21 @@ locals {
     fleet_kv_location       = try(var.fleet_doc.keyvault.location, local.fleet.primary_region)
   }
 
-  # Private-networking identifiers. All try-guarded so older / partial
-  # `_fleet.yaml` docs (pre-networking-schema) remain parseable — an
-  # adopter fills these in before the relevant apply. The rendered yaml
-  # ships these fields as `null` with a TODO comment (see
-  # init/templates/_fleet.yaml.tftpl) so downstream `!= null && != ""`
-  # preconditions catch "adopter forgot to fill this in" with a single
-  # check.
+  # Central adopter-owned networking inputs — the hub VNet the repo peers
+  # to and the four central `privatelink.*` private DNS zones used for
+  # PE A-record registration. All BYO; referenced by resource id only.
+  # `try()`-guarded so older / partial `_fleet.yaml` docs stay parseable;
+  # downstream callsites assert non-null with `precondition` blocks.
   #
-  # NOTE (PLAN §3.4). Legacy BYO subnet ids
-  # (`networking.{tfstate,fleet_kv,runner}.*`) are being replaced by
-  # repo-owned VNets derived from `networking.vnets.mgmt` and
-  # `networking.envs.<env>.regions.<region>`. The legacy fields remain
-  # exposed here for pre-Phase-B consumers (`bootstrap/fleet`'s current
-  # `main.state.tf` / `main.runner.tf` / `main.fleet-kv.tf`) and will
-  # disappear in Phase C/D when those callsites rewire to
-  # `networking_derived` below.
-  networking = {
-    tfstate_pe_subnet_id           = try(var.fleet_doc.networking.tfstate.private_endpoint.subnet_id, null)
-    tfstate_pe_private_dns_zone_id = try(var.fleet_doc.networking.tfstate.private_endpoint.private_dns_zone_id, null)
-    runner_subnet_id               = try(var.fleet_doc.networking.runner.subnet_id, null)
-    runner_acr_pe_subnet_id        = try(var.fleet_doc.networking.runner.container_registry_pe_subnet_id, null)
-    runner_acr_dns_zone_id         = try(var.fleet_doc.networking.runner.container_registry_private_dns_zone_id, null)
-    fleet_kv_pe_subnet_id          = try(var.fleet_doc.networking.fleet_kv.private_endpoint.subnet_id, null)
-    fleet_kv_pe_dns_zone_id        = try(var.fleet_doc.networking.fleet_kv.private_endpoint.private_dns_zone_id, null)
+  # PLAN §3.4: this is the Phase-B schema. Pre-Phase-B BYO per-service
+  # subnet ids (`networking.{tfstate,fleet_kv,runner}.*`) are gone —
+  # those subnets are now owned by this repo via `networking_derived`.
+  networking_central = {
+    hub_resource_id = try(var.fleet_doc.networking.hub.resource_id, null)
+    pdz_blob        = try(var.fleet_doc.networking.private_dns_zones.blob, null)
+    pdz_vaultcore   = try(var.fleet_doc.networking.private_dns_zones.vaultcore, null)
+    pdz_azurecr     = try(var.fleet_doc.networking.private_dns_zones.azurecr, null)
+    pdz_grafana     = try(var.fleet_doc.networking.private_dns_zones.grafana, null)
   }
 
   # -- Repo-owned VNet topology (PLAN §3.4) -----------------------------------

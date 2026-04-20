@@ -181,7 +181,12 @@ resource "azapi_resource" "amg_pe" {
 
   body = {
     properties = {
-      subnet = { id = local.environment.networking.grafana_pe_subnet_id }
+      # TODO(PLAN §3.4 Phase D): rewire to the derived snet-pe-env
+      # subnet authored by main.network.tf in this stage (once Phase D
+      # lands). The yaml no longer carries `environment.networking.*`
+      # BYO fields (removed in Phase B); `try(..., null)` keeps this
+      # file parseable until Phase D rewrites the block.
+      subnet = { id = try(local.environment.networking.grafana_pe_subnet_id, null) }
       privateLinkServiceConnections = [{
         name = "amg"
         properties = {
@@ -204,7 +209,12 @@ resource "azapi_resource" "pdns_grafana" {
 }
 
 resource "azapi_resource" "pdns_grafana_links" {
-  for_each = toset(local.environment.networking.grafana_pe_linked_vnet_ids)
+  # TODO(PLAN §3.4 Phase D): drop the per-env privatelink.grafana.azure.com
+  # zone and rewire the Grafana PE to register into the central
+  # `networking.private_dns_zones.grafana` zone instead (linked from
+  # the mgmt + env VNets). Until that lands, `try(..., [])` keeps the
+  # file parseable (the yaml no longer carries the BYO link list).
+  for_each = toset(try(local.environment.networking.grafana_pe_linked_vnet_ids, []))
 
   type      = "Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01"
   name      = "link-${basename(each.value)}"

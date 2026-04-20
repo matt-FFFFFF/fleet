@@ -65,18 +65,17 @@ run "defaults_derive_names_per_naming_contract" {
     error_message = "Fleet KV must default its location to fleet.primary_region when keyvault.location is absent."
   }
 
-  # All networking.* default to null when _fleet.yaml has no networking block.
+  # All networking_central.* default to null when _fleet.yaml has no
+  # networking block (PLAN §3.4 post-Phase-B shape).
   assert {
     condition = alltrue([
-      output.networking.tfstate_pe_subnet_id == null,
-      output.networking.tfstate_pe_private_dns_zone_id == null,
-      output.networking.runner_subnet_id == null,
-      output.networking.runner_acr_pe_subnet_id == null,
-      output.networking.runner_acr_dns_zone_id == null,
-      output.networking.fleet_kv_pe_subnet_id == null,
-      output.networking.fleet_kv_pe_dns_zone_id == null,
+      output.networking_central.hub_resource_id == null,
+      output.networking_central.pdz_blob == null,
+      output.networking_central.pdz_vaultcore == null,
+      output.networking_central.pdz_azurecr == null,
+      output.networking_central.pdz_grafana == null,
     ])
-    error_message = "All networking.* identifiers must be null when fleet_doc.networking is absent."
+    error_message = "All networking_central.* identifiers must be null when fleet_doc.networking is absent."
   }
 
   assert {
@@ -200,9 +199,9 @@ run "truncation_enforces_24_char_ceiling" {
   }
 }
 
-# ---- networking passthrough: values are exposed verbatim when present ------
+# ---- networking_central passthrough: values exposed verbatim when present --
 
-run "networking_passthrough_when_populated" {
+run "networking_central_passthrough_when_populated" {
   command = apply
 
   variables {
@@ -226,22 +225,14 @@ run "networking_passthrough_when_populated" {
         containers                    = { fleet = "tfstate-fleet" }
       }
       networking = {
-        tfstate = {
-          private_endpoint = {
-            subnet_id           = "/subscriptions/s/resourceGroups/r/providers/Microsoft.Network/virtualNetworks/v/subnets/pe-state"
-            private_dns_zone_id = "/subscriptions/s/resourceGroups/r/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
-          }
+        hub = {
+          resource_id = "/subscriptions/hhh/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-eastus"
         }
-        runner = {
-          subnet_id                              = "/subscriptions/s/.../subnets/runner-aca"
-          container_registry_pe_subnet_id        = "/subscriptions/s/.../subnets/runner-acr-pe"
-          container_registry_private_dns_zone_id = "/subscriptions/s/.../privateDnsZones/privatelink.azurecr.io"
-        }
-        fleet_kv = {
-          private_endpoint = {
-            subnet_id           = "/subscriptions/s/.../subnets/pe-kv"
-            private_dns_zone_id = "/subscriptions/s/.../privateDnsZones/privatelink.vaultcore.azure.net"
-          }
+        private_dns_zones = {
+          blob      = "/subscriptions/hhh/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+          vaultcore = "/subscriptions/hhh/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+          azurecr   = "/subscriptions/hhh/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.azurecr.io"
+          grafana   = "/subscriptions/hhh/resourceGroups/rg-dns/providers/Microsoft.Network/privateDnsZones/privatelink.grafana.azure.com"
         }
       }
       github_app = {
@@ -255,13 +246,18 @@ run "networking_passthrough_when_populated" {
   }
 
   assert {
-    condition     = endswith(output.networking.tfstate_pe_subnet_id, "/subnets/pe-state")
-    error_message = "networking.tfstate.private_endpoint.subnet_id must pass through verbatim."
+    condition     = endswith(output.networking_central.hub_resource_id, "/virtualNetworks/vnet-hub-eastus")
+    error_message = "networking.hub.resource_id must pass through verbatim."
   }
 
   assert {
-    condition     = output.networking.runner_subnet_id != null && output.networking.runner_acr_dns_zone_id != null
-    error_message = "networking.runner.* must pass through when populated."
+    condition     = endswith(output.networking_central.pdz_blob, "privatelink.blob.core.windows.net")
+    error_message = "networking.private_dns_zones.blob must pass through verbatim."
+  }
+
+  assert {
+    condition     = output.networking_central.pdz_vaultcore != null && output.networking_central.pdz_azurecr != null && output.networking_central.pdz_grafana != null
+    error_message = "All four private_dns_zones.* must pass through when populated."
   }
 
   assert {

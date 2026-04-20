@@ -25,6 +25,15 @@ terraform {
       source  = "integrations/github"
       version = "~> 6.11"
     }
+    # `modtm` is required by the `Azure/avm-ptn-alz-sub-vending/azure`
+    # module (see main.network.tf). Telemetry is disabled at the module
+    # call site (`enable_telemetry = false`), but the provider must still
+    # be declared here because Terraform requires every provider any
+    # child module references to be resolvable by the root.
+    modtm = {
+      source  = "Azure/modtm"
+      version = "~> 0.3"
+    }
     random = {
       source  = "hashicorp/random"
       version = "~> 3.8"
@@ -66,3 +75,9 @@ provider "github" {
   # repo:admin scope) before running. This token is used only for the
   # initial repo + GH App install; all downstream CI uses OIDC.
 }
+
+# Telemetry provider used transitively by the sub-vending module; every
+# module call site sets `enable_telemetry = false` so this provider
+# collects nothing. An empty block satisfies Terraform's requirement to
+# configure every declared provider.
+provider "modtm" {}

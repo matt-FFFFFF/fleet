@@ -8,9 +8,9 @@ output "derived" {
   value       = local.derived
 }
 
-output "networking" {
-  description = "Try-guarded private-networking identifiers from fleet_doc.networking.*. Values may be null. Pre-§3.4-topology BYO subnet ids; being phased out as bootstrap/{fleet,environment} rewire to `networking_derived`."
-  value       = local.networking
+output "networking_central" {
+  description = "Adopter-BYO central networking: hub VNet resource id + four `privatelink.*` private DNS zone ids (blob, vaultcore, azurecr, grafana). Values may be null when absent from `_fleet.yaml`; downstream callsites precondition non-null."
+  value       = local.networking_central
 }
 
 output "networking_derived" {

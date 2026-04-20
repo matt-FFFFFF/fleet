@@ -243,6 +243,13 @@ locals {
     TFSTATE_STORAGE_ACCOUNT = local.derived.state_storage_account
     TFSTATE_RESOURCE_GROUP  = local.derived.state_resource_group
     FLEET_NAME              = local.fleet.name
+    # PLAN §3.4: mgmt VNet resource id is consumed by
+    # `bootstrap/environment` (reverse half of every mgmt↔env peering
+    # is authored there via the peering AVM submodule with
+    # create_reverse_peering=true) and by stages/1-cluster (cluster
+    # DNS zone VNet links [env_vnet, mgmt_vnet]). Published here so
+    # downstream workflows read it as `${{ vars.MGMT_VNET_RESOURCE_ID }}`.
+    MGMT_VNET_RESOURCE_ID = local.mgmt_vnet_id
   }
 }
 

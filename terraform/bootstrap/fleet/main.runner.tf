@@ -58,39 +58,17 @@ resource "azapi_resource" "runner_uami" {
 #
 # The vendored module's own input validation fires late (inside child
 # submodules). We want a single, early, _fleet.yaml-anchored error
-# message when required runner networking IDs or GH App identifiers
-# are missing. Mirrors the precondition pattern used on the tfstate PE
-# in main.state.tf.
+# message when the GH App identifiers are missing. Networking inputs
+# (mgmt VNet address_space, hub id, central PDZs) are pre-checked by
+# `terraform_data.network_preconditions` in main.network.tf.
 
 resource "terraform_data" "runner_preconditions" {
   input = {
-    runner_subnet_id        = local.networking.runner_subnet_id
-    runner_acr_pe_subnet_id = local.networking.runner_acr_pe_subnet_id
-    runner_acr_dns_zone_id  = local.networking.runner_acr_dns_zone_id
-    fleet_kv_pe_subnet_id   = local.networking.fleet_kv_pe_subnet_id
-    app_id                  = local.github_app_fleet_runners.app_id
-    installation_id         = local.github_app_fleet_runners.installation_id
+    app_id          = local.github_app_fleet_runners.app_id
+    installation_id = local.github_app_fleet_runners.installation_id
   }
 
   lifecycle {
-    precondition {
-      # Reject null / empty / legacy `<...>` sentinel / anything that isn't
-      # a /subscriptions/... resource id. See main.state.tf for rationale.
-      condition     = local.networking.runner_subnet_id != null && local.networking.runner_subnet_id != "" && !startswith(local.networking.runner_subnet_id, "<") && startswith(local.networking.runner_subnet_id, "/subscriptions/")
-      error_message = "clusters/_fleet.yaml: networking.runner.subnet_id is unset, still a `<...>` placeholder, or not a /subscriptions/... resource id. Replace it with the full /subscriptions/.../subnets/<name> id of the runner ACA subnet. See docs/adoption.md §3 + §5.1."
-    }
-    precondition {
-      condition     = local.networking.runner_acr_pe_subnet_id != null && local.networking.runner_acr_pe_subnet_id != "" && !startswith(local.networking.runner_acr_pe_subnet_id, "<") && startswith(local.networking.runner_acr_pe_subnet_id, "/subscriptions/")
-      error_message = "clusters/_fleet.yaml: networking.runner.container_registry_pe_subnet_id is unset, still a `<...>` placeholder, or not a /subscriptions/... resource id. Replace it with the full subnet id for the runner ACR private endpoint. See docs/adoption.md §3 + §5.1."
-    }
-    precondition {
-      condition     = local.networking.runner_acr_dns_zone_id != null && local.networking.runner_acr_dns_zone_id != "" && !startswith(local.networking.runner_acr_dns_zone_id, "<") && startswith(local.networking.runner_acr_dns_zone_id, "/subscriptions/")
-      error_message = "clusters/_fleet.yaml: networking.runner.container_registry_private_dns_zone_id is unset, still a `<...>` placeholder, or not a /subscriptions/... resource id. Replace it with the resource id of the central privatelink.azurecr.io zone. See docs/adoption.md §3 + §5.1."
-    }
-    precondition {
-      condition     = local.networking.fleet_kv_pe_subnet_id != null && local.networking.fleet_kv_pe_subnet_id != "" && !startswith(local.networking.fleet_kv_pe_subnet_id, "<") && startswith(local.networking.fleet_kv_pe_subnet_id, "/subscriptions/")
-      error_message = "clusters/_fleet.yaml: networking.fleet_kv.private_endpoint.subnet_id is unset, still a `<...>` placeholder, or not a /subscriptions/... resource id. Replace it with the full subnet id that will host the fleet Key Vault private endpoint. See docs/adoption.md §3 + §5.1."
-    }
     precondition {
       # GitHub App IDs are numeric strings from GitHub, not ARM ids. Coerce
       # to string before checking so unquoted YAML numeric scalars work too
@@ -143,18 +121,19 @@ module "runner" {
 
   # Networking --------------------------------------------------------------
   #
-  # BYO central DNS: the `privatelink.azurecr.io` zone pre-exists (typically
-  # in the hub connectivity sub, symmetric with the tfstate PE's
-  # `privatelink.blob.core.windows.net`). We tell the module NOT to create
-  # a zone, and point it at the central one so the PE's DNS zone group
-  # registers the A record there. No VNet→zone link is created by this
-  # module, and therefore no `virtual_network_id` input is required.
+  # All three subnet / zone references land in repo-owned infrastructure
+  # authored by main.network.tf (PLAN §3.4):
+  #   - container_app_subnet_id                    → snet-runners in mgmt VNet
+  #   - container_registry_private_endpoint_subnet → snet-pe-shared in mgmt VNet
+  #   - container_registry_dns_zone_id             → adopter-BYO
+  #                                                   privatelink.azurecr.io
+  #                                                   from networking.private_dns_zones.azurecr
   use_private_networking                               = true
   virtual_network_creation_enabled                     = false
-  container_app_subnet_id                              = local.networking.runner_subnet_id
-  container_registry_private_endpoint_subnet_id        = local.networking.runner_acr_pe_subnet_id
+  container_app_subnet_id                              = local.snet_runners_id
+  container_registry_private_endpoint_subnet_id        = local.snet_pe_shared_id
   container_registry_private_dns_zone_creation_enabled = false
-  container_registry_dns_zone_id                       = local.networking.runner_acr_dns_zone_id
+  container_registry_dns_zone_id                       = local.networking_central.pdz_azurecr
 
   # Hub firewall handles egress via UDR on the runner subnet; no NAT or
   # public IP owned by this module.

@@ -95,13 +95,11 @@ resource "azapi_resource" "state_container_fleet" {
 
 # -----------------------------------------------------------------------------
 # Private endpoint for the blob sub-resource of the tfstate storage account.
-# The PE subnet is expected to live in rg-fleet-shared (or the hub) and is
-# referenced by id from _fleet.yaml.networking.tfstate.private_endpoint.
-#
-# When networking.tfstate.private_endpoint.private_dns_zone_id is set, a
-# privateDnsZoneGroups child resource registers the PE's A-record in the
-# central privatelink.blob.core.windows.net zone; otherwise the adopter is
-# responsible for DNS.
+# The PE lands in the mgmt VNet's `snet-pe-shared` subnet (repo-owned,
+# created by main.network.tf via the sub-vending module; PLAN §3.4).
+# The A-record registers in the adopter-owned central
+# `privatelink.blob.core.windows.net` zone from
+# `networking.private_dns_zones.blob`.
 # -----------------------------------------------------------------------------
 
 resource "azapi_resource" "state_pe" {
@@ -113,7 +111,7 @@ resource "azapi_resource" "state_pe" {
   body = {
     properties = {
       subnet = {
-        id = local.networking.tfstate_pe_subnet_id
+        id = local.snet_pe_shared_id
       }
       privateLinkServiceConnections = [
         {
@@ -128,23 +126,9 @@ resource "azapi_resource" "state_pe" {
   }
 
   response_export_values = ["id"]
-
-  lifecycle {
-    precondition {
-      # Reject null / empty / legacy `<...>` sentinel / anything that isn't
-      # a recognisable ARM resource id. The shape check catches adopters
-      # upgrading from the old template who left `<resource-id>` verbatim —
-      # without it the azurerm/azapi providers fail much later with a cryptic
-      # "parsing the Subnet ID: segments didn't match" dump.
-      condition     = local.networking.tfstate_pe_subnet_id != null && local.networking.tfstate_pe_subnet_id != "" && !startswith(local.networking.tfstate_pe_subnet_id, "<") && startswith(local.networking.tfstate_pe_subnet_id, "/subscriptions/")
-      error_message = "clusters/_fleet.yaml: networking.tfstate.private_endpoint.subnet_id is unset, still a `<...>` placeholder, or not a /subscriptions/... resource id. Replace it with the full /subscriptions/.../subnets/<name> id of the subnet that will host the tfstate storage account's private endpoint. See docs/adoption.md §3 + §5.1."
-    }
-  }
 }
 
 resource "azapi_resource" "state_pe_dns_zone_group" {
-  count = local.networking.tfstate_pe_private_dns_zone_id != null && local.networking.tfstate_pe_private_dns_zone_id != "" ? 1 : 0
-
   type      = "Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01"
   name      = "default"
   parent_id = azapi_resource.state_pe.id
@@ -155,7 +139,7 @@ resource "azapi_resource" "state_pe_dns_zone_group" {
         {
           name = "privatelink-blob-core-windows-net"
           properties = {
-            privateDnsZoneId = local.networking.tfstate_pe_private_dns_zone_id
+            privateDnsZoneId = local.networking_central.pdz_blob
           }
         }
       ]

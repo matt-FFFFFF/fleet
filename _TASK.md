@@ -143,34 +143,73 @@
 
 ## Phase C — `bootstrap/fleet` mgmt VNet
 
-- [ ] `terraform/bootstrap/fleet/main.network.tf` (new):
-  - `module "mgmt_vnet"` → sub-vending, N=1, no mesh,
-    `hub_peering_enabled = true`,
+- [x] `terraform/bootstrap/fleet/main.network.tf` (new):
+  - `module "mgmt_network"` → sub-vending `~> 0.2`,
+    `subscription_alias_enabled = false` + explicit `subscription_id`
+    (we run against the already-bootstrapped shared sub), N=1,
+    `hub_peering_enabled = true` (direction = both) pointed at
+    `networking.hub.resource_id`,
     `enable_telemetry = false`.
-  - NSGs `nsg-pe-shared` + `nsg-runners` authored via the module's
-    NSG input (preferred) or as sibling `azapi_resource`s.
-  - `rg-net-mgmt` resource group.
-  - `azapi_resource` role assignment: `Network Contributor` on the
-    mgmt VNet resource id → `fleet-meta` UAMI.
-- [ ] Rewire existing PE/ACA consumers to derived subnet outputs:
-  - `main.state.tf` — tfstate SA PE parent subnet.
-  - `main.fleet-kv.tf` (or wherever the fleet KV PE lives) — fleet
-    KV PE parent subnet.
-  - `main.acr.tf` / wherever the fleet ACR PE lives (if one exists
-    in this stage; otherwise remains in Stage 0).
-  - `main.runner.tf` — ACA runner subnet id passed to the runner
-    module.
-- [ ] `providers.tf` / `versions.tf`: add `random` and `modtm`
-      provider declarations required by the sub-vending module
-      (inspect module's `required_providers` block to confirm
-      exact list; add only what's missing).
-- [ ] `outputs.tf`: add `mgmt_vnet_resource_id` (published to repo
-      vars by the Stage 0 workflow as `MGMT_VNET_RESOURCE_ID` —
-      passthrough, no Stage 0 code needed beyond the output list).
-  - Alternative if simpler: output from Stage 0 via a passthrough
-    data source, since Stage 0 already owns the publish pipeline.
-    Decide at implementation time; update the §4 Stage 0 outputs
-    table in PLAN if the former.
+  - Two NSGs (`nsg-pe-shared` + `nsg-runners`) authored via the
+    module's `network_security_groups` + subnet `key_reference` input;
+    `security_rules = {}` — PE subnets need no explicit ingress,
+    runner subnet egress-only via hub UDR.
+  - RG `rg-net-mgmt` created via module (`resource_group_creation_enabled = true`).
+  - Runner subnet carries ACA delegation (`Microsoft.App/environments`).
+  - Subnet resource ids synthesised as `<vnet-id>/subnets/<name>`
+    (the sub-vending module does not emit subnet ids directly).
+  - `azapi_resource` role assignment: **Network Contributor** on the
+    mgmt VNet id → `fleet-meta` UAMI principal, so
+    `bootstrap/environment` can author the reverse half of every
+    mgmt↔env peering via `create_reverse_peering = true`.
+  - Early `terraform_data.network_preconditions` rejects null / `<...>`
+    / wrong-suffix values for hub resource id + the three central
+    PDZ ids (blob, vaultcore, azurecr) + mgmt address_space, with
+    yaml-anchored error messages.
+- [x] Rewire existing PE/ACA consumers to derived subnet outputs:
+  - `main.state.tf` — tfstate SA PE parent subnet → `local.snet_pe_shared_id`;
+    DNS zone group now unconditional, targeting `networking_central.pdz_blob`.
+  - `main.kv.tf` — fleet KV PE parent subnet → `local.snet_pe_shared_id`;
+    DNS zone group unconditional → `networking_central.pdz_vaultcore`;
+    dropped the legacy `fleet_kv_pe_subnet_id` precondition (now
+    handled centrally in `main.network.tf`).
+  - `main.runner.tf` — `container_app_subnet_id = local.snet_runners_id`,
+    `container_registry_private_endpoint_subnet_id = local.snet_pe_shared_id`,
+    `container_registry_dns_zone_id = networking_central.pdz_azurecr`;
+    runner preconditions trimmed to GH-App identifiers only
+    (networking prechecks live in `main.network.tf`).
+  - Fleet ACR PE: deferred — Stage 0 owns the ACR, so the rewire
+    lands when Stage 0 is next touched. Captured as TODO in STATUS §4
+    Stage 0.
+- [x] `providers.tf`: added `modtm ~> 0.3` (sub-vending dependency)
+      with an empty `provider "modtm" {}` block; `azapi ~> 2.9` and
+      `random ~> 3.8` already satisfy sub-vending's `~> 2.5` / `~> 3.5`.
+- [x] `outputs.tf`: added `mgmt_vnet_resource_id`,
+      `mgmt_snet_pe_shared_id`, `mgmt_snet_runners_id`.
+- [x] `main.github.tf`: added `MGMT_VNET_RESOURCE_ID = local.mgmt_vnet_id`
+      to `meta_env_vars` — published as a repo-environment variable on
+      the `fleet-meta` GitHub Environment, consumed by
+      `bootstrap/environment` (reverse peering) and stages/1-cluster
+      (cluster DNS zone VNet links). **Resolves the first open question
+      in favour of option (b)** (publish directly from `bootstrap/fleet`);
+      Stage 0 passthrough not needed — the variable is written by the
+      stage that creates the VNet, which is simpler than routing it
+      through Stage 0. PLAN §4 Stage 0 outputs table unchanged.
+- [x] `modules/fleet-identity`: replaced legacy `networking` output
+      (BYO per-service subnet ids, all null after Phase B) with
+      `networking_central` — `hub_resource_id` + four PDZ ids
+      (`blob`, `vaultcore`, `azurecr`, `grafana`). 8/8 tests pass.
+- [x] `bootstrap/environment/main.observability.tf`: `try(...)`-
+      guarded the two legacy references to
+      `environment.networking.grafana_pe_*` so the file still parses;
+      **TODO comments** flag both call sites for Phase D rewiring
+      (swap Grafana PE onto derived `snet-pe-env`; drop per-env zone
+      for central `networking.private_dns_zones.grafana`).
+- Verified: `terraform fmt -recursive` clean; `terraform validate`
+  passes on `bootstrap/{fleet,environment}` after rendering
+  `_fleet.yaml` from the CI fixture; `tflint --recursive` clean;
+  `terraform test -test-directory=tests/unit` — `fleet-identity` 8/8
+  pass, `init/` 30/30 pass.
 
 ## Phase D — `bootstrap/environment` env VNets + peerings + ASG
 
@@ -299,15 +338,10 @@
 
 ## Open questions to resolve in-flight
 
-- [ ] `MGMT_VNET_RESOURCE_ID` publish path — Phase C captures the
-      value in `bootstrap/fleet` outputs, but the repo-variable
-      publisher is the Stage 0 workflow. Either (a) add the
-      variable to Stage 0's publish list as a passthrough via a
-      small `azapi_resource_action` / data-source read, or (b) add
-      a one-off step in the `bootstrap/fleet` local flow +
-      `fleet-meta` workflow to `gh api PUT` the var directly. Prefer
-      (a) for consistency with existing Stage 0 outputs; spec
-      accordingly when writing the code.
+- [x] ~~`MGMT_VNET_RESOURCE_ID` publish path~~ — **resolved** (Phase C):
+      published directly from `bootstrap/fleet`'s `main.github.tf` into
+      the `fleet-meta` GitHub Environment's variables (option b in the
+      original analysis). Stage 0 passthrough not needed.
 - [ ] `allow_public_state_during_bootstrap` — retest on live apply
       once the mgmt VNet PE flow is in place. If PE-first from
       commit 0 works, simplify; else keep as-is.
