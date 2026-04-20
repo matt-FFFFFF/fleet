@@ -173,3 +173,25 @@ module "apps_pool" {
 
   depends_on = [module.aks]
 }
+
+# --- Optional scheduled maintenance window ---------------------------------
+#
+# Authored via the sibling `modules/maintenanceconfiguration` AVM
+# submodule; `parent_id` points at the cluster and an explicit
+# `depends_on` defers submission until the cluster is ready. Named
+# `default` so it binds to the `aksManagedAutoUpgradeSchedule`
+# configuration AKS consumes for control-plane + node-image auto
+# upgrades (governed by `auto_upgrade_profile` above).
+
+module "maintenance" {
+  source  = "Azure/avm-res-containerservice-managedcluster/azurerm//modules/maintenanceconfiguration"
+  version = "~> 0.5"
+
+  count = var.maintenance_window == null ? 0 : 1
+
+  name               = "aksManagedAutoUpgradeSchedule"
+  parent_id          = module.aks.resource_id
+  maintenance_window = var.maintenance_window
+
+  depends_on = [module.aks]
+}

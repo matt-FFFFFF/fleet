@@ -8,7 +8,10 @@
 # new knob means editing this file — there is no freeform `extra` /
 # `passthrough` escape hatch by design. Rationale: Phase E lands the
 # minimal set (version, SKU, autoscaler, auto-upgrade); expansion
-# happens commit-by-commit as real needs emerge.
+# happens commit-by-commit as real needs emerge. `maintenance_window`
+# was added as a follow-up and is authored via the sibling
+# `//modules/maintenanceconfiguration` AVM submodule (same pattern as
+# the additional-agent-pool submodule).
 #
 # Hard-coded (NOT variables):
 #   - `oidc_issuer_profile.enabled = true`      — Stage 2 FICs require it.
@@ -113,6 +116,74 @@ variable "auto_upgrade_profile" {
     node_os_upgrade_channel = optional(string)
   })
   default = null
+}
+
+variable "maintenance_window" {
+  description = <<-EOT
+    Scheduled maintenance window for the managed cluster. Instantiated
+    via `Azure/avm-res-containerservice-managedcluster/azurerm//modules/maintenanceconfiguration`
+    when non-null (a single `aksManagedAutoUpgradeSchedule` configuration
+    named `default` is authored under the cluster). Null skips creation.
+
+    Shape mirrors the AVM submodule's typed input exactly — see the
+    submodule README for field semantics. From `kubernetes.maintenance`
+    in the merged cluster yaml. Exactly one of `schedule.{daily, weekly,
+    absolute_monthly, relative_monthly}` must be set; `duration_hours`
+    must be 4-24; `start_time` is `HH:MM`; `utc_offset` is `+/-HH:MM`.
+  EOT
+  type = object({
+    duration_hours = number
+    not_allowed_dates = optional(list(object({
+      end   = string
+      start = string
+    })))
+    schedule = object({
+      absolute_monthly = optional(object({
+        day_of_month    = number
+        interval_months = number
+      }))
+      daily = optional(object({
+        interval_days = number
+      }))
+      relative_monthly = optional(object({
+        day_of_week     = string
+        interval_months = number
+        week_index      = string
+      }))
+      weekly = optional(object({
+        day_of_week    = string
+        interval_weeks = number
+      }))
+    })
+    start_date = optional(string)
+    start_time = string
+    utc_offset = optional(string)
+  })
+  default = null
+
+  validation {
+    condition     = var.maintenance_window == null || (var.maintenance_window.duration_hours >= 4 && var.maintenance_window.duration_hours <= 24)
+    error_message = "maintenance_window.duration_hours must be between 4 and 24 inclusive."
+  }
+  validation {
+    condition     = var.maintenance_window == null || can(regex("^\\d{2}:\\d{2}$", var.maintenance_window.start_time))
+    error_message = "maintenance_window.start_time must match HH:MM (e.g. 02:00)."
+  }
+  validation {
+    condition     = var.maintenance_window == null || var.maintenance_window.utc_offset == null || can(regex("^(-|\\+)[0-9]{2}:[0-9]{2}$", var.maintenance_window.utc_offset))
+    error_message = "maintenance_window.utc_offset must match +/-HH:MM (e.g. +00:00)."
+  }
+  validation {
+    condition = var.maintenance_window == null || length([
+      for k, v in {
+        absolute_monthly = var.maintenance_window.schedule.absolute_monthly
+        daily            = var.maintenance_window.schedule.daily
+        relative_monthly = var.maintenance_window.schedule.relative_monthly
+        weekly           = var.maintenance_window.schedule.weekly
+      } : k if v != null
+    ]) == 1
+    error_message = "maintenance_window.schedule must have exactly one of {daily, weekly, absolute_monthly, relative_monthly} set."
+  }
 }
 
 # --- Node pool inputs ------------------------------------------------------
