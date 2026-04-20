@@ -361,19 +361,18 @@ Design additions landed with this phase:
 
 ## Phase F — PR-check (validate.yaml)
 
-- [ ] `.github/scripts/validate-subnet-slots.sh` (new):
-  1. Glob `clusters/*/*/*/cluster.yaml`.
-  2. Assert `networking.subnet_slot` is present and an integer.
-  3. Compute VNet capacity per `<env>-<region>` from
-     `_fleet.yaml.networking.envs.<env>.regions.<region>.address_space`
-     (via `yq` + a tiny python CIDR helper).
-  4. Assert slot in `[0, capacity-1]`.
-  5. Assert uniqueness per `(env, region)`.
-  6. On a PR, `git show main:<path>/cluster.yaml` for each changed
-     file and assert `subnet_slot` did not change (immutability);
-     hard-fail if it did with a pointer to the re-create migration
-     path.
-- [ ] Hook into `validate.yaml` as a required check.
+- [x] `.github/scripts/validate-subnet-slots.sh` (landed 2026-04-20):
+  1. Globs `clusters/*/*/*/cluster.yaml`.
+  2. Asserts `networking.subnet_slot` presence + non-negative integer.
+  3. Reads env-region `address_space` from `_fleet.yaml`; derives
+     capacity via pure-bash `min(16, 2*(2^(24-N)-2))` (parity with
+     `modules/fleet-identity/main.tf` L138; no python).
+  4. Asserts slot ∈ `[0, capacity-1]`.
+  5. Asserts uniqueness per `(env, region)`.
+  6. `BASE_REF` (PR mode) triggers `git show <base>:<path>`
+     immutability compare; in-place slot change hard-fails with a
+     pointer to the re-create migration path.
+- [x] Hook into `validate.yaml` as a required check (landed 2026-04-20).
 
 ## Phase G — Docs
 

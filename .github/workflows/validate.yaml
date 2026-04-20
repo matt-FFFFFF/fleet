@@ -1,0 +1,75 @@
+name: validate
+
+# Light-weight structural checks on every PR. Today this covers
+# `networking.subnet_slot` sanity (PLAN §3.4 Phase F): presence,
+# integer-ness, range within the env-region VNet's capacity,
+# uniqueness per (env, region), and immutability across a PR. The
+# workflow is deliberately cheap — no Azure credentials, no
+# `terraform plan` — so it can be made a required status check
+# without gating on cloud-side flakiness.
+#
+# Keep this workflow template-side: adopters inherit it via the
+# template clone and need the same checks on their cluster inventory.
+# Unlike `status-check.yaml` / `template-selftest.yaml` it is NOT
+# deleted by `init-fleet.sh`.
+
+on:
+  pull_request:
+    paths:
+      - 'clusters/**'
+      - 'init/**'
+      - '.github/scripts/validate-subnet-slots.sh'
+      - '.github/workflows/validate.yaml'
+      - '.github/fixtures/adopter-test.tfvars'
+  push:
+    branches: [main]
+    paths:
+      - 'clusters/**'
+      - '.github/scripts/validate-subnet-slots.sh'
+
+jobs:
+  subnet-slots:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the `BASE_REF` immutability check can
+          # `git show <base>:clusters/<env>/<region>/<name>/cluster.yaml`
+          # without partial-clone misses.
+          fetch-depth: 0
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.11.4
+          terraform_wrapper: false
+
+      # `clusters/_fleet.yaml` is a rendered byproduct (gitignored);
+      # re-render from the committed test fixture so the validator can
+      # read per-env-region `address_space` and derive capacities.
+      # Adopters' real `_fleet.yaml` IS committed, in which case this
+      # step is a no-op overwrite. We prefer the fixture in CI so the
+      # workflow is self-contained.
+      - name: Render clusters/_fleet.yaml from test fixture
+        working-directory: init
+        run: |
+          terraform init -backend=false
+          terraform apply -auto-approve \
+            -var-file=../.github/fixtures/adopter-test.tfvars \
+            -target=local_file.fleet_yaml
+
+      - name: Install yq
+        run: |
+          # ubuntu-24.04 already ships mikefarah/yq, but pin explicitly
+          # so failures are reproducible.
+          yq --version
+
+      - name: Validate subnet slots
+        env:
+          # BASE_REF is empty on push-to-main (no "base" for immutability
+          # comparison); the validator skips Rule 5 when unset. On PRs
+          # it's `origin/<base>` so the working-copy HEAD is compared
+          # against the PR's target branch.
+          BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
+        run: |
+          .github/scripts/validate-subnet-slots.sh

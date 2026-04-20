@@ -41,8 +41,9 @@ the RBAC follow-up will use the latter two. Verification: Stage 1 +
 both new modules `terraform validate` clean; `fleet-identity` 8/8 +
 `init/` 33/33 (was 30/30) tests green. Remaining Stage-1 surface
 (cluster KV, UAMIs, role assignments, managed Prometheus DCR/DCRA +
-rules, Kargo mgmt rotation) tracked in §4 Stage 1; Phase F (PR-check)
-+ Phase G (docs) + Phase H (cleanup) in `_TASK.md`.
+rules, Kargo mgmt rotation) tracked in §4 Stage 1; Phase G (docs) +
+Phase H (cleanup) in `_TASK.md`. Phase F landed 2026-04-20 — see
+`§4 Stage 1 / validate.yaml` below.
 
 Prior: Two-pool subnet layout (pre-Phase-E refactor) landed on
 `feat/networking-topology`. PLAN §3.4 rewrote the per-cluster CIDR
@@ -200,8 +201,9 @@ branch. Remaining implementation (Phases D–H) tracked in `_TASK.md`.
       fleet-unique) reserves a `/12`; per-cluster `/16` at
       `100.[64 + pod_cidr_slot*16 + subnet_slot].0.0/16`. Remaining:
       Stage-1 identity/RBAC surface (cluster KV, UAMIs, role
-      assignments, managed Prometheus, Kargo rotation), Phase F
-      PR-check, Phases G/H docs + cleanup. Tracked in `_TASK.md`.
+      assignments, managed Prometheus, Kargo rotation), Phases G/H
+      docs + cleanup. Tracked in `_TASK.md`. Phase F PR-check landed
+      2026-04-20 (see §4 Stage 1 / validate.yaml).
 - [x] Example clusters: `mgmt/eastus/aks-mgmt-01`,
       `nonprod/eastus/aks-nonprod-01` — networking blocks flipped to
       `subnet_slot: 0` (2026-04-20, Phase B); both in distinct env
@@ -421,9 +423,16 @@ branch. Remaining implementation (Phases D–H) tracked in `_TASK.md`.
       `<ENV>_<REGION>_{VNET,NODE_ASG}_RESOURCE_ID` into `TF_VAR_*`
       for each cluster leg. Today Stage 1 accepts them as ordinary
       tfvars; workflow piping is documentation-only until §10 lands.
-- [ ] `validate.yaml` PR-check: `subnet_slot` present, integer,
-      in-range, unique within env+region, immutable (change blocks
-      PR). PLAN §3.4 Phase F.
+- [x] `validate.yaml` PR-check (PLAN §3.4 Phase F, 2026-04-20):
+      `.github/scripts/validate-subnet-slots.sh` asserts `subnet_slot`
+      presence, non-negative-integer type, range `[0, capacity-1]`
+      derived from the env-region's `_fleet.yaml` `address_space`
+      (formula mirrors `modules/fleet-identity/main.tf` L138:
+      `min(16, 2 * (2^(24-N) - 2))`), uniqueness per `(env, region)`,
+      and immutability vs. the PR base ref. Rendered `_fleet.yaml`
+      (gitignored byproduct) is re-generated from
+      `.github/fixtures/adopter-test.tfvars` in the workflow so the
+      check is self-contained, no Azure credentials required.
 
 ### Stage 2 — `terraform/stages/2-bootstrap`
 

@@ -835,8 +835,13 @@ not worked-around.
 > (PR-check enforced). **Remaining Stage-1 surface** (cluster KV,
 > UAMIs, role assignments, managed Prometheus DCR/DCRA + rules,
 > Kargo mgmt rotation) deferred to an identity/RBAC follow-up;
-> tracked in STATUS §4 Stage 1. Full design in §3.4; PR-check +
-> docs + cleanup phases still tracked in `_TASK.md`.
+> tracked in STATUS §4 Stage 1. **Phase F landed 2026-04-20** —
+> `.github/scripts/validate-subnet-slots.sh` + `.github/workflows/validate.yaml`
+> enforce `subnet_slot` presence, integer type, `[0, capacity-1]`
+> range (capacity formula mirrors `modules/fleet-identity/main.tf`),
+> per-`(env, region)` uniqueness, and PR-base immutability. Full
+> design in §3.4; docs + cleanup phases (G, H) still tracked in
+> `_TASK.md`.
 
 ### Stage -1 — Bootstrap (`terraform/bootstrap/`)
 
