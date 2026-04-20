@@ -99,6 +99,7 @@ locals {
         region        = region_name
         address_space = try(region_block.address_space, null)
         location      = try(region_block.location, region_name)
+        pod_cidr_slot = try(region_block.pod_cidr_slot, null)
       }
     }
   ]...)
@@ -143,6 +144,18 @@ locals {
         # One ASG per env-region, shared by every cluster in the VNet.
         node_asg_name = "asg-nodes-${r.env}-${r.region}"
         nsg_pe_name   = "nsg-pe-env-${r.env}-${r.region}"
+        # CGNAT pod-CIDR slot passthrough (PLAN §3.4). The region
+        # reserves a /12 at 100.[64 + pod_cidr_slot*16].0.0/12 of
+        # 100.64.0.0/10; per-cluster /16s are derived downstream
+        # (config-loader/load.sh) as
+        #   100.[64 + pod_cidr_slot*16 + cluster.subnet_slot].0.0/16
+        # Null when the region block omits pod_cidr_slot (pre-Phase-B
+        # renders); downstream preconditions check non-null.
+        pod_cidr_slot = r.pod_cidr_slot
+        # Reserved /12 envelope for the region's pod space (for docs
+        # / diagnostics; not currently consumed directly by any
+        # callsite — clusters author /16s scoped to it).
+        pod_cidr_envelope = r.pod_cidr_slot == null ? null : "100.${64 + r.pod_cidr_slot * 16}.0.0/12"
       }
     }
   }

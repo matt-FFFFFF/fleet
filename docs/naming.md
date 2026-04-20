@@ -24,9 +24,12 @@ fields:
 - Optional overrides: `acr.name_override`, `keyvault.name_override`,
   `state.storage_account_name_override`.
 - For networking derivations (PLAN §3.4):
-  `networking.vnets.mgmt.address_space` (mgmt VNet), and
+  `networking.vnets.mgmt.address_space` (mgmt VNet),
   `networking.envs.<env>.regions.<region>.address_space` (each env-region
-  VNet). Both `/20` by default.
+  VNet; `/20` default), and
+  `networking.envs.<env>.regions.<region>.pod_cidr_slot` (integer 0..15,
+  unique fleet-wide; keys each env-region's `/12` reservation inside
+  CGNAT 100.64.0.0/10).
 
 For Stage 1, `cluster.{name,env,region}` come from the cluster's
 directory path under `clusters/`, and `cluster.networking.subnet_slot`
@@ -75,6 +78,7 @@ from the cluster.yaml itself (required, immutable — see PLAN §3.4).
 | Env snet-pe-env CIDR      | first `/26` of `networking.envs.<env>.regions.<region>.address_space` |                      |
 | Cluster API subnet CIDR   | i-th `/28` of the env VNet's **API pool** (second `/24` of address_space); i.e. `cidrsubnet(cidrsubnet(address_space, 24-N, 1), 28-24, i)` | i = `cluster.yaml.networking.subnet_slot`; 0 ≤ i < 16; delegated to `Microsoft.ContainerService/managedClusters` (AKS requires exactly `/28`) |
 | Cluster nodes subnet CIDR | i-th `/25` of the env VNet's **nodes pool** (third `/24` of address_space onward); i.e. `cidrsubnet(cidrsubnet(address_space, 24-N, 2 + (i/2)), 25-24, i%2)` | i = `cluster.yaml.networking.subnet_slot`; 0 ≤ i < capacity; sized for Azure CNI Overlay + Cilium (pod IPs come from `pod_cidr`, not this subnet) |
+| Cluster pod CIDR          | `100.[64 + R*16 + i].0.0/16` where R = env-region's `pod_cidr_slot`, i = cluster's `subnet_slot` | CGNAT 100.64.0.0/10; 16 slots × /16 per env-region (`/12` envelope); non-routable — consumed by Azure CNI Overlay (+ Cilium) |
 | snet-aks-api subnet       | `snet-aks-api-<cluster.name>`                                         |                      |
 | snet-aks-nodes subnet     | `snet-aks-nodes-<cluster.name>`                                       |                      |
 | Env PE NSG                | `nsg-pe-env-<env>-<region>`                                           |                      |
@@ -105,8 +109,8 @@ capacity = min(16, 2 * (2^(24-N) - 2))
 - `/19` → `min(16, 58)` = **16** (still api-bound; widening the VNet
   beyond `/20` does not raise capacity since the api pool is a fixed
   `/24` holding 16 `/28`s)
-- `/21` → `min(16, 10)` = **10**
-- `/22` → `min(16, 2)`  = **2**
+- `/21` → `min(16, 12)` = **12**
+- `/22` → `min(16, 4)`  = **4**
 
 Operators hitting the 16-cluster-per-env-region cap add another
 region (preferred) or open a PR that changes the pool shape in
@@ -114,9 +118,36 @@ PLAN §3.4 / this file / `config-loader/load.sh` / `fleet-identity`
 together.
 
 Azure CNI Overlay + Cilium is assumed: pod IPs come from
-`cluster.networking.pod_cidr`, not from the nodes subnet, so `/25`
-nodes subnets are comfortably sized for realistic node counts and
-ILBs.
+`cluster.networking.pod_cidr` (a `/16` carved deterministically from
+CGNAT 100.64.0.0/10; see PLAN §3.4 / "Derived names" above), not
+from the nodes subnet, so `/25` nodes subnets are comfortably sized
+for realistic node counts and ILBs.
+
+### Pod CIDR allocation (CGNAT 100.64.0.0/10)
+
+Pod IP space is intentionally separate from the VNet address plan.
+Every env-region picks a `pod_cidr_slot` (integer 0..15, unique across
+all declared env-regions) in its `_fleet.yaml` block; that slot
+reserves a `/12` envelope at `100.[64 + pod_cidr_slot*16].0.0/12`.
+Each cluster inside the env-region is then assigned a `/16` at
+
+```
+pod_cidr = 100.[64 + pod_cidr_slot*16 + subnet_slot].0.0/16
+```
+
+with `subnet_slot ∈ [0, 15]` — the same index used for the VNet-side
+api + nodes subnets (see above), so a cluster's pod `/16` and its
+VNet `/28` + `/25` line up under a single slot number.
+
+- `/16` = 65,536 addresses; fits Azure CNI Overlay's default
+  `max_pods=250` across hundreds of nodes.
+- 16 env-regions fit in `100.64.0.0/10` with one `/12` each; that is
+  the hard cap on distinct env-regions in a single fleet. Adopters
+  approaching it need to shard across fleets.
+- Pod CIDRs are never routed outside the node (Overlay): no peering,
+  UDR, or NSG accounts for them. Uniqueness only matters within a
+  fleet (multi-cluster service mesh planning) and is guaranteed by
+  the `pod_cidr_slot` × `subnet_slot` grid.
 
 ## Truncation
 
