@@ -12,7 +12,27 @@
 > Legend: `[x]` done · `[~]` in progress / scaffolded but unapplied
 > `[ ]` not started · `[-]` deferred.
 
-Last updated: 2026-04-20 · Phase D (bootstrap/environment env VNets +
+Last updated: 2026-04-20 · **Two-pool subnet layout** (pre-Phase-E
+refactor) landed on `feat/networking-topology`. PLAN §3.4 rewrote the
+per-cluster CIDR math from "symmetric `/24` slot split into two `/25`s"
+to a two-pool design: each env-region VNet reserves its first `/24` for
+PE/runners, its second `/24` as the **API pool** (16 × `/28` delegated
+to `Microsoft.ContainerService/managedClusters` — AKS requires exactly
+`/28`), and the remaining `/24`s as the **nodes pool** (2 × `/25` per
+`/24`, sized for Azure CNI Overlay + Cilium where pod IPs come from
+`pod_cidr`). `subnet_slot: i` now indexes both pools simultaneously.
+New capacity formula `min(16, 2 * (2^(24-N) - 2))` — `/20` yields 16
+slots (api-pool-bound). Updated: PLAN §3.3 derivation table + §3.4
+layout diagram + prose, `docs/naming.md`, `config-loader/load.sh`
+python3 block, `modules/fleet-identity/main.tf` capacity locals +
+outputs.tf doc, `modules/fleet-identity/tests/unit/` (16 replaces 15
+at `/20`; new `/21`=12 and `/22`=4 assertions),
+`clusters/_template/cluster.yaml` comment. `terraform validate`
+passes on `bootstrap/{fleet,environment}`, `fleet-identity` 8/8 +
+`init/` 30/30 tests still green. Remaining: Phases E–H in `_TASK.md`
+(Stage 1 will consume the new CIDRs).
+
+Prior: Phase D (bootstrap/environment env VNets +
 peerings + ASG) landed on `feat/networking-topology`. New
 `main.network.tf` invokes `Azure/avm-ptn-alz-sub-vending/azure ~> 0.2`
 with `subscription_alias_enabled = false` against `local.env_sub_id`,
@@ -119,7 +139,7 @@ branch. Remaining implementation (Phases D–H) tracked in `_TASK.md`.
         audit against bootstrap-stage HCL locals.
   - [~] Networking derivations — fleet-scope + env-scope landed in
         `modules/fleet-identity/` (Phase A, 2026-04-20); cluster-scope
-        (`subnet_slot` → `cluster_24` + two /25 CIDRs, plus
+        (`subnet_slot` → two-pool `/28` api + `/25` nodes CIDRs, plus
         subnet/peering/ASG names) landed in `load.sh` via an inline
         python3 `ipaddress` helper. Missing: HCL consumers in
         `bootstrap/{fleet,environment}` + Stage 1 (Phases C/D/E).

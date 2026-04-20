@@ -14,14 +14,19 @@ cluster:
   resource_group: rg-aks-<env>-<region>-<NN>
 
 networking:
-  # Per-cluster /24 slot inside the env+region VNet (PLAN §3.4).
-  # Required; integer in [0, capacity-1] where capacity = slots
-  # available in the env VNet's address_space (/20 → 15, /19 → 31).
-  # Immutable — changing this after initial apply forces cluster
-  # re-create; PR-check blocks mutations. Unique per (env, region).
-  # The /24 expands to two /25s (snet-aks-api-<name> + snet-aks-nodes-<name>)
-  # created by Stage 1. VNet id, DNS link list, and subnet names are
-  # all derived — do NOT set them here.
+  # Per-cluster index into the env+region VNet's two subnet pools
+  # (PLAN §3.4). Required; integer in [0, capacity-1] where
+  # capacity = min(16, 2 * (2^(24-N) - 2)) for a /N env VNet
+  # (/20 → 16, /21 → 12, /22 → 4). Immutable — changing this after
+  # initial apply forces cluster re-create; PR-check blocks
+  # mutations. Unique per (env, region). The slot indexes both pools
+  # simultaneously, yielding:
+  #   snet-aks-api-<name>    = i-th /28 of the env VNet's API pool
+  #                            (delegated; AKS api-server VNet integration)
+  #   snet-aks-nodes-<name>  = i-th /25 of the env VNet's nodes pool
+  #                            (sized for Azure CNI Overlay + Cilium)
+  # VNet id, DNS link list, and subnet names are all derived — do
+  # NOT set them here.
   subnet_slot: 0
 
 # node_pools:                                       # uncomment to override defaults

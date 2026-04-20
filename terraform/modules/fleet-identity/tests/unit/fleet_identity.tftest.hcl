@@ -317,8 +317,8 @@ run "networking_derived_absent_yields_nulls" {
 #   - mgmt VNet/RG names
 #   - mgmt's two reserved /26s (snet-pe-shared first, snet-runners second)
 #   - env VNet/RG names, /26 PE subnet, peering names, ASG name
-#   - cluster_slot_capacity = 15 at /20 (one /24 consumed by reserved /26s,
-#     leaving 15 usable /24 slots).
+#   - cluster_slot_capacity = 16 at /20 (two-pool layout: min(16, 2 *
+#     (2^(24-N) - 2)); api pool is the cap).
 
 run "networking_derived_populates_topology_at_slash20" {
   command = apply
@@ -390,8 +390,8 @@ run "networking_derived_populates_topology_at_slash20" {
   }
 
   assert {
-    condition     = output.networking_derived.mgmt.cluster_slot_capacity == 15
-    error_message = "A /20 VNet must yield 15 usable cluster /24 slots (one /24 consumed by reserved /26s)."
+    condition     = output.networking_derived.mgmt.cluster_slot_capacity == 16
+    error_message = "A /20 VNet must yield 16 usable cluster slots under the two-pool layout (api pool of 16 × /28 is the cap)."
   }
 
   # --- env ---
@@ -411,8 +411,8 @@ run "networking_derived_populates_topology_at_slash20" {
   }
 
   assert {
-    condition     = output.networking_derived.envs["nonprod/eastus"].cluster_slot_capacity == 15
-    error_message = "A /20 env VNet must yield 15 usable cluster /24 slots."
+    condition     = output.networking_derived.envs["nonprod/eastus"].cluster_slot_capacity == 16
+    error_message = "A /20 env VNet must yield 16 usable cluster slots under the two-pool layout."
   }
 
   assert {
@@ -515,11 +515,15 @@ run "networking_derived_flattens_multi_env_multi_region" {
   }
 }
 
-# ---- networking_derived: wider VNet raises capacity ------------------------
+# ---- networking_derived: two-pool capacity ---------------------------------
 #
-# At /19, reserved /26s still consume one /24, leaving 2^5 - 1 = 31 slots.
+# Two-pool layout: capacity = min(16, 2 * (2^(24-N) - 2)).
+# /19 → min(16, 2 * 30) = 16   (still api-pool-bound; widening past /20
+#                               does not raise capacity)
+# /21 → min(16, 2 * 6)  = 12
+# /22 → min(16, 2 * 2)  = 4
 
-run "networking_derived_capacity_scales_with_address_space" {
+run "networking_derived_capacity_two_pool" {
   command = apply
 
   variables {
@@ -549,7 +553,12 @@ run "networking_derived_capacity_scales_with_address_space" {
         envs = {
           nonprod = {
             regions = {
-              eastus = { address_space = "10.20.0.0/19" }
+              eastus = { address_space = "10.20.0.0/21" }
+            }
+          }
+          prod = {
+            regions = {
+              eastus = { address_space = "10.30.0.0/22" }
             }
           }
         }
@@ -558,16 +567,21 @@ run "networking_derived_capacity_scales_with_address_space" {
   }
 
   assert {
-    condition     = output.networking_derived.mgmt.cluster_slot_capacity == 31
-    error_message = "A /19 VNet must yield 31 usable cluster /24 slots."
+    condition     = output.networking_derived.mgmt.cluster_slot_capacity == 16
+    error_message = "A /19 VNet must cap at 16 usable cluster slots (api-pool-bound) under the two-pool layout."
   }
 
   assert {
-    condition     = output.networking_derived.envs["nonprod/eastus"].cluster_slot_capacity == 31
-    error_message = "A /19 env VNet must yield 31 usable cluster /24 slots."
+    condition     = output.networking_derived.envs["nonprod/eastus"].cluster_slot_capacity == 12
+    error_message = "A /21 env VNet must yield 12 usable cluster slots under the two-pool layout (min(16, 2*6))."
   }
 
-  # First /26 should still be the first /26 of the /19 VNet.
+  assert {
+    condition     = output.networking_derived.envs["prod/eastus"].cluster_slot_capacity == 4
+    error_message = "A /22 env VNet must yield 4 usable cluster slots under the two-pool layout (min(16, 2*2))."
+  }
+
+  # First /26 should still be the first /26 of the VNet regardless of size.
   assert {
     condition     = output.networking_derived.mgmt.snet_pe_shared_cidr == "10.10.0.0/26"
     error_message = "snet-pe-shared must be the first /26 regardless of VNet size."

@@ -118,11 +118,16 @@ fi
 # --- Networking derivations (PLAN §3.4) ---------------------------------------
 #
 # Fleet-scope + env-scope names parallel `modules/fleet-identity/main.tf`
-# (parity contract; see docs/naming.md). Cluster-scope /24 + two /25s are
-# carved from the env VNet's /N address_space using the cluster's
-# `networking.subnet_slot`. Silence-on-absence: pre-Phase-B `_fleet.yaml`
-# renders lack `networking.vnets.mgmt` / `networking.envs` — those fields
-# drop through as null and Stage 1 must precondition-check before using.
+# (parity contract; see docs/naming.md). Cluster-scope per-subnet CIDRs
+# are carved from two disjoint pools inside the env VNet's /N
+# address_space, both indexed by the cluster's `networking.subnet_slot`:
+#
+#   API pool   = second /24 of env VNet   → 16 × /28 (AKS api-server delegated)
+#   nodes pool = third /24 onward         → 2 × /25 per /24 (CNI-Overlay nodes)
+#
+# Silence-on-absence: pre-Phase-B `_fleet.yaml` renders lack
+# `networking.vnets.mgmt` / `networking.envs` — those fields drop
+# through as null and Stage 1 must precondition-check before using.
 
 subnet_slot="$(printf '%s' "$merged_json" | jq -r '.networking.subnet_slot // empty')"
 [[ -n "$subnet_slot" ]] || die "cluster.yaml at $cluster_path is missing required field networking.subnet_slot (see PLAN §3.4)"
@@ -137,30 +142,35 @@ env_address_space="$(printf '%s' "$fleet_json" | jq -r --arg env "$env" --arg re
 
 # CIDR math via python (portable; avoids a jq-only bit-twiddling dance).
 # For address_space A = `<ip>/N`:
-#   reserved /26s occupy the first /24; cluster slot K → cluster_24 =
-#   cidrsubnet(A, 24-N, K+1); snet-aks-api = first /25 of that /24;
-#   snet-aks-nodes = second /25.
+#   api pool   = 2nd /24 of A  (index 1)
+#   nodes pool = /24s at index 2..slots_total-1 of A
+#   capacity   = min(16, 2 * (slots_total - 2))
+#   cluster i  → snet-aks-api   = i-th /28 of api pool
+#             → snet-aks-nodes = (i % 2)-th /25 of the (2 + i//2)-th /24 of A
 derive_cluster_cidrs() {
   local address_space="$1" slot="$2"
   [[ -z "$address_space" ]] && { echo "{}" ; return ; }
   python3 - "$address_space" "$slot" <<'PY'
 import ipaddress, json, sys
 net = ipaddress.ip_network(sys.argv[1], strict=True)
-slot = int(sys.argv[2])
-# cluster /24s start at index 1 (index 0 holds the reserved /26s).
-prefix24 = 24
-prefix25 = 25
-n_24 = 2 ** (prefix24 - net.prefixlen)
-capacity = n_24 - 1
-if slot < 0 or slot >= capacity:
-    print(json.dumps({"error": f"slot {slot} out of range [0, {capacity - 1}]"}))
+i = int(sys.argv[2])
+slots_total = 2 ** (24 - net.prefixlen)   # number of /24s in the VNet
+if slots_total < 3:
+    print(json.dumps({"error": f"VNet /{net.prefixlen} too small: needs at least /22 to host reserved + api pool + one nodes /24"}))
     sys.exit(0)
-c24 = list(net.subnets(new_prefix=prefix24))[slot + 1]
-api, nodes = list(c24.subnets(new_prefix=prefix25))
+capacity = min(16, 2 * (slots_total - 2))
+if i < 0 or i >= capacity:
+    print(json.dumps({"error": f"slot {i} out of range [0, {capacity - 1}] for VNet /{net.prefixlen} (capacity={capacity})"}))
+    sys.exit(0)
+# API pool = 2nd /24 (index 1); carve 16 /28s.
+api_pool  = list(net.subnets(new_prefix=24))[1]
+api       = list(api_pool.subnets(new_prefix=28))[i]
+# Nodes pool = /24s at indices 2..slots_total-1; each /24 yields 2 /25s.
+nodes_24  = list(net.subnets(new_prefix=24))[2 + (i // 2)]
+nodes     = list(nodes_24.subnets(new_prefix=25))[i % 2]
 print(json.dumps({
-    "cluster_24":          str(c24),
-    "snet_aks_api_cidr":   str(api),
-    "snet_aks_nodes_cidr": str(nodes),
+    "snet_aks_api_cidr":     str(api),
+    "snet_aks_nodes_cidr":   str(nodes),
     "cluster_slot_capacity": capacity,
 }))
 PY

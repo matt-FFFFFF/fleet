@@ -35,9 +35,9 @@ output "networking_derived" {
     empty map when `networking.envs` is absent. Individual CIDR fields
     are null when the corresponding `address_space` is absent.
 
-    Cluster-scope per-slot /24 and /25 CIDRs are NOT emitted here —
-    they live in `config-loader/load.sh` and Stage 1, which have
-    cluster identity as input. Parity contract: docs/naming.md.
+    Cluster-scope per-slot `/28` api + `/25` nodes CIDRs are NOT emitted
+    here — they live in `config-loader/load.sh` and Stage 1, which
+    have cluster identity as input. Parity contract: docs/naming.md.
   EOT
   value       = local.networking_derived
 }

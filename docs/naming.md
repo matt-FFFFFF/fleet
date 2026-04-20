@@ -73,9 +73,8 @@ from the cluster.yaml itself (required, immutable — see PLAN §3.4).
 | Mgmt snet-pe-shared CIDR  | first `/26` of `networking.vnets.mgmt.address_space`                  |                      |
 | Mgmt snet-runners CIDR    | second `/26` of `networking.vnets.mgmt.address_space`                 | mgmt VNet only       |
 | Env snet-pe-env CIDR      | first `/26` of `networking.envs.<env>.regions.<region>.address_space` |                      |
-| Cluster `/24` (slot K)    | K-th `/24` **after** the reserved first `/24` of the env VNet (see §3.4 diagram); i.e. `cidrsubnet(address_space, 24-N, K+1)` | K = `cluster.yaml.networking.subnet_slot`; 0 ≤ K < capacity |
-| snet-aks-api CIDR         | first `/25` of the cluster `/24`                                      |                      |
-| snet-aks-nodes CIDR       | second `/25` of the cluster `/24`                                     |                      |
+| Cluster API subnet CIDR   | i-th `/28` of the env VNet's **API pool** (second `/24` of address_space); i.e. `cidrsubnet(cidrsubnet(address_space, 24-N, 1), 28-24, i)` | i = `cluster.yaml.networking.subnet_slot`; 0 ≤ i < 16; delegated to `Microsoft.ContainerService/managedClusters` (AKS requires exactly `/28`) |
+| Cluster nodes subnet CIDR | i-th `/25` of the env VNet's **nodes pool** (third `/24` of address_space onward); i.e. `cidrsubnet(cidrsubnet(address_space, 24-N, 2 + (i/2)), 25-24, i%2)` | i = `cluster.yaml.networking.subnet_slot`; 0 ≤ i < capacity; sized for Azure CNI Overlay + Cilium (pod IPs come from `pod_cidr`, not this subnet) |
 | snet-aks-api subnet       | `snet-aks-api-<cluster.name>`                                         |                      |
 | snet-aks-nodes subnet     | `snet-aks-nodes-<cluster.name>`                                       |                      |
 | Env PE NSG                | `nsg-pe-env-<env>-<region>`                                           |                      |
@@ -87,16 +86,37 @@ from the cluster.yaml itself (required, immutable — see PLAN §3.4).
 
 ### Cluster slot capacity
 
-For an env-region VNet of size `/N`:
+For an env-region VNet of size `/N`, the two-pool layout (see PLAN
+§3.4) reserves:
 
-- reserved /26s consume the first `/24` of the VNet;
-- usable cluster slots = `2^(24-N) - 1`;
-- at the default `/20` that's **15** slots (0..14).
+- the first `/24` of the VNet for PE/runners subnets;
+- the second `/24` for the **API pool** (16 × `/28`, each delegated to
+  `Microsoft.ContainerService/managedClusters`);
+- the remaining `2^(24-N) - 2` `/24`s for the **nodes pool**, each
+  yielding 2 × `/25`.
 
-A wider VNet (`/19`, `/18`) linearly raises capacity; operators widen
-the VNet in `_fleet.yaml.networking.envs.<env>.regions.<region>.address_space`
-if they outgrow 15 clusters per env-region (alternative: add a second
-region under that env).
+Usable cluster slots:
+
+```
+capacity = min(16, 2 * (2^(24-N) - 2))
+```
+
+- `/20` → `min(16, 26)` = **16** (api pool is the cap)
+- `/19` → `min(16, 58)` = **16** (still api-bound; widening the VNet
+  beyond `/20` does not raise capacity since the api pool is a fixed
+  `/24` holding 16 `/28`s)
+- `/21` → `min(16, 10)` = **10**
+- `/22` → `min(16, 2)`  = **2**
+
+Operators hitting the 16-cluster-per-env-region cap add another
+region (preferred) or open a PR that changes the pool shape in
+PLAN §3.4 / this file / `config-loader/load.sh` / `fleet-identity`
+together.
+
+Azure CNI Overlay + Cilium is assumed: pod IPs come from
+`cluster.networking.pod_cidr`, not from the nodes subnet, so `/25`
+nodes subnets are comfortably sized for realistic node counts and
+ILBs.
 
 ## Truncation
 

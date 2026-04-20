@@ -62,11 +62,11 @@ locals {
   # -- Repo-owned VNet topology (PLAN §3.4) -----------------------------------
   #
   # All fleet-scope + env-scope networking derivations. Cluster-scope
-  # derivations (`snet-aks-api-<cluster>` / `snet-aks-nodes-<cluster>` CIDRs
-  # as two /25s of the slot's /24) live in `terraform/config-loader/load.sh`
-  # and in Stage 1 HCL — they need `cluster.{env,region,name,subnet_slot}`
-  # which this module has no input for. Parity is the contract (see
-  # docs/naming.md).
+  # per-subnet CIDRs (i-th /28 in the API pool + i-th /25 in the nodes
+  # pool, keyed on `cluster.subnet_slot`) live in
+  # `terraform/config-loader/load.sh` and in Stage 1 HCL — this module
+  # has no input for `cluster.{env,region,name,subnet_slot}`. Parity is
+  # the contract (see docs/naming.md).
   #
   # Every field is `try()`-guarded against the networking block being
   # absent or partial, so pre-Phase-B `_fleet.yaml` renders (which carry
@@ -74,13 +74,15 @@ locals {
   # `null`s without raising. Downstream callsites assert non-null before
   # using.
   #
-  # CIDR math. For a VNet `/N` with address_space A:
-  #   reserved /26s: first = snet-pe-<shared|env> ; mgmt also reserves
-  #     the second /26 for snet-runners.
-  #   cluster /24 for slot K (0-indexed) = cidrsubnet(A, 24-N, K+1)
-  #     (the `+1` skips the first /24 whose low /26s are reserved).
-  #   capacity = 2^(24-N) - 1 (one /24 consumed by the reserved /26s).
-  # At /20 (the default floor) that's 15 cluster slots, per PLAN §3.4.
+  # CIDR math (two-pool layout). For a VNet `/N` with address_space A:
+  #   reserved zone = first /24 of A  (snet-pe-<shared|env>; mgmt also
+  #                                    hosts snet-runners in the 2nd /26)
+  #   api pool      = 2nd /24 of A    → 16 × /28
+  #   nodes pool    = 3rd /24 onward  → 2 × /25 per /24
+  #   cluster_slot_capacity = min(16, 2 * (2^(24-N) - 2))
+  # At /20 (the default) that's 16 slots (api-pool-bound). Widening the
+  # VNet does not raise capacity beyond 16 — the api pool is a fixed
+  # /24 with room for 16 /28s.
   _mgmt_vnet          = try(var.fleet_doc.networking.vnets.mgmt, null)
   _mgmt_address_space = try(local._mgmt_vnet.address_space, null)
 
@@ -113,7 +115,9 @@ locals {
       snet_runners_cidr = local._mgmt_address_space == null ? null : cidrsubnet(local._mgmt_address_space, 26 - tonumber(split("/", local._mgmt_address_space)[1]), 1)
       # Cluster-slot capacity (for completeness; mgmt VNet currently
       # hosts a single cluster per region but the math is symmetric).
-      cluster_slot_capacity = local._mgmt_address_space == null ? null : pow(2, 24 - tonumber(split("/", local._mgmt_address_space)[1])) - 1
+      # Two-pool layout: min(16, 2 * (2^(24-N) - 2)). Api-pool-bound
+      # at /20 and wider.
+      cluster_slot_capacity = local._mgmt_address_space == null ? null : min(16, 2 * (pow(2, 24 - tonumber(split("/", local._mgmt_address_space)[1])) - 2))
     }
 
     envs = {
@@ -127,8 +131,10 @@ locals {
         # First /26 of the env VNet — shared PE subnet for the env
         # (Grafana PE, etc.).
         snet_pe_env_cidr = r.address_space == null ? null : cidrsubnet(r.address_space, 26 - tonumber(split("/", r.address_space)[1]), 0)
-        # Number of usable cluster slots in this env-region.
-        cluster_slot_capacity = r.address_space == null ? null : pow(2, 24 - tonumber(split("/", r.address_space)[1])) - 1
+        # Number of usable cluster slots in this env-region (two-pool
+        # layout): min(16, 2 * (2^(24-N) - 2)). Api-pool-bound at /20
+        # and wider.
+        cluster_slot_capacity = r.address_space == null ? null : min(16, 2 * (pow(2, 24 - tonumber(split("/", r.address_space)[1])) - 2))
         # Peering names (both halves — mgmt↔env peering lives in the
         # env state via the peering AVM module with
         # create_reverse_peering = true).

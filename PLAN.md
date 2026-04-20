@@ -209,15 +209,16 @@ kubernetes:
     max_graceful_termination_sec: 600
 
 networking:
-  # Per-cluster /24 slot inside the env+region VNet (see §3.4). The
-  # operator picks an integer in [0..capacity-1] that is unique within
-  # the env+region; the PR-check in `validate.yaml` enforces uniqueness,
-  # range, and that the slot is never changed in-place (changing it
-  # forces subnet re-creation → AKS re-create).
-  # The per-cluster /24 is split into two /25s:
-  #   snet-aks-api-<name>    (first /25)
-  #   snet-aks-nodes-<name>  (second /25)
+  # Per-cluster index into the env+region VNet's two subnet pools (see
+  # §3.4). The operator picks an integer in [0..capacity-1] that is
+  # unique within the env+region; the PR-check in `validate.yaml`
+  # enforces uniqueness, range, and that the slot is never changed
+  # in-place (changing it forces subnet re-creation → AKS re-create).
+  # The slot indexes both pools simultaneously:
+  #   snet-aks-api-<name>    = i-th /28 of the env VNet's API pool
+  #   snet-aks-nodes-<name>  = i-th /25 of the env VNet's nodes pool
   # Both are owned by Stage 1 as azapi child resources of the env VNet.
+  # At /20 env VNets, capacity = 16 (api pool is the hard cap).
   subnet_slot: 0
   pod_cidr: 10.244.0.0/16
   service_cidr: 10.0.0.0/16
@@ -518,9 +519,8 @@ the per-cluster tfvars.json before Terraform ever sees it:
 | `networking.net_rg_name`  | `rg-net-mgmt` (mgmt) / `rg-net-<env>` (env)                                                        |
 | `networking.snet_pe.cidr` | first `/26` of the VNet's address_space (mgmt → `snet-pe-shared`; env → `snet-pe-env`)             |
 | `networking.snet_runners.cidr` | second `/26` of mgmt VNet's address_space (`snet-runners`, ACA-delegated)                     |
-| `networking.cluster_24`   | K-th `/24` after the PE `/26`, where K = `networking.subnet_slot` from cluster.yaml                |
-| `networking.snet_aks_api.cidr` | first `/25` of `networking.cluster_24` (`snet-aks-api-<cluster.name>`)                        |
-| `networking.snet_aks_nodes.cidr` | second `/25` of `networking.cluster_24` (`snet-aks-nodes-<cluster.name>`)                   |
+| `networking.snet_aks_api.cidr` | i-th `/28` of the API pool (second `/24` of env VNet), where i = `networking.subnet_slot` |
+| `networking.snet_aks_nodes.cidr` | i-th `/25` of the nodes pool (3rd `/24` onward of env VNet), where i = `networking.subnet_slot` |
 | `networking.peering_name.env_to_mgmt` | `peer-<env>-<region>-to-mgmt`                                                         |
 | `networking.peering_name.mgmt_to_env` | `peer-mgmt-to-<env>-<region>`                                                         |
 | `networking.node_asg_name`      | `asg-nodes-<env>-<region>` (one ASG per env-region, shared by all clusters in that VNet)   |
@@ -568,23 +568,91 @@ structure and Azure-resource names.
   peering land in a single state file. No repo-local peering helper
   is introduced.
 
-**CIDR layout per VNet (`/20` envelope).**
+**CIDR layout per VNet — two-pool design (`/20` envelope).**
+
+Each cluster needs two subnets of very different sizes:
+
+- `snet-aks-api-<name>` — **exactly `/28`** (required by AKS API-server
+  VNet integration; subnet is delegated to
+  `Microsoft.ContainerService/managedClusters` and must be empty /
+  unshared).
+- `snet-aks-nodes-<name>` — `/25` (default; sized for Azure CNI
+  **Overlay** with Cilium, where pod IPs come from
+  `networking.pod_cidr` and never consume node-subnet addresses, so
+  `/25` = 128 addrs covers nodes + ILBs comfortably).
+
+Previous designs symmetric-split a per-cluster `/24` into two `/25`s,
+which wasted 112 addresses on the api side (a `/28` delegated subnet
+cannot hold anything else). The repo uses a two-pool layout instead:
 
 ```
 10.x0.0.0/20      VNet address_space
-├── 10.x0.0.0/26     snet-pe-{shared|env}  (PE subnet for tfstate SA / KV / ACR / Grafana PE)
-├── 10.x0.0.64/26    snet-runners          (mgmt VNet only; ACA-delegated runner pool)
-└── 10.x0.1.0/24     cluster slot 0       ┐
-    10.x0.2.0/24     cluster slot 1       │ each cluster's /24 splits into:
-    ...                                   │   snet-aks-api-<name>    (first /25)
-    10.x0.15.0/24    cluster slot 14      ┘   snet-aks-nodes-<name>  (second /25)
+│
+├── 10.x0.0.0/24     reserved zone (first /24)
+│   ├── 10.x0.0.0/26    snet-pe-{shared|env}  (PE subnet)
+│   └── 10.x0.0.64/26   snet-runners          (mgmt VNet only; ACA-delegated)
+│
+├── 10.x0.1.0/24     API pool → 16 × /28
+│   ├── 10.x0.1.0/28    snet-aks-api-<cluster 0>
+│   ├── 10.x0.1.16/28   snet-aks-api-<cluster 1>
+│   ├── ...
+│   └── 10.x0.1.240/28  snet-aks-api-<cluster 15>
+│
+└── 10.x0.2.0/21     NODES pool → 2 × /25 per /24 in the pool
+    ├── 10.x0.2.0/25    snet-aks-nodes-<cluster 0>
+    ├── 10.x0.2.128/25  snet-aks-nodes-<cluster 1>
+    ├── 10.x0.3.0/25    snet-aks-nodes-<cluster 2>
+    ├── 10.x0.3.128/25  snet-aks-nodes-<cluster 3>
+    └── ...             (13 × /24 = 26 /25 slots available)
 ```
 
-With a `/20` VNet and a reserved `/26` for PE (plus a second `/26` on
-mgmt for runners), each env-region supports ~15 clusters. If a 16th
-cluster is ever needed in one env-region, the operator either splits
-the env by adding a second region or widens the env VNet's
-`address_space` — both are PR-visible, CIDR-math decisions.
+Capacity per env-region VNet `/N`:
+
+```
+capacity = min(16, 2 * (2^(24-N) - 2))
+```
+
+- `/20` → `min(16, 26)` = **16 clusters**  (api pool is the bottleneck)
+- `/19` → `min(16, 58)` = **16 clusters**  (still api-bound; widen api pool by
+  growing `/N` is not useful — a pool with 16 `/28`s is the hard limit
+  at this design). Operators hitting this cap add a region or shrink
+  nodes subnets to `/26` (design change, PLAN §3.4 update required).
+- `/21` → `min(16, 10)` = **10 clusters**
+- `/22` → `min(16, 2)`  = **2 clusters**
+
+**Pool derivation (given env VNet address_space `A = <ip>/N`).**
+
+```
+reserved   = cidrsubnet(A, 24-N, 0)  # first /24, PE/runners live here
+api_pool   = cidrsubnet(A, 24-N, 1)  # second /24, 16 × /28
+# nodes pool = /24s at index 2..slots_total-1 of A
+
+snet_aks_api(i)   = cidrsubnet(api_pool, 4, i)              # i ∈ [0,16)
+snet_aks_nodes(i) = let base = cidrsubnet(A, 24-N, 2 + (i / 2))
+                    in  cidrsubnet(base, 1, i % 2)          # i ∈ [0, 2*(slots_total-2))
+```
+
+`subnet_slot: i` is the single per-cluster index consumed by both
+formulas — api and nodes subnets always share the same index, so
+operators reason about "cluster 3" not "cluster 3 api + cluster 5
+nodes."
+
+Design notes:
+
+- Azure CNI **Overlay + Cilium** is the fleet CNI (PLAN §3.4
+  addendum). Pod IPs come from `networking.pod_cidr` (a separate
+  non-routable space per cluster), so the nodes subnet only holds
+  nodes + internal load balancers. `/25` is comfortably sized; we
+  could shrink to `/26` to double nodes-pool capacity if api-pool
+  growth lands upstream, but the api `/28` delegation is AKS-fixed.
+- The two-pool design has zero address waste: every `/28` in the api
+  pool and every `/25` in the nodes pool is usable. Contrast the
+  previous `/24`-slot design which wasted 112 addrs per cluster
+  (`/28` used, rest of the api-side `/25` = 112 stranded).
+- If a third per-cluster subnet is ever needed (e.g. moving off CNI
+  Overlay to a pod-subnet CNI), a third pool is added under the
+  same design — no rearrangement of existing pools. Non-trivial but
+  bounded change.
 
 **`subnet_slot` contract.**
 
@@ -593,8 +661,8 @@ the env by adding a second region or widens the env VNet's
 - `validate.yaml` PR-check enforces:
   1. present on every cluster.yaml;
   2. integer in `[0, capacity-1]` where `capacity` is computed from
-     the env+region VNet's address_space and reserved PE `/26`
-     (≈15 for a `/20`);
+     the env+region VNet's address_space by the two-pool formula
+     above (16 for a `/20`);
   3. unique across all clusters sharing an (env, region);
   4. **immutable once set** — changing it in-place re-plans
      subnet replacement, which destroys/recreates the AKS cluster
@@ -609,11 +677,12 @@ the env by adding a second region or widens the env VNet's
    edits `cluster.yaml` (including `subnet_slot`).
 2. Opens PR → `validate.yaml` runs the `subnet_slot` check and
    normal schema lint.
-3. On merge, `tf-apply.yaml` runs Stage 1 (creates the two /25
-   azapi subnet resources under the existing env VNet, attaches the
-   AKS node pool to the env-region node ASG, creates the AKS
-   cluster) and Stage 2 (ArgoCD bootstrap) in one matrix leg. No
-   re-run of `bootstrap/environment` is required.
+3. On merge, `tf-apply.yaml` runs Stage 1 (creates the `/28` api
+   subnet in the env VNet's API pool and the `/25` nodes subnet in
+   the nodes pool via azapi, attaches the AKS node pool to the
+   env-region node ASG, creates the AKS cluster) and Stage 2
+   (ArgoCD bootstrap) in one matrix leg. No re-run of
+   `bootstrap/environment` is required.
 
 **Peering ownership.**
 
@@ -675,9 +744,9 @@ the env by adding a second region or widens the env VNet's
 > both halves of every mgmt↔env peering (via
 > `Azure/avm-res-network-virtualnetwork/azurerm//modules/peering` with
 > `create_reverse_peering = true`), and one `asg-nodes-<env>-<region>`
-> per env-region; Stage 1 owns per-cluster `/25` subnets as azapi
-> children of the env VNet and attaches the AKS node pool to the
-> env-region ASG. `cluster.yaml.networking` lost `vnet_id`,
+> per env-region; Stage 1 owns per-cluster `/28` api + `/25` nodes
+> subnets (two-pool layout — see §3.4) as azapi children of the env
+> VNet and attaches the AKS node pool to the env-region ASG. `cluster.yaml.networking` lost `vnet_id`,
 > `subnet_name`, and `dns_linked_vnet_ids` — replaced by a single
 > **required** `networking.subnet_slot: <int>` operator-set at cluster
 > creation and immutable thereafter (PR-check enforced). Full design
@@ -1075,9 +1144,10 @@ Creates:
     other env-scope PEs. NSG `nsg-pe-env-<env>-<region>` authored
     here, with an inbound rule allowing `443` from
     `asg-nodes-<env>-<region>` (below).
-  The remaining `/20` space is reserved for per-cluster `/24` slots
-  owned by Stage 1. The sub-vending module does **not** pre-create
-  per-cluster subnets.
+  The remaining VNet space is reserved for the API pool (`/24` of
+  `/28`s) and the nodes pool (remaining `/24`s of `/25`s) owned by
+  Stage 1, per the two-pool layout in §3.4. The sub-vending module
+  does **not** pre-create per-cluster subnets.
 - **Mgmt↔env peerings** — one call per env-region to
   `Azure/avm-res-network-virtualnetwork/azurerm//modules/peering`
   with `create_reverse_peering = true`, names
@@ -1598,11 +1668,15 @@ environments.<env>.aks.admin_groups` — pure break-glass; members
   `vars.<ENV>_<REGION>_VNET_RESOURCE_ID`). Two subnets per cluster,
   CIDRs derived by the config-loader from `networking.subnet_slot` per
   §3.4 / docs/naming.md:
-  - `snet-aks-api-<cluster.name>` — first `/25` of the cluster's
-    `/24`; used by the AKS API-server VNet integration (private
-    cluster).
-  - `snet-aks-nodes-<cluster.name>` — second `/25`; used by AKS node
-    pools.
+  - `snet-aks-api-<cluster.name>` — `/28`, i-th slot in the env
+    VNet's API pool; delegated to
+    `Microsoft.ContainerService/managedClusters` and used by the AKS
+    API-server VNet integration (private cluster). Must be exactly
+    `/28` per AKS requirements.
+  - `snet-aks-nodes-<cluster.name>` — `/25`, i-th slot in the env
+    VNet's nodes pool; used by AKS node pools. Azure CNI Overlay
+    with Cilium means pod IPs come from `networking.pod_cidr`, not
+    this subnet.
   These subnets are authored as azapi children (not via the env-VNet
   sub-vending module) so cluster lifecycle is independent of
   `bootstrap/environment` re-applies.
