@@ -115,6 +115,78 @@ if [[ -z "$cluster_sub" ]]; then
   [[ -n "$cluster_sub" ]] || die "no subscription_id for env $env in _fleet.yaml"
 fi
 
+# --- Networking derivations (PLAN §3.4) ---------------------------------------
+#
+# Fleet-scope + env-scope names parallel `modules/fleet-identity/main.tf`
+# (parity contract; see docs/naming.md). Cluster-scope /24 + two /25s are
+# carved from the env VNet's /N address_space using the cluster's
+# `networking.subnet_slot`. Silence-on-absence: pre-Phase-B `_fleet.yaml`
+# renders lack `networking.vnets.mgmt` / `networking.envs` — those fields
+# drop through as null and Stage 1 must precondition-check before using.
+
+subnet_slot="$(printf '%s' "$merged_json" | jq -r '.networking.subnet_slot // empty')"
+[[ -n "$subnet_slot" ]] || die "cluster.yaml at $cluster_path is missing required field networking.subnet_slot (see PLAN §3.4)"
+case "$subnet_slot" in
+  ''|*[!0-9]*) die "networking.subnet_slot must be a non-negative integer; got: $subnet_slot" ;;
+esac
+
+mgmt_address_space="$(printf '%s' "$fleet_json" | jq -r '.networking.vnets.mgmt.address_space // empty')"
+env_address_space="$(printf '%s' "$fleet_json" | jq -r --arg env "$env" --arg region "$region" '
+  .networking.envs[$env].regions[$region].address_space // empty
+')"
+
+# CIDR math via python (portable; avoids a jq-only bit-twiddling dance).
+# For address_space A = `<ip>/N`:
+#   reserved /26s occupy the first /24; cluster slot K → cluster_24 =
+#   cidrsubnet(A, 24-N, K+1); snet-aks-api = first /25 of that /24;
+#   snet-aks-nodes = second /25.
+derive_cluster_cidrs() {
+  local address_space="$1" slot="$2"
+  [[ -z "$address_space" ]] && { echo "{}" ; return ; }
+  python3 - "$address_space" "$slot" <<'PY'
+import ipaddress, json, sys
+net = ipaddress.ip_network(sys.argv[1], strict=True)
+slot = int(sys.argv[2])
+# cluster /24s start at index 1 (index 0 holds the reserved /26s).
+prefix24 = 24
+prefix25 = 25
+n_24 = 2 ** (prefix24 - net.prefixlen)
+capacity = n_24 - 1
+if slot < 0 or slot >= capacity:
+    print(json.dumps({"error": f"slot {slot} out of range [0, {capacity - 1}]"}))
+    sys.exit(0)
+c24 = list(net.subnets(new_prefix=prefix24))[slot + 1]
+api, nodes = list(c24.subnets(new_prefix=prefix25))
+print(json.dumps({
+    "cluster_24":          str(c24),
+    "snet_aks_api_cidr":   str(api),
+    "snet_aks_nodes_cidr": str(nodes),
+    "cluster_slot_capacity": capacity,
+}))
+PY
+}
+
+cluster_cidrs="$(derive_cluster_cidrs "$env_address_space" "$subnet_slot")"
+if printf '%s' "$cluster_cidrs" | jq -e '.error' >/dev/null 2>&1; then
+  err="$(printf '%s' "$cluster_cidrs" | jq -r '.error')"
+  die "cluster $name networking.subnet_slot=$subnet_slot rejected against env $env/$region address_space '$env_address_space': $err"
+fi
+
+# Fleet-identity-parity names. Mirror of `networking_derived` in
+# terraform/modules/fleet-identity/main.tf; keep in sync.
+env_vnet_name="vnet-${fleet_name}-${env}-${region}"
+mgmt_vnet_name="vnet-${fleet_name}-mgmt"
+env_net_rg="rg-net-${env}"
+mgmt_net_rg="rg-net-mgmt"
+node_asg_name="asg-nodes-${env}-${region}"
+peering_env_to_mgmt="peer-${env}-${region}-to-mgmt"
+peering_mgmt_to_env="peer-mgmt-to-${env}-${region}"
+snet_aks_api_name="snet-aks-api-${name}"
+snet_aks_nodes_name="snet-aks-nodes-${name}"
+
+# Pass raw CIDR strings through to Stage 1 so the stage can author the
+# azapi subnet resources without re-parsing the env VNet's address_space.
+
 # --- Emit ---------------------------------------------------------------------
 #
 # Inject cluster.{name,env,region} as derived (not declared). Layer `derived`
@@ -124,6 +196,7 @@ fi
 jq -n \
   --argjson merged "$merged_json" \
   --argjson fleet  "$fleet_json" \
+  --argjson cidrs  "$cluster_cidrs" \
   --arg name       "$name" \
   --arg env        "$env" \
   --arg region     "$region" \
@@ -134,6 +207,16 @@ jq -n \
   --arg acr_ls     "$acr_login_server" \
   --arg cl_domain  "$cluster_domain" \
   --arg cluster_sub "$cluster_sub" \
+  --arg env_vnet   "$env_vnet_name" \
+  --arg mgmt_vnet  "$mgmt_vnet_name" \
+  --arg env_net_rg "$env_net_rg" \
+  --arg mgmt_net_rg "$mgmt_net_rg" \
+  --arg asg        "$node_asg_name" \
+  --arg p_e2m      "$peering_env_to_mgmt" \
+  --arg p_m2e      "$peering_mgmt_to_env" \
+  --arg snet_api   "$snet_aks_api_name" \
+  --arg snet_nodes "$snet_aks_nodes_name" \
+  --argjson slot   "$subnet_slot" \
   '$merged
    | .cluster.name   = $name
    | .cluster.env    = $env
@@ -146,5 +229,17 @@ jq -n \
        keyvault_name:           $kv_name,
        keyvault_resource_group: $kv_rg,
        acr_login_server:        $acr_ls,
-       cluster_domain:          $cl_domain
+       cluster_domain:          $cl_domain,
+       networking: ({
+         subnet_slot:           $slot,
+         env_vnet_name:         $env_vnet,
+         env_net_resource_group: $env_net_rg,
+         mgmt_vnet_name:        $mgmt_vnet,
+         mgmt_net_resource_group: $mgmt_net_rg,
+         node_asg_name:         $asg,
+         peering_env_to_mgmt_name: $p_e2m,
+         peering_mgmt_to_env_name: $p_m2e,
+         snet_aks_api_name:     $snet_api,
+         snet_aks_nodes_name:   $snet_nodes
+       } + $cidrs)
      }'

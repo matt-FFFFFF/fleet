@@ -12,13 +12,29 @@
 > Legend: `[x]` done · `[~]` in progress / scaffolded but unapplied
 > `[ ]` not started · `[-]` deferred.
 
-Last updated: 2026-04-20 · networking topology spec landed in PLAN
-§3.4 (+ §4 callout, §3.1/§3.3 schema refresh, §14/§15 updates).
-Repo-owned mgmt + env VNets via `Azure/avm-ptn-alz-sub-vending/azure`;
-mgmt↔env peerings via the peering AVM module with
-`create_reverse_peering = true`; per-cluster `/24` carved into two
-`/25`s by Stage 1 keyed off new required `networking.subnet_slot` in
-cluster.yaml. Implementation tracked in `_TASK.md`.
+Last updated: 2026-04-20 · Phase B (schema flip) landed on
+`feat/networking-topology`: `init/templates/_fleet.yaml.tftpl` emits
+the new `networking.{hub,private_dns_zones,vnets.mgmt,envs.<env>.regions.<region>}`
+shape and drops the legacy `networking.{tfstate,runner,fleet_kv}` +
+per-env `grafana_pe_*` BYO subnet fields; `init/variables.tf` adds
+9 typed+validated vars (hub ARM id, four PDZ ids with exact-zone-name
+checks, four address_space values with CIDR syntax / /20-minimum /
+RFC1918 / pairwise-distinct rules); `init/inputs.auto.tfvars` + the
+CI fixture carry the new `__PROMPT__` sentinels and a concrete
+10.50/60/70/80 /20 address-space plan; the `_template` cluster and
+both example clusters replace BYO `vnet_id`/`subnet_name`/
+`dns_linked_vnet_ids` with a single `networking.subnet_slot: 0`.
+Init unit tests extended to 30 runs (was 22) — `render_networking_shape`
+round-trips the new yaml plus 7 `expect_failures` runs covering
+every new validation rule; all pass. Phase A (derivation layer)
+previously landed: `modules/fleet-identity/` emits
+`networking_derived.{mgmt, envs[<env>/<region>]}` with 8 unit-test
+run blocks; `config-loader/load.sh` emits cluster-scope
+`.derived.networking`; `docs/naming.md` mirrors everything. Networking
+topology spec in PLAN §3.4; Pre-flight pins resolved (sub-vending
+`~> 0.2`, peering `~> 0.17` under `.../azurerm//modules/peering`, AKS
+agent-pool ASG supported in `...managedcluster/azurerm ~> 0.5`).
+Remaining implementation (Phases C–H) tracked in `_TASK.md`.
 
 ---
 
@@ -36,28 +52,45 @@ cluster.yaml. Implementation tracked in `_TASK.md`.
 
 - [x] §3.1 `clusters/_fleet.yaml` — rendered by `init/`; template lives
       at `init/templates/_fleet.yaml.tftpl`. Fleet identity, ACR,
-      state SA, AAD apps, observability, per-env blocks.
+      state SA, AAD apps, observability, per-env blocks. Networking
+      shape flipped 2026-04-20 (Phase B): `networking.{hub,
+      private_dns_zones,vnets.mgmt,envs.<env>.regions.<region>}`;
+      legacy `{tfstate,runner,fleet_kv}` + per-env `grafana_pe_*`
+      fields removed. 9 new init vars + validation + sentinels.
 - [x] `clusters/_defaults.yaml` + env `_defaults.yaml` (mgmt has
       node_pools override; nonprod/prod are `{}`).
 - [x] `clusters/_template/cluster.yaml` onboarding scaffold.
+      Networking block flipped to `subnet_slot: 0` 2026-04-20 (Phase B,
+      PLAN §3.4); BYO `vnet_id`/`subnet_name`/`dns_linked_vnet_ids`
+      removed.
 - [x] §3.2 DNS hierarchy documented; zone FQDN pattern encoded in
       `_fleet.yaml`.
 - [~] §3.3 Derivation rules in `config-loader/load.sh`:
   - [x] Subscription stitching from `_fleet.yaml.environments.<env>`.
   - [ ] Full name-derivation parity with `docs/naming.md` — pending
         audit against bootstrap-stage HCL locals.
-  - [ ] Networking derivations (VNet/subnet CIDR math off
-        `subnet_slot`, peering names, ASG name) — spec in PLAN §3.4;
-        not yet in `load.sh` or `modules/fleet-identity/`.
-- [~] §3.4 Networking topology — **spec only**. Repo-owned mgmt + env
-      VNets via sub-vending, mgmt↔env peering via peering AVM module,
-      per-cluster `/25` subnets in Stage 1 keyed off required
-      `networking.subnet_slot` in cluster.yaml. Implementation tracked
-      in `_TASK.md`.
+  - [~] Networking derivations — fleet-scope + env-scope landed in
+        `modules/fleet-identity/` (Phase A, 2026-04-20); cluster-scope
+        (`subnet_slot` → `cluster_24` + two /25 CIDRs, plus
+        subnet/peering/ASG names) landed in `load.sh` via an inline
+        python3 `ipaddress` helper. Missing: HCL consumers in
+        `bootstrap/{fleet,environment}` + Stage 1 (Phases C/D/E).
+- [~] §3.4 Networking topology — **spec + derivation layer + schema
+      flip.** Phase A (derivation): `fleet-identity` emits
+      `networking_derived.{mgmt, envs}`; `load.sh` emits
+      `.derived.networking.*` per cluster. Phase B (schema):
+      `_fleet.yaml.tftpl` + `cluster.yaml` template + example
+      clusters carry the new networking shape; `init/` validates 9
+      new adopter fields; `.github/fixtures/adopter-test.tfvars`
+      + example clusters updated. Remaining: Phase C mgmt VNet in
+      `bootstrap/fleet`, Phase D env VNets + peerings + ASG in
+      `bootstrap/environment`, Phase E Stage 1 subnets + AKS ASG
+      attachment, Phase F PR-check, Phases G/H docs + cleanup.
+      Tracked in `_TASK.md`.
 - [x] Example clusters: `mgmt/eastus/aks-mgmt-01`,
-      `nonprod/eastus/aks-nonprod-01` (referenced; content unchanged
-      since initial scaffold). Will gain `networking.subnet_slot`
-      when §3.4 lands in code.
+      `nonprod/eastus/aks-nonprod-01` — networking blocks flipped to
+      `subnet_slot: 0` (2026-04-20, Phase B); both in distinct env
+      VNets so sharing slot 0 is valid.
 
 ## §4 Terraform stages
 
@@ -323,7 +356,15 @@ cluster.yaml. Implementation tracked in `_TASK.md`.
       names + networking identifiers + GH-App coordinates from a
       parsed `_fleet.yaml`. Called from both `bootstrap/fleet` and
       `bootstrap/environment`; covered by
-      `tests/unit/fleet_identity.tftest.hcl`.
+      `tests/unit/fleet_identity.tftest.hcl` (8 run blocks).
+      2026-04-20 extension (PLAN §3.4): new `networking_derived`
+      output — `mgmt.{vnet_name, rg_name, address_space, location,
+      snet_pe_shared_cidr, snet_runners_cidr, cluster_slot_capacity}`
+      and `envs["<env>/<region>"].{..., snet_pe_env_cidr,
+      peering_env_to_mgmt_name, peering_mgmt_to_env_name,
+      node_asg_name, nsg_pe_name, cluster_slot_capacity}`. Legacy
+      `networking` output (BYO subnet ids) retained for pre-Phase-C
+      callsites; to be removed when bootstrap roots rewire.
 
 ## Next likely units of work
 

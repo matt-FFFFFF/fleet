@@ -61,45 +61,56 @@ state:
   containers:
     fleet: tfstate-fleet                               # Stage 0 + bootstrap/{environment,team}
 
-networking:                                            # Private networking for Stage -1 / Stage 0
-  tfstate:
-    private_endpoint:
-      # TODO: full resource id of the subnet (in rg-fleet-shared or the hub)
-      # that will host the PE for the tfstate storage account. Must have
-      # `privateEndpointNetworkPolicies` effectively disabled.
-      # e.g. /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>
-      subnet_id: null
-      # Optional: full resource id of the central privatelink.blob.core.windows.net
-      # zone (typically in the hub connectivity subscription). Leave null to skip
-      # automatic DNS wiring — adopter is then responsible for A-record registration.
-      private_dns_zone_id: null
-  runner:
-    # TODO: full resource id of the subnet that hosts the Azure Container Apps
-    # environment for the fleet runner pool. Delegated to
-    # Microsoft.App/environments, UDR egress via hub firewall.
-    subnet_id: null
-    # TODO: full resource id of the subnet for the runner's per-pool private ACR
-    # private endpoint. May be the same as networking.tfstate.private_endpoint.subnet_id.
-    container_registry_pe_subnet_id: null
-    # TODO: full resource id of the central privatelink.azurecr.io zone
-    # (typically in the hub connectivity subscription, symmetric with tfstate
-    # above). The runner pool does NOT create this zone — it must pre-exist
-    # and the operator running bootstrap/fleet needs Private DNS Zone
-    # Contributor on it so the module can register the PE's A record via the
-    # PE's DNS zone group.
-    container_registry_private_dns_zone_id: null
-  fleet_kv:
-    private_endpoint:
-      # TODO: full resource id of the subnet (in rg-fleet-shared or the hub)
-      # that will host the PE for the fleet Key Vault. Must have
-      # `privateEndpointNetworkPolicies` effectively disabled. May be the
-      # same subnet as the tfstate PE.
-      subnet_id: null
-      # Optional: full resource id of the central privatelink.vaultcore.azure.net
-      # zone (typically in the hub connectivity subscription, symmetric with
-      # tfstate + runner ACR). Leave null to skip automatic DNS wiring — adopter
-      # is then responsible for A-record registration.
-      private_dns_zone_id: null
+networking:                                            # Repo-owned VNets + BYO hub & central PDZs (PLAN §3.4)
+  # Adopter-owned hub VNet (not managed by this repo). Every env VNet
+  # peers to it (classic hub-and-spoke). Referenced by resource id.
+  hub:
+    # TODO: full resource id of the adopter hub VNet.
+    # e.g. /subscriptions/<sub-hub>/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-<region>
+    resource_id: ${networking_hub_resource_id}
+  # Central private DNS zones for PE A-record registration. All BYO —
+  # never created by this repo, only referenced by resource id. The
+  # mgmt-tier tfstate / fleet-KV / fleet-ACR PEs register into these
+  # zones; each env's Grafana PE registers into the grafana zone.
+  private_dns_zones:
+    # TODO: full resource id of privatelink.blob.core.windows.net
+    blob: ${networking_pdz_blob}
+    # TODO: full resource id of privatelink.vaultcore.azure.net
+    vaultcore: ${networking_pdz_vaultcore}
+    # TODO: full resource id of privatelink.azurecr.io
+    azurecr: ${networking_pdz_azurecr}
+    # TODO: full resource id of privatelink.grafana.azure.com
+    grafana: ${networking_pdz_grafana}
+  # Mgmt-tier VNet owned by `bootstrap/fleet` via the
+  # Azure/avm-ptn-alz-sub-vending/azure module (N=1). Houses the
+  # shared-PE subnet (tfstate SA, fleet KV, fleet ACR) and the
+  # ACA-delegated runner subnet. Subnet CIDRs derived per
+  # docs/naming.md from the address_space below (two reserved /26s:
+  # snet-pe-shared, snet-runners). Minimum /20.
+  vnets:
+    mgmt:
+      location: ${primary_region}
+      address_space: ["${networking_mgmt_address_space}"]
+  # Env-tier VNets owned by `bootstrap/environment` via the same
+  # sub-vending module (mesh_peering_enabled=true intra-env,
+  # hub_peering to networking.hub.resource_id per VNet). One VNet
+  # per env-per-region. Mgmt↔env peerings are authored separately in
+  # `bootstrap/environment` via the peering AVM module with
+  # create_reverse_peering=true (both halves in env state).
+  # Per-cluster /24 slots are carved inside each env VNet by Stage 1,
+  # keyed off `networking.subnet_slot` in each cluster.yaml. Minimum
+  # /20 → 15 cluster slots; /19 → 31 slots. See PLAN §3.4.
+  envs:
+    mgmt:
+      regions:
+        ${primary_region}: { address_space: ["${networking_env_mgmt_eastus_address_space}"] }
+    nonprod:
+      regions:
+        ${primary_region}: { address_space: ["${networking_env_nonprod_eastus_address_space}"] }
+        # <second-region>: { address_space: ["<cidr>"] }  # add when second region onboards
+    prod:
+      regions:
+        ${primary_region}: { address_space: ["${networking_env_prod_eastus_address_space}"] }
 
 github_app:
   fleet_runners:                                       # KEDA polling App (actions:read + metadata:read)
@@ -149,12 +160,6 @@ observability:
 environments:
   mgmt:
     subscription_id: ${sub_mgmt}
-    networking:
-      # TODO: full resource id of the subnet that will host the Grafana PE.
-      grafana_pe_subnet_id: null
-      # TODO: full resource ids of every VNet that should resolve the Grafana
-      # private DNS zone. Typically includes the hub and each spoke VNet.
-      grafana_pe_linked_vnet_ids: []
     aks:
       # TODO: AAD group object IDs. Break-glass (bypass K8s RBAC).
       admin_groups: []
@@ -171,9 +176,6 @@ environments:
 
   nonprod:
     subscription_id: ${sub_nonprod}
-    networking:
-      grafana_pe_subnet_id: null                       # TODO
-      grafana_pe_linked_vnet_ids: []                   # TODO
     aks:
       admin_groups: []                                 # TODO
       rbac_cluster_admins: []                          # TODO
@@ -187,9 +189,6 @@ environments:
 
   prod:
     subscription_id: ${sub_prod}
-    networking:
-      grafana_pe_subnet_id: null                       # TODO
-      grafana_pe_linked_vnet_ids: []                   # TODO
     aks:
       admin_groups: []                                 # TODO: very small
       rbac_cluster_admins: []                          # TODO

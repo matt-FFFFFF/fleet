@@ -9,8 +9,37 @@ output "derived" {
 }
 
 output "networking" {
-  description = "Try-guarded private-networking identifiers from fleet_doc.networking.*. Values may be null."
+  description = "Try-guarded private-networking identifiers from fleet_doc.networking.*. Values may be null. Pre-§3.4-topology BYO subnet ids; being phased out as bootstrap/{fleet,environment} rewire to `networking_derived`."
   value       = local.networking
+}
+
+output "networking_derived" {
+  description = <<-EOT
+    Repo-owned VNet topology derivations (PLAN §3.4). Shape:
+
+      mgmt = null | {
+        vnet_name, rg_name, address_space, location,
+        snet_pe_shared_cidr, snet_runners_cidr, cluster_slot_capacity
+      }
+      envs = {
+        "<env>/<region>" = {
+          env, region, location, address_space,
+          vnet_name, rg_name,
+          snet_pe_env_cidr, cluster_slot_capacity,
+          peering_env_to_mgmt_name, peering_mgmt_to_env_name,
+          node_asg_name, nsg_pe_name
+        }
+      }
+
+    `mgmt` is null when `networking.vnets.mgmt` is absent; `envs` is an
+    empty map when `networking.envs` is absent. Individual CIDR fields
+    are null when the corresponding `address_space` is absent.
+
+    Cluster-scope per-slot /24 and /25 CIDRs are NOT emitted here —
+    they live in `config-loader/load.sh` and Stage 1, which have
+    cluster identity as input. Parity contract: docs/naming.md.
+  EOT
+  value       = local.networking_derived
 }
 
 output "github_app_fleet_runners" {

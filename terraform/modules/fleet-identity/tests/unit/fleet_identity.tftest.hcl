@@ -274,3 +274,306 @@ run "networking_passthrough_when_populated" {
     error_message = "github_app.fleet_runners.app_id must pass through when set."
   }
 }
+
+# ---- networking_derived: topology absent → safe nulls ----------------------
+
+run "networking_derived_absent_yields_nulls" {
+  command = apply
+
+  variables {
+    fleet_doc = {
+      fleet = {
+        name           = "acme"
+        primary_region = "eastus"
+        tenant_id      = "11111111-1111-1111-1111-111111111111"
+      }
+      acr = {
+        name_override   = ""
+        resource_group  = "rg-fleet-shared"
+        subscription_id = "22222222-2222-2222-2222-222222222222"
+        location        = "eastus"
+      }
+      keyvault = { name_override = "" }
+      state = {
+        storage_account_name_override = ""
+        resource_group                = "rg-fleet-tfstate"
+        subscription_id               = "22222222-2222-2222-2222-222222222222"
+        containers                    = { fleet = "tfstate-fleet" }
+      }
+    }
+  }
+
+  assert {
+    condition     = output.networking_derived.mgmt == null
+    error_message = "networking_derived.mgmt must be null when networking.vnets.mgmt is absent."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs == {}
+    error_message = "networking_derived.envs must be an empty map when networking.envs is absent."
+  }
+}
+
+# ---- networking_derived: /20 topology produces expected names + CIDRs ------
+#
+# Canonical PLAN §3.4 layout. Mgmt VNet 10.10.0.0/20, one env (nonprod)
+# with one region (eastus) 10.20.0.0/20. Assert:
+#   - mgmt VNet/RG names
+#   - mgmt's two reserved /26s (snet-pe-shared first, snet-runners second)
+#   - env VNet/RG names, /26 PE subnet, peering names, ASG name
+#   - cluster_slot_capacity = 15 at /20 (one /24 consumed by reserved /26s,
+#     leaving 15 usable /24 slots).
+
+run "networking_derived_populates_topology_at_slash20" {
+  command = apply
+
+  variables {
+    fleet_doc = {
+      fleet = {
+        name           = "acme"
+        primary_region = "eastus"
+        tenant_id      = "11111111-1111-1111-1111-111111111111"
+      }
+      acr = {
+        name_override   = ""
+        resource_group  = "rg-fleet-shared"
+        subscription_id = "22222222-2222-2222-2222-222222222222"
+        location        = "eastus"
+      }
+      keyvault = { name_override = "" }
+      state = {
+        storage_account_name_override = ""
+        resource_group                = "rg-fleet-tfstate"
+        subscription_id               = "22222222-2222-2222-2222-222222222222"
+        containers                    = { fleet = "tfstate-fleet" }
+      }
+      networking = {
+        vnets = {
+          mgmt = {
+            location      = "eastus"
+            address_space = "10.10.0.0/20"
+          }
+        }
+        envs = {
+          nonprod = {
+            regions = {
+              eastus = {
+                address_space = "10.20.0.0/20"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  # --- mgmt ---
+  assert {
+    condition     = output.networking_derived.mgmt.vnet_name == "vnet-acme-mgmt"
+    error_message = "mgmt VNet name must be `vnet-<fleet.name>-mgmt`."
+  }
+
+  assert {
+    condition     = output.networking_derived.mgmt.rg_name == "rg-net-mgmt"
+    error_message = "mgmt VNet RG must be `rg-net-mgmt`."
+  }
+
+  assert {
+    condition     = output.networking_derived.mgmt.address_space == "10.10.0.0/20"
+    error_message = "mgmt address_space must pass through verbatim."
+  }
+
+  assert {
+    condition     = output.networking_derived.mgmt.snet_pe_shared_cidr == "10.10.0.0/26"
+    error_message = "mgmt snet-pe-shared must be the first /26 of the VNet."
+  }
+
+  assert {
+    condition     = output.networking_derived.mgmt.snet_runners_cidr == "10.10.0.64/26"
+    error_message = "mgmt snet-runners must be the second /26 of the VNet."
+  }
+
+  assert {
+    condition     = output.networking_derived.mgmt.cluster_slot_capacity == 15
+    error_message = "A /20 VNet must yield 15 usable cluster /24 slots (one /24 consumed by reserved /26s)."
+  }
+
+  # --- env ---
+  assert {
+    condition     = output.networking_derived.envs["nonprod/eastus"].vnet_name == "vnet-acme-nonprod-eastus"
+    error_message = "env VNet name must be `vnet-<fleet.name>-<env>-<region>`."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["nonprod/eastus"].rg_name == "rg-net-nonprod"
+    error_message = "env VNet RG must be `rg-net-<env>`."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["nonprod/eastus"].snet_pe_env_cidr == "10.20.0.0/26"
+    error_message = "env snet-pe-env must be the first /26 of the env VNet."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["nonprod/eastus"].cluster_slot_capacity == 15
+    error_message = "A /20 env VNet must yield 15 usable cluster /24 slots."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["nonprod/eastus"].peering_env_to_mgmt_name == "peer-nonprod-eastus-to-mgmt"
+    error_message = "env→mgmt peering name must be `peer-<env>-<region>-to-mgmt`."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["nonprod/eastus"].peering_mgmt_to_env_name == "peer-mgmt-to-nonprod-eastus"
+    error_message = "mgmt→env peering name must be `peer-mgmt-to-<env>-<region>`."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["nonprod/eastus"].node_asg_name == "asg-nodes-nonprod-eastus"
+    error_message = "env-region node ASG name must be `asg-nodes-<env>-<region>`."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["nonprod/eastus"].nsg_pe_name == "nsg-pe-env-nonprod-eastus"
+    error_message = "env PE NSG name must be `nsg-pe-env-<env>-<region>`."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["nonprod/eastus"].location == "eastus"
+    error_message = "env location must default to the region name when not explicitly set."
+  }
+}
+
+# ---- networking_derived: multi-env + multi-region flatten correctly --------
+
+run "networking_derived_flattens_multi_env_multi_region" {
+  command = apply
+
+  variables {
+    fleet_doc = {
+      fleet = {
+        name           = "acme"
+        primary_region = "eastus"
+        tenant_id      = "11111111-1111-1111-1111-111111111111"
+      }
+      acr = {
+        name_override   = ""
+        resource_group  = "rg-fleet-shared"
+        subscription_id = "22222222-2222-2222-2222-222222222222"
+        location        = "eastus"
+      }
+      keyvault = { name_override = "" }
+      state = {
+        storage_account_name_override = ""
+        resource_group                = "rg-fleet-tfstate"
+        subscription_id               = "22222222-2222-2222-2222-222222222222"
+        containers                    = { fleet = "tfstate-fleet" }
+      }
+      networking = {
+        vnets = {
+          mgmt = {
+            location      = "eastus"
+            address_space = "10.10.0.0/20"
+          }
+        }
+        envs = {
+          nonprod = {
+            regions = {
+              eastus  = { address_space = "10.20.0.0/20" }
+              westus2 = { address_space = "10.21.0.0/20" }
+            }
+          }
+          prod = {
+            regions = {
+              eastus = { address_space = "10.30.0.0/20" }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  assert {
+    condition     = length(keys(output.networking_derived.envs)) == 3
+    error_message = "Flattened envs map must contain one entry per (env, region) pair."
+  }
+
+  assert {
+    condition = alltrue([
+      contains(keys(output.networking_derived.envs), "nonprod/eastus"),
+      contains(keys(output.networking_derived.envs), "nonprod/westus2"),
+      contains(keys(output.networking_derived.envs), "prod/eastus"),
+    ])
+    error_message = "Flattened envs map keys must be `<env>/<region>`."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["nonprod/westus2"].vnet_name == "vnet-acme-nonprod-westus2"
+    error_message = "Second region of an env must derive its own VNet name."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["prod/eastus"].peering_env_to_mgmt_name == "peer-prod-eastus-to-mgmt"
+    error_message = "Prod env-region peering names must not collide with nonprod."
+  }
+}
+
+# ---- networking_derived: wider VNet raises capacity ------------------------
+#
+# At /19, reserved /26s still consume one /24, leaving 2^5 - 1 = 31 slots.
+
+run "networking_derived_capacity_scales_with_address_space" {
+  command = apply
+
+  variables {
+    fleet_doc = {
+      fleet = {
+        name           = "acme"
+        primary_region = "eastus"
+        tenant_id      = "11111111-1111-1111-1111-111111111111"
+      }
+      acr = {
+        name_override   = ""
+        resource_group  = "rg-fleet-shared"
+        subscription_id = "22222222-2222-2222-2222-222222222222"
+        location        = "eastus"
+      }
+      keyvault = { name_override = "" }
+      state = {
+        storage_account_name_override = ""
+        resource_group                = "rg-fleet-tfstate"
+        subscription_id               = "22222222-2222-2222-2222-222222222222"
+        containers                    = { fleet = "tfstate-fleet" }
+      }
+      networking = {
+        vnets = {
+          mgmt = { location = "eastus", address_space = "10.10.0.0/19" }
+        }
+        envs = {
+          nonprod = {
+            regions = {
+              eastus = { address_space = "10.20.0.0/19" }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  assert {
+    condition     = output.networking_derived.mgmt.cluster_slot_capacity == 31
+    error_message = "A /19 VNet must yield 31 usable cluster /24 slots."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["nonprod/eastus"].cluster_slot_capacity == 31
+    error_message = "A /19 env VNet must yield 31 usable cluster /24 slots."
+  }
+
+  # First /26 should still be the first /26 of the /19 VNet.
+  assert {
+    condition     = output.networking_derived.mgmt.snet_pe_shared_cidr == "10.10.0.0/26"
+    error_message = "snet-pe-shared must be the first /26 regardless of VNet size."
+  }
+}

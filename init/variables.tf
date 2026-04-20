@@ -144,3 +144,155 @@ variable "template_commit" {
   type        = string
   default     = "unknown"
 }
+
+# ---- networking (PLAN §3.4) -------------------------------------------------
+#
+# Four repo-owned VNets — mgmt (bootstrap/fleet) and one per env-region
+# (bootstrap/environment). Minimum /20 per VNet (yields 15 cluster `/24`
+# slots; /19 yields 31). Per-cluster `/24` is carved by Stage 1 using
+# `networking.subnet_slot` in each cluster.yaml.
+#
+# BYO: hub VNet resource id + four central private DNS zone resource ids.
+# Every PE created by the repo (tfstate SA, fleet KV, fleet ACR, Grafana)
+# registers into the matching central zone — the repo never creates a
+# zone itself.
+
+variable "networking_hub_resource_id" {
+  description = "Full ARM resource id of the adopter-owned hub VNet. Every env VNet hub-peers to it; bootstrap/fleet's mgmt VNet hub-peers too."
+  type        = string
+  validation {
+    condition     = can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", var.networking_hub_resource_id))
+    error_message = "networking_hub_resource_id must be a full /subscriptions/.../providers/Microsoft.Network/virtualNetworks/<name> resource id."
+  }
+}
+
+variable "networking_pdz_blob" {
+  description = "Full ARM resource id of the BYO privatelink.blob.core.windows.net private DNS zone (tfstate SA PE registers here)."
+  type        = string
+  validation {
+    condition     = can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.blob\\.core\\.windows\\.net$", var.networking_pdz_blob))
+    error_message = "networking_pdz_blob must end in /privateDnsZones/privatelink.blob.core.windows.net."
+  }
+}
+
+variable "networking_pdz_vaultcore" {
+  description = "Full ARM resource id of the BYO privatelink.vaultcore.azure.net private DNS zone (fleet KV PE registers here)."
+  type        = string
+  validation {
+    condition     = can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.vaultcore\\.azure\\.net$", var.networking_pdz_vaultcore))
+    error_message = "networking_pdz_vaultcore must end in /privateDnsZones/privatelink.vaultcore.azure.net."
+  }
+}
+
+variable "networking_pdz_azurecr" {
+  description = "Full ARM resource id of the BYO privatelink.azurecr.io private DNS zone (fleet ACR PE + runner per-pool ACR PEs register here)."
+  type        = string
+  validation {
+    condition     = can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.azurecr\\.io$", var.networking_pdz_azurecr))
+    error_message = "networking_pdz_azurecr must end in /privateDnsZones/privatelink.azurecr.io."
+  }
+}
+
+variable "networking_pdz_grafana" {
+  description = "Full ARM resource id of the BYO privatelink.grafana.azure.com private DNS zone (per-env Grafana PE registers here)."
+  type        = string
+  validation {
+    condition     = can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.grafana\\.azure\\.com$", var.networking_pdz_grafana))
+    error_message = "networking_pdz_grafana must end in /privateDnsZones/privatelink.grafana.azure.com."
+  }
+}
+
+# Address spaces — one per repo-owned VNet. Each: valid CIDR, RFC1918,
+# /20 or wider. Non-overlap across the four is enforced below via a
+# composite validation on networking_mgmt_address_space (last-declared
+# wins; see `can(cidrsubnet(...))` trick — compares normalized network
+# forms).
+
+variable "networking_mgmt_address_space" {
+  description = "Address space (CIDR) of the mgmt VNet owned by bootstrap/fleet. RFC1918, /20 or wider. Two /26s reserved (snet-pe-shared, snet-runners)."
+  type        = string
+  validation {
+    condition     = can(cidrnetmask(var.networking_mgmt_address_space))
+    error_message = "networking_mgmt_address_space must be a valid CIDR (e.g. 10.50.0.0/20)."
+  }
+  validation {
+    condition     = !can(cidrnetmask(var.networking_mgmt_address_space)) || tonumber(split("/", var.networking_mgmt_address_space)[1]) <= 20
+    error_message = "networking_mgmt_address_space must be /20 or wider (≤20)."
+  }
+  validation {
+    condition     = can(regex("^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)", var.networking_mgmt_address_space))
+    error_message = "networking_mgmt_address_space must be RFC1918 (10.0.0.0/8, 172.16.0.0/12, or 192.168.0.0/16)."
+  }
+}
+
+variable "networking_env_mgmt_eastus_address_space" {
+  description = "Address space (CIDR) of the mgmt-env VNet in primary_region. RFC1918, /20 or wider."
+  type        = string
+  validation {
+    condition     = can(cidrnetmask(var.networking_env_mgmt_eastus_address_space))
+    error_message = "networking_env_mgmt_eastus_address_space must be a valid CIDR."
+  }
+  validation {
+    condition     = !can(cidrnetmask(var.networking_env_mgmt_eastus_address_space)) || tonumber(split("/", var.networking_env_mgmt_eastus_address_space)[1]) <= 20
+    error_message = "networking_env_mgmt_eastus_address_space must be /20 or wider (≤20)."
+  }
+  validation {
+    condition     = can(regex("^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)", var.networking_env_mgmt_eastus_address_space))
+    error_message = "networking_env_mgmt_eastus_address_space must be RFC1918."
+  }
+}
+
+variable "networking_env_nonprod_eastus_address_space" {
+  description = "Address space (CIDR) of the nonprod-env VNet in primary_region. RFC1918, /20 or wider."
+  type        = string
+  validation {
+    condition     = can(cidrnetmask(var.networking_env_nonprod_eastus_address_space))
+    error_message = "networking_env_nonprod_eastus_address_space must be a valid CIDR."
+  }
+  validation {
+    condition     = !can(cidrnetmask(var.networking_env_nonprod_eastus_address_space)) || tonumber(split("/", var.networking_env_nonprod_eastus_address_space)[1]) <= 20
+    error_message = "networking_env_nonprod_eastus_address_space must be /20 or wider (≤20)."
+  }
+  validation {
+    condition     = can(regex("^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)", var.networking_env_nonprod_eastus_address_space))
+    error_message = "networking_env_nonprod_eastus_address_space must be RFC1918."
+  }
+}
+
+variable "networking_env_prod_eastus_address_space" {
+  description = "Address space (CIDR) of the prod-env VNet in primary_region. RFC1918, /20 or wider. Must not overlap the other three repo-owned VNets."
+  type        = string
+  validation {
+    condition     = can(cidrnetmask(var.networking_env_prod_eastus_address_space))
+    error_message = "networking_env_prod_eastus_address_space must be a valid CIDR."
+  }
+  validation {
+    condition     = !can(cidrnetmask(var.networking_env_prod_eastus_address_space)) || tonumber(split("/", var.networking_env_prod_eastus_address_space)[1]) <= 20
+    error_message = "networking_env_prod_eastus_address_space must be /20 or wider (≤20)."
+  }
+  validation {
+    condition     = can(regex("^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)", var.networking_env_prod_eastus_address_space))
+    error_message = "networking_env_prod_eastus_address_space must be RFC1918."
+  }
+  # Non-overlap across all four repo-owned VNets. Compare normalized
+  # network forms via cidrsubnet(_, 0, 0). Only catches exact-match
+  # duplication when all four are the same prefix length; partial
+  # overlap across mixed prefix lengths is flagged as a known gap in
+  # docs/networking.md (operator-side CIDR planning). Guarded with
+  # alltrue+can so this rule only fires once every input is a valid
+  # CIDR — otherwise the per-field CIDR-syntax rule above fires first.
+  validation {
+    condition = !alltrue([
+      can(cidrnetmask(var.networking_mgmt_address_space)),
+      can(cidrnetmask(var.networking_env_mgmt_eastus_address_space)),
+      can(cidrnetmask(var.networking_env_nonprod_eastus_address_space)),
+      can(cidrnetmask(var.networking_env_prod_eastus_address_space)),
+      ]) || length(distinct([
+        cidrsubnet(var.networking_mgmt_address_space, 0, 0),
+        cidrsubnet(var.networking_env_mgmt_eastus_address_space, 0, 0),
+        cidrsubnet(var.networking_env_nonprod_eastus_address_space, 0, 0),
+        cidrsubnet(var.networking_env_prod_eastus_address_space, 0, 0),
+    ])) == 4
+    error_message = "The four repo-owned VNet address spaces (mgmt + mgmt/nonprod/prod env in primary_region) must be distinct."
+  }
+}

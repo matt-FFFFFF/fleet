@@ -22,6 +22,17 @@ locals {
     sub_nonprod        = var.sub_nonprod
     sub_prod           = var.sub_prod
     dns_fleet_root     = var.dns_fleet_root
+    # Networking (PLAN §3.4) — BYO hub + PDZs, plus four repo-owned VNets
+    # (mgmt + one per env in primary_region).
+    networking_hub_resource_id                  = var.networking_hub_resource_id
+    networking_pdz_blob                         = var.networking_pdz_blob
+    networking_pdz_vaultcore                    = var.networking_pdz_vaultcore
+    networking_pdz_azurecr                      = var.networking_pdz_azurecr
+    networking_pdz_grafana                      = var.networking_pdz_grafana
+    networking_mgmt_address_space               = var.networking_mgmt_address_space
+    networking_env_mgmt_eastus_address_space    = var.networking_env_mgmt_eastus_address_space
+    networking_env_nonprod_eastus_address_space = var.networking_env_nonprod_eastus_address_space
+    networking_env_prod_eastus_address_space    = var.networking_env_prod_eastus_address_space
     # CODEOWNERS default-rule owner. Empty input falls back to the org/user
     # itself (guaranteed to resolve); adopters can override with a team spec
     # like `acme/platform-engineers`.

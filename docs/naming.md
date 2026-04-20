@@ -2,7 +2,10 @@
 
 Canonical, implementation-neutral spec. Implemented in:
 
-- `terraform/config-loader/load.sh` (for Stage 1/2 consumers)
+- `terraform/modules/fleet-identity/` (fleet-scope + env-scope HCL
+  derivations, consumed by `bootstrap/fleet` and `bootstrap/environment`)
+- `terraform/config-loader/load.sh` (Stage 1/2 consumers; carries
+  cluster-scope CIDR derivations that need `cluster.subnet_slot`)
 - `terraform/bootstrap/fleet/**` and `terraform/bootstrap/environment/**` HCL
   locals
 - The self-test CI diffs outputs from both implementations against
@@ -20,9 +23,14 @@ fields:
 - `dns.fleet_root` — parent DNS zone (e.g. `int.acme.example`).
 - Optional overrides: `acr.name_override`, `keyvault.name_override`,
   `state.storage_account_name_override`.
+- For networking derivations (PLAN §3.4):
+  `networking.vnets.mgmt.address_space` (mgmt VNet), and
+  `networking.envs.<env>.regions.<region>.address_space` (each env-region
+  VNet). Both `/20` by default.
 
 For Stage 1, `cluster.{name,env,region}` come from the cluster's
-directory path under `clusters/`.
+directory path under `clusters/`, and `cluster.networking.subnet_slot`
+from the cluster.yaml itself (required, immutable — see PLAN §3.4).
 
 ## Derived names
 
@@ -58,6 +66,37 @@ directory path under `clusters/`.
 | Runner ACR (per-pool)     | `acrfleetrunners` (module-derived from `postfix = "fleet-runners"`, hyphens stripped) | ≤ 50 chars, a-z0-9 |
 | Runner ACA environment    | `cae-fleet-runners`                                                   |                      |
 | Cluster DNS zone FQDN     | `<cluster.name>.<cluster.region>.<cluster.env>.<dns.fleet_root>`      |                      |
+| Mgmt VNet                 | `vnet-<fleet.name>-mgmt`                                              |                      |
+| Env VNet (per region)     | `vnet-<fleet.name>-<env>-<region>`                                    |                      |
+| Mgmt network RG           | `rg-net-mgmt`                                                         |                      |
+| Env network RG            | `rg-net-<env>`                                                        |                      |
+| Mgmt snet-pe-shared CIDR  | first `/26` of `networking.vnets.mgmt.address_space`                  |                      |
+| Mgmt snet-runners CIDR    | second `/26` of `networking.vnets.mgmt.address_space`                 | mgmt VNet only       |
+| Env snet-pe-env CIDR      | first `/26` of `networking.envs.<env>.regions.<region>.address_space` |                      |
+| Cluster `/24` (slot K)    | K-th `/24` **after** the reserved first `/24` of the env VNet (see §3.4 diagram); i.e. `cidrsubnet(address_space, 24-N, K+1)` | K = `cluster.yaml.networking.subnet_slot`; 0 ≤ K < capacity |
+| snet-aks-api CIDR         | first `/25` of the cluster `/24`                                      |                      |
+| snet-aks-nodes CIDR       | second `/25` of the cluster `/24`                                     |                      |
+| snet-aks-api subnet       | `snet-aks-api-<cluster.name>`                                         |                      |
+| snet-aks-nodes subnet     | `snet-aks-nodes-<cluster.name>`                                       |                      |
+| Env PE NSG                | `nsg-pe-env-<env>-<region>`                                           |                      |
+| Mgmt shared NSG           | `nsg-pe-shared`                                                       |                      |
+| Mgmt runner NSG           | `nsg-runners`                                                         |                      |
+| env→mgmt peering          | `peer-<env>-<region>-to-mgmt`                                         | env state            |
+| mgmt→env peering          | `peer-mgmt-to-<env>-<region>`                                         | env state (reverse)  |
+| Node ASG (per env-region) | `asg-nodes-<env>-<region>`                                            |                      |
+
+### Cluster slot capacity
+
+For an env-region VNet of size `/N`:
+
+- reserved /26s consume the first `/24` of the VNet;
+- usable cluster slots = `2^(24-N) - 1`;
+- at the default `/20` that's **15** slots (0..14).
+
+A wider VNet (`/19`, `/18`) linearly raises capacity; operators widen
+the VNet in `_fleet.yaml.networking.envs.<env>.regions.<region>.address_space`
+if they outgrow 15 clusters per env-region (alternative: add a second
+region under that env).
 
 ## Truncation
 

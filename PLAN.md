@@ -562,7 +562,7 @@ structure and Azure-resource names.
   by both `bootstrap/fleet` (N=1 mgmt VNet, no mesh) and
   `bootstrap/environment` (N env-region VNets, `mesh_peering_enabled
   = true`, per-VNet `hub_peering_enabled = true`).
-- `Azure/avm-res-network-virtualnetwork/azure//modules/peering`
+- `Azure/avm-res-network-virtualnetwork/azurerm//modules/peering`
   (`~> X.Y`; azapi-only). Called from `bootstrap/environment` with
   `create_reverse_peering = true` so both halves of every mgmt↔env
   peering land in a single state file. No repo-local peering helper
@@ -673,7 +673,7 @@ the env by adding a second region or widens the env VNet's
 > owns the mgmt VNet (via `Azure/avm-ptn-alz-sub-vending/azure`, N=1);
 > `bootstrap/environment` owns env VNets (sub-vending, intra-env mesh),
 > both halves of every mgmt↔env peering (via
-> `Azure/avm-res-network-virtualnetwork/azure//modules/peering` with
+> `Azure/avm-res-network-virtualnetwork/azurerm//modules/peering` with
 > `create_reverse_peering = true`), and one `asg-nodes-<env>-<region>`
 > per env-region; Stage 1 owns per-cluster `/25` subnets as azapi
 > children of the env VNet and attaches the AKS node pool to the
@@ -1079,7 +1079,7 @@ Creates:
   owned by Stage 1. The sub-vending module does **not** pre-create
   per-cluster subnets.
 - **Mgmt↔env peerings** — one call per env-region to
-  `Azure/avm-res-network-virtualnetwork/azure//modules/peering`
+  `Azure/avm-res-network-virtualnetwork/azurerm//modules/peering`
   with `create_reverse_peering = true`, names
   `peer-<env>-<region>-to-mgmt` and `peer-mgmt-to-<env>-<region>`.
   Both halves land in the env state. Requires `Network Contributor`
@@ -2452,7 +2452,7 @@ Each environment holds its own `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
   VNets (one per env-per-region) created by `bootstrap/environment`
   via the same module with intra-env mesh. Mgmt↔env peerings
   authored by `bootstrap/environment` via
-  `Azure/avm-res-network-virtualnetwork/azure//modules/peering` with
+  `Azure/avm-res-network-virtualnetwork/azurerm//modules/peering` with
   `create_reverse_peering = true`. Adopter-owned hub VNet referenced
   by resource id from `_fleet.yaml.networking.hub.resource_id` only
   — not provisioned by this repo.
@@ -2524,7 +2524,7 @@ Each environment holds its own `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
   `Network Contributor` pre-granted by `bootstrap/environment`.
 - **AVM module version pins for networking** — exact `~> X.Y`
   constraints for `Azure/avm-ptn-alz-sub-vending/azure` and
-  `Azure/avm-res-network-virtualnetwork/azure//modules/peering`
+  `Azure/avm-res-network-virtualnetwork/azurerm//modules/peering`
   to be selected at implementation time (latest satisfying
   `azapi ~> 2.5`, `enable_telemetry = false`).
 

@@ -3,11 +3,7 @@ cluster:
   resource_group: rg-aks-mgmt-eastus-01
 
 networking:
-  vnet_id: <vnet-mgmt-resource-id>
-  subnet_name: snet-aks
-  dns_linked_vnet_ids:
-    - <vnet-hub-mgmt-resource-id>
-    - <vnet-mgmt-resource-id>
+  subnet_slot: 0                                    # /24 slot inside mgmt-env VNet (PLAN §3.4)
 
 # Argo GH App specifics for the mgmt cluster (installation-id differs per
 # cluster if separate installations are used; otherwise inherit from defaults).

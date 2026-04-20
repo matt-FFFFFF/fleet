@@ -30,6 +30,16 @@ variables {
   sub_prod           = "55555555-5555-5555-5555-555555555555"
   dns_fleet_root     = "int.acme.example"
   template_commit    = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+  networking_hub_resource_id                  = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-eastus"
+  networking_pdz_blob                         = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+  networking_pdz_vaultcore                    = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+  networking_pdz_azurecr                      = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.azurecr.io"
+  networking_pdz_grafana                      = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.grafana.azure.com"
+  networking_mgmt_address_space               = "10.50.0.0/20"
+  networking_env_mgmt_eastus_address_space    = "10.60.0.0/20"
+  networking_env_nonprod_eastus_address_space = "10.70.0.0/20"
+  networking_env_prod_eastus_address_space    = "10.80.0.0/20"
 }
 
 # ---- happy path: content round-trips fixture values ------------------------
@@ -323,4 +333,119 @@ run "reject_codeowners_owner_leading_slash" {
     codeowners_owner = "/acme"
   }
   expect_failures = [var.codeowners_owner]
+}
+
+# ---- networking (PLAN §3.4) -------------------------------------------------
+
+run "render_networking_shape" {
+  command = apply
+
+  # BYO references land verbatim under networking.hub and networking.private_dns_zones.
+  assert {
+    condition     = yamldecode(local_file.fleet_yaml.content).networking.hub.resource_id == "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-eastus"
+    error_message = "networking.hub.resource_id must round-trip var.networking_hub_resource_id."
+  }
+
+  assert {
+    condition = alltrue([
+      yamldecode(local_file.fleet_yaml.content).networking.private_dns_zones.blob == "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net",
+      yamldecode(local_file.fleet_yaml.content).networking.private_dns_zones.vaultcore == "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net",
+      yamldecode(local_file.fleet_yaml.content).networking.private_dns_zones.azurecr == "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.azurecr.io",
+      yamldecode(local_file.fleet_yaml.content).networking.private_dns_zones.grafana == "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.grafana.azure.com",
+    ])
+    error_message = "networking.private_dns_zones.{blob,vaultcore,azurecr,grafana} must round-trip the four BYO zone id vars."
+  }
+
+  # Mgmt VNet: location = primary_region, address_space = var.
+  assert {
+    condition     = yamldecode(local_file.fleet_yaml.content).networking.vnets.mgmt.location == "eastus"
+    error_message = "networking.vnets.mgmt.location must equal primary_region."
+  }
+
+  assert {
+    condition     = yamldecode(local_file.fleet_yaml.content).networking.vnets.mgmt.address_space[0] == "10.50.0.0/20"
+    error_message = "networking.vnets.mgmt.address_space[0] must round-trip var.networking_mgmt_address_space."
+  }
+
+  # Env VNets, one entry per env under primary_region.
+  assert {
+    condition = alltrue([
+      yamldecode(local_file.fleet_yaml.content).networking.envs.mgmt.regions.eastus.address_space[0] == "10.60.0.0/20",
+      yamldecode(local_file.fleet_yaml.content).networking.envs.nonprod.regions.eastus.address_space[0] == "10.70.0.0/20",
+      yamldecode(local_file.fleet_yaml.content).networking.envs.prod.regions.eastus.address_space[0] == "10.80.0.0/20",
+    ])
+    error_message = "networking.envs.<env>.regions.<primary_region>.address_space[0] must round-trip the three per-env address_space vars."
+  }
+
+  # Legacy BYO subnet fields must NOT be present under environments.<env>.networking.
+  assert {
+    condition = alltrue([
+      !can(yamldecode(local_file.fleet_yaml.content).environments.mgmt.networking.grafana_pe_subnet_id),
+      !can(yamldecode(local_file.fleet_yaml.content).environments.nonprod.networking.grafana_pe_subnet_id),
+      !can(yamldecode(local_file.fleet_yaml.content).environments.prod.networking.grafana_pe_subnet_id),
+      !can(yamldecode(local_file.fleet_yaml.content).networking.tfstate),
+      !can(yamldecode(local_file.fleet_yaml.content).networking.runner),
+      !can(yamldecode(local_file.fleet_yaml.content).networking.fleet_kv),
+    ])
+    error_message = "Legacy BYO subnet fields must be absent post Phase-B schema flip (PLAN §3.4)."
+  }
+}
+
+# ---- networking validation rejections --------------------------------------
+
+run "reject_hub_not_full_arm_id" {
+  command = plan
+  variables {
+    networking_hub_resource_id = "vnet-hub-eastus"
+  }
+  expect_failures = [var.networking_hub_resource_id]
+}
+
+run "reject_pdz_blob_wrong_zone_name" {
+  command = plan
+  variables {
+    networking_pdz_blob = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.queue.core.windows.net"
+  }
+  expect_failures = [var.networking_pdz_blob]
+}
+
+run "reject_pdz_vaultcore_wrong_zone_name" {
+  command = plan
+  variables {
+    networking_pdz_vaultcore = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub-dns/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+  }
+  expect_failures = [var.networking_pdz_vaultcore]
+}
+
+run "reject_mgmt_address_space_bad_cidr" {
+  command = plan
+  variables {
+    networking_mgmt_address_space = "not-a-cidr"
+  }
+  expect_failures = [var.networking_mgmt_address_space]
+}
+
+run "reject_mgmt_address_space_too_narrow" {
+  command = plan
+  variables {
+    networking_mgmt_address_space = "10.50.0.0/24"
+  }
+  expect_failures = [var.networking_mgmt_address_space]
+}
+
+run "reject_mgmt_address_space_not_rfc1918" {
+  command = plan
+  variables {
+    networking_mgmt_address_space = "8.8.0.0/20"
+  }
+  expect_failures = [var.networking_mgmt_address_space]
+}
+
+run "reject_env_prod_overlap_with_mgmt" {
+  command = plan
+  variables {
+    # Identical to mgmt → distinct-count check must fire on prod var.
+    networking_env_prod_eastus_address_space = "10.50.0.0/20"
+  }
+  expect_failures = [var.networking_env_prod_eastus_address_space]
 }
