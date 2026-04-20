@@ -12,15 +12,13 @@
 > Legend: `[x]` done · `[~]` in progress / scaffolded but unapplied
 > `[ ]` not started · `[-]` deferred.
 
-Last updated: 2026-04-19 · vendored `avm-ptn-cicd-agents-and-runners`
-v0.5.2 into `terraform/modules/cicd-runners` (telemetry stripped,
-GH-App PEM via KV reference); `bootstrap/fleet` gains a single
-repo-scoped self-hosted runner pool (ACA+KEDA), the **fleet Key
-Vault** (relocated from Stage 0 to break the runner-pool KV-reference
-cycle; private endpoint, deny-default ACLs), and a private endpoint
-on the tfstate SA with first-apply-only
-`allow_public_state_during_bootstrap` escape hatch; schema and
-adoption docs extended accordingly.
+Last updated: 2026-04-20 · networking topology spec landed in PLAN
+§3.4 (+ §4 callout, §3.1/§3.3 schema refresh, §14/§15 updates).
+Repo-owned mgmt + env VNets via `Azure/avm-ptn-alz-sub-vending/azure`;
+mgmt↔env peerings via the peering AVM module with
+`create_reverse_peering = true`; per-cluster `/24` carved into two
+`/25`s by Stage 1 keyed off new required `networking.subnet_slot` in
+cluster.yaml. Implementation tracked in `_TASK.md`.
 
 ---
 
@@ -48,9 +46,18 @@ adoption docs extended accordingly.
   - [x] Subscription stitching from `_fleet.yaml.environments.<env>`.
   - [ ] Full name-derivation parity with `docs/naming.md` — pending
         audit against bootstrap-stage HCL locals.
+  - [ ] Networking derivations (VNet/subnet CIDR math off
+        `subnet_slot`, peering names, ASG name) — spec in PLAN §3.4;
+        not yet in `load.sh` or `modules/fleet-identity/`.
+- [~] §3.4 Networking topology — **spec only**. Repo-owned mgmt + env
+      VNets via sub-vending, mgmt↔env peering via peering AVM module,
+      per-cluster `/25` subnets in Stage 1 keyed off required
+      `networking.subnet_slot` in cluster.yaml. Implementation tracked
+      in `_TASK.md`.
 - [x] Example clusters: `mgmt/eastus/aks-mgmt-01`,
       `nonprod/eastus/aks-nonprod-01` (referenced; content unchanged
-      since initial scaffold).
+      since initial scaffold). Will gain `networking.subnet_slot`
+      when §3.4 lands in code.
 
 ## §4 Terraform stages
 
@@ -83,6 +90,12 @@ adoption docs extended accordingly.
         Scaffolded via `module "runner"` in `main.runner.tf`. First
         job execution awaits operator-supplied PEM via
         `init-gh-apps.sh`.
+  - [ ] Mgmt VNet (sub-vending N=1, no mesh, hub_peering) +
+        `rg-net-mgmt` + `snet-pe-shared` / `snet-runners` subnets +
+        NSGs. `Network Contributor` on mgmt VNet → `fleet-meta`
+        UAMI. `MGMT_VNET_RESOURCE_ID` publish. Rewire existing
+        tfstate/fleet-KV/fleet-ACR PEs and runner ACA subnet from
+        BYO `_fleet.yaml` ids to derived subnet outputs. PLAN §3.4.
 - [~] `bootstrap/environment/` — scaffolded (state container, env
       UAMI, GH env + variables, observability RG/AG/AMG/AMW/DCE/NSP).
       GH env + UAMI delivered via the vendored
@@ -92,6 +105,16 @@ adoption docs extended accordingly.
   - [x] Consumes `fleet_meta_principal_id` input from fleet outputs.
   - [x] OIDC subject claims match fleet (ID-based); FIC name preserved
         via `identity.fic_name = "gh-fleet-<env>"` override.
+  - [ ] Env VNets (sub-vending, `mesh_peering_enabled=true`,
+        `hub_peering_enabled=true` per VNet) + `rg-net-<env>` +
+        `snet-pe-env` + `nsg-pe-env-<env>-<region>`. PLAN §3.4.
+  - [ ] Mgmt↔env peerings via peering AVM module with
+        `create_reverse_peering=true` (both halves in env state).
+  - [ ] Per-env-region node ASG `asg-nodes-<env>-<region>`.
+  - [ ] Per-region repo-variable publishes
+        `<ENV>_<REGION>_VNET_RESOURCE_ID` +
+        `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`. Grafana PE rewired
+        from BYO subnet to derived `snet-pe-env`.
 - [~] `bootstrap/team/` — refactored onto the vendored module
       (`module "team_repo"` with `template =` + CODEOWNERS file);
       awaits PLAN §4 Stage -1 `team-bootstrap.yaml` CI flow.
@@ -115,14 +138,24 @@ adoption docs extended accordingly.
         `yamldecode`); mgmt redirects filtered on `cluster.role`.
   - [x] Outputs exported per PLAN §4 Stage 0 table (consumed as repo
         vars by Stage 1/2).
+  - [ ] `MGMT_VNET_RESOURCE_ID` passthrough output added to the
+        Stage 0 publish list (PLAN §3.4 / §4 Stage 0 table).
 
 ### Stage 1 — `terraform/stages/1-cluster`
 
 - [ ] Stage body not written.
 - [~] `terraform/modules/aks-cluster` — AVM wrapper pending detail.
 - [x] `terraform/modules/cluster-dns` — present (zone + links + role
-      assignment).
+      assignment). Will need link-list derivation update to
+      `[env VNet, mgmt VNet]` per PLAN §3.4.
 - [ ] `terraform/modules/cluster-identities` — not written.
+- [ ] Per-cluster subnets (`snet-aks-api-<name>` + `snet-aks-nodes-<name>`)
+      as azapi children of env VNet; AKS node-pool ASG attachment
+      (or NSG fallback). `networking.subnet_slot` consumed from
+      cluster.yaml. PLAN §3.4.
+- [ ] `validate.yaml` PR-check: `subnet_slot` present, integer,
+      in-range, unique within env+region, immutable (change blocks
+      PR). PLAN §3.4.
 
 ### Stage 2 — `terraform/stages/2-bootstrap`
 
@@ -184,7 +217,12 @@ adoption docs extended accordingly.
 
 ## §11 Operator UX
 
-- [x] `docs/adoption.md` — adopter flow.
+- [x] `docs/adoption.md` — adopter flow. Will need refresh when
+      §3.4 lands in code (BYO subnet fields drop; `networking.hub` +
+      address_space fields added).
+- [ ] `docs/networking.md` — **new** file per PLAN §3.4 (topology
+      diagram, CIDR rules, peering matrix, `subnet_slot` walkthrough).
+      Not yet written.
 - [ ] `docs/onboarding-cluster.md`, `onboarding-team.md`,
       `upgrades.md`, `promotion.md` — stubs / not written.
 
@@ -289,9 +327,14 @@ adoption docs extended accordingly.
 
 ## Next likely units of work
 
-1. Land `aks-cluster` + `cluster-identities` modules + `stages/1-cluster`.
-2. First live apply of `bootstrap/fleet` + `stages/0-fleet` against a real
+1. Land the PLAN §3.4 networking topology end-to-end (tracked in
+   `_TASK.md`): schema flip in `_fleet.yaml` + `cluster.yaml`,
+   `fleet-identity` derivations, `bootstrap/fleet` mgmt VNet,
+   `bootstrap/environment` env VNets + peerings + ASG, Stage 1
+   per-cluster subnets + ASG attachment, docs + PR-check.
+2. Land `aks-cluster` + `cluster-identities` modules + `stages/1-cluster`.
+3. First live apply of `bootstrap/fleet` + `stages/0-fleet` against a real
    tenant; record any drift here.
-3. `validate.yaml` + `tf-plan.yaml` CI workflows.
-4. CI parity check between `load.sh` naming and bootstrap / Stage 0
+4. `validate.yaml` + `tf-plan.yaml` CI workflows.
+5. CI parity check between `load.sh` naming and bootstrap / Stage 0
    HCL locals.

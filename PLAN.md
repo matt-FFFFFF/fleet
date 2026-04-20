@@ -209,14 +209,22 @@ kubernetes:
     max_graceful_termination_sec: 600
 
 networking:
-  vnet_id: /subscriptions/.../virtualNetworks/vnet-nonprod
-  subnet_name: snet-aks
+  # Per-cluster /24 slot inside the env+region VNet (see §3.4). The
+  # operator picks an integer in [0..capacity-1] that is unique within
+  # the env+region; the PR-check in `validate.yaml` enforces uniqueness,
+  # range, and that the slot is never changed in-place (changing it
+  # forces subnet re-creation → AKS re-create).
+  # The per-cluster /24 is split into two /25s:
+  #   snet-aks-api-<name>    (first /25)
+  #   snet-aks-nodes-<name>  (second /25)
+  # Both are owned by Stage 1 as azapi child resources of the env VNet.
+  subnet_slot: 0
   pod_cidr: 10.244.0.0/16
   service_cidr: 10.0.0.0/16
   private_cluster: true
-  dns_linked_vnet_ids:               # VNets that resolve this cluster's private zone (hub + cluster VNet)
-    - /subscriptions/.../virtualNetworks/vnet-hub-eastus
-    - /subscriptions/.../virtualNetworks/vnet-nonprod
+  # dns_linked_vnet_ids is derived — the cluster's private DNS zone is
+  # linked to [env VNet, mgmt VNet] automatically by Stage 1. No BYO
+  # link list.
 
 node_pools:
   system:
@@ -330,6 +338,42 @@ aad:
     disable_local_accounts: true # hard requirement; AKS module input is pinned
     enable_azure_rbac: true # Azure RBAC for Kubernetes Authorization
 
+networking:
+  # Adopter-owned hub VNet (not managed by this repo). Every env VNet
+  # peers to it (classic hub-and-spoke). Referenced by resource id.
+  hub:
+    resource_id: /subscriptions/<sub-hub>/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-<region>
+  # Central private DNS zones for PE A-record registration. All BYO —
+  # never created by this repo, only referenced by resource id.
+  private_dns_zones:
+    blob: /subscriptions/<sub-hub>/.../privatelink.blob.core.windows.net
+    vaultcore: /subscriptions/<sub-hub>/.../privatelink.vaultcore.azure.net
+    azurecr: /subscriptions/<sub-hub>/.../privatelink.azurecr.io
+    grafana: /subscriptions/<sub-hub>/.../privatelink.grafana.azure.com
+  # Mgmt-tier VNet owned by `bootstrap/fleet` via the
+  # `Azure/avm-ptn-alz-sub-vending/azure` module (N=1). Houses the
+  # shared-PE subnet (tfstate SA, fleet KV, fleet ACR) and the
+  # ACA-delegated runner subnet. Subnet CIDRs are derived per
+  # docs/naming.md from the address_space below.
+  vnets:
+    mgmt:
+      location: eastus
+      address_space: ["10.50.0.0/20"]
+  # Env-tier VNets owned by `bootstrap/environment` via the same
+  # sub-vending module (mesh_peering_enabled=true intra-env,
+  # hub_peering to `networking.hub.resource_id` per VNet). One VNet
+  # per env-per-region. Mgmt↔env peerings are authored separately in
+  # `bootstrap/environment` via the peering AVM module (both halves
+  # in env state; see §3.4).
+  envs:
+    nonprod:
+      regions:
+        eastus: { address_space: ["10.60.0.0/20"] }
+        # westeurope: { address_space: ["10.61.0.0/20"] }  # add when second region onboards
+    prod:
+      regions:
+        eastus: { address_space: ["10.70.0.0/20"] }
+
 observability:
   # One stack per env. Names derived per env by the config-loader:
   #   AMW:      amw-<fleet.name>-<env>
@@ -343,8 +387,8 @@ observability:
   network_isolation:
     mode: network_security_perimeter # AMW + DCE members; Grafana via PE
     nsp_profile_name: default
-    grafana_private_dns_zone: privatelink.grafana.azure.com
-    grafana_pe_subnet_id_from: env hub VNet (networking.grafana_pe_subnet_id per env)
+    # Grafana PE subnet is derived: first /26 of networking.envs.<env>.regions.<region>.address_space
+    # (named snet-pe-env by docs/naming.md). No per-env subnet override surface.
   monitor_workspace:
     public_network_access: Disabled # enforced; NSP is the only ingress path
   data_collection_endpoint:
@@ -355,10 +399,6 @@ observability:
 environments:
   nonprod:
     subscription_id: <sub-fleet-nonprod>
-    networking:
-      grafana_pe_subnet_id: /subscriptions/.../subnets/snet-pe-nonprod
-      grafana_pe_linked_vnet_ids: # VNets that resolve privatelink.grafana.azure.com
-        - /subscriptions/.../virtualNetworks/vnet-hub-nonprod
     aks:
       # AAD break-glass list baked into every AKS in this env as
       # aadProfile.adminGroupObjectIDs. Members bypass K8s RBAC entirely.
@@ -376,10 +416,6 @@ environments:
         slack: { webhook_url_kv_secret: slack-webhook-nonprod }
   prod:
     subscription_id: <sub-fleet-prod>
-    networking:
-      grafana_pe_subnet_id: /subscriptions/.../subnets/snet-pe-prod
-      grafana_pe_linked_vnet_ids:
-        - /subscriptions/.../virtualNetworks/vnet-hub-prod
     aks:
       admin_groups: [<group-object-id>] # grp-aks-admin-prod (very small)
       rbac_cluster_admins: [<group-object-id>] # grp-platform-admin-prod
@@ -393,10 +429,6 @@ environments:
         slack: { webhook_url_kv_secret: slack-webhook-prod }
   mgmt:
     subscription_id: <sub-fleet-mgmt>
-    networking:
-      grafana_pe_subnet_id: /subscriptions/.../subnets/snet-pe-mgmt
-      grafana_pe_linked_vnet_ids:
-        - /subscriptions/.../virtualNetworks/vnet-hub-mgmt
     aks:
       admin_groups: [<group-object-id>] # grp-aks-admin-mgmt
       rbac_cluster_admins: [<group-object-id>] # grp-platform-admin (platform SRE)
@@ -437,11 +469,10 @@ dns:
   `rg-dns-{env}`). Operators can override on a single cluster via
   `platform.dns.resource_group` in `cluster.yaml`, but no other DNS
   fields are settable.
-- **VNet linking**: `networking.dns_linked_vnet_ids` is the only
-  cluster-side DNS input; defaults (from `_defaults.yaml` at env or
-  region level) typically list the hub VNet plus the cluster's own
-  VNet. Stage 1 creates a `virtualNetworkLinks` child resource per
-  listed VNet.
+- **VNet linking**: derived, not BYO. Per PLAN §3.4, every cluster's
+  private DNS zone is linked to `[env VNet, mgmt VNet]` —
+  operator-visible VNet selection is gone. Stage 1 creates one
+  `virtualNetworkLinks` child resource per id in that derived list.
 - **Naming of zone-link resources** is derived:
   `link-<last-segment-of-vnet-resource-id>`.
 - **External-DNS config** (rendered into platform-gitops values by a
@@ -483,14 +514,174 @@ the per-cluster tfvars.json before Terraform ever sees it:
 | `keyvault.resource_group` | `platform.keyvault.resource_group` override else `<cluster.resource_group>`                        |
 | `acr.login_server`        | `<fleet.acr.name>.azurecr.io` (or Stage 0 output if overridden)                                    |
 | `cluster.domain`          | `<dns.zone_fqdn>` (used for `argocd.<domain>`, `kargo.<domain>`)                                   |
+| `networking.vnet_name`    | `vnet-<fleet.name>-mgmt` (mgmt) / `vnet-<fleet.name>-<env>-<region>` (env)                         |
+| `networking.net_rg_name`  | `rg-net-mgmt` (mgmt) / `rg-net-<env>` (env)                                                        |
+| `networking.snet_pe.cidr` | first `/26` of the VNet's address_space (mgmt → `snet-pe-shared`; env → `snet-pe-env`)             |
+| `networking.snet_runners.cidr` | second `/26` of mgmt VNet's address_space (`snet-runners`, ACA-delegated)                     |
+| `networking.cluster_24`   | K-th `/24` after the PE `/26`, where K = `networking.subnet_slot` from cluster.yaml                |
+| `networking.snet_aks_api.cidr` | first `/25` of `networking.cluster_24` (`snet-aks-api-<cluster.name>`)                        |
+| `networking.snet_aks_nodes.cidr` | second `/25` of `networking.cluster_24` (`snet-aks-nodes-<cluster.name>`)                   |
+| `networking.peering_name.env_to_mgmt` | `peer-<env>-<region>-to-mgmt`                                                         |
+| `networking.peering_name.mgmt_to_env` | `peer-mgmt-to-<env>-<region>`                                                         |
+| `networking.node_asg_name`      | `asg-nodes-<env>-<region>` (one ASG per env-region, shared by all clusters in that VNet)   |
 
 Operators cannot override derived values except for `dns.zone_rg`.
 This keeps naming consistent and prevents drift between directory
 structure and Azure-resource names.
 
+### 3.4 Networking topology
+
+> **Scope.** This section is the source of truth for VNet ownership,
+> peering, subnet layout, and the `subnet_slot` contract. Implementation
+> lives in `bootstrap/fleet` (mgmt VNet), `bootstrap/environment` (env
+> VNets + both halves of mgmt↔env peering + per-env-region node ASG),
+> and Stage 1 (per-cluster subnets + AKS ASG attachment). Derivation
+> parity is enforced across `docs/naming.md`, `config-loader/load.sh`,
+> and `modules/fleet-identity/`.
+
+**Tiers.**
+
+| Tier     | VNet                                  | Owner                   | Peerings                                                                 |
+| -------- | ------------------------------------- | ----------------------- | ------------------------------------------------------------------------ |
+| Hub      | adopter-owned, BYO                    | adopter (outside repo)  | every mgmt and env VNet hubs to it (classic hub-and-spoke)               |
+| Mgmt     | `vnet-<fleet.name>-mgmt` (1, regional) | `bootstrap/fleet`      | ↔ hub (via sub-vending); ↔ each env VNet (from env side, see below)      |
+| Env      | `vnet-<fleet.name>-<env>-<region>`    | `bootstrap/environment` | ↔ hub (via sub-vending); full mesh intra-env (sub-vending); ↔ mgmt       |
+
+- One VNet per env-per-region. Azure VNets are regional; a second
+  region is onboarded by adding `networking.envs.<env>.regions.<region>`
+  in `_fleet.yaml` and re-running `env-bootstrap.yaml` for that env.
+- Prod↔nonprod are intentionally **not** peered. The sub-vending
+  `mesh_peering_enabled` flag is scoped to a single invocation, so
+  `bootstrap/environment` is called once per env — prod and nonprod
+  never appear in the same mesh call.
+
+**Modules (referenced by registry; not vendored).**
+
+- `Azure/avm-ptn-alz-sub-vending/azure` (`~> X.Y` to be pinned at
+  implementation time; azapi-only, `enable_telemetry = false`). Used
+  by both `bootstrap/fleet` (N=1 mgmt VNet, no mesh) and
+  `bootstrap/environment` (N env-region VNets, `mesh_peering_enabled
+  = true`, per-VNet `hub_peering_enabled = true`).
+- `Azure/avm-res-network-virtualnetwork/azure//modules/peering`
+  (`~> X.Y`; azapi-only). Called from `bootstrap/environment` with
+  `create_reverse_peering = true` so both halves of every mgmt↔env
+  peering land in a single state file. No repo-local peering helper
+  is introduced.
+
+**CIDR layout per VNet (`/20` envelope).**
+
+```
+10.x0.0.0/20      VNet address_space
+├── 10.x0.0.0/26     snet-pe-{shared|env}  (PE subnet for tfstate SA / KV / ACR / Grafana PE)
+├── 10.x0.0.64/26    snet-runners          (mgmt VNet only; ACA-delegated runner pool)
+└── 10.x0.1.0/24     cluster slot 0       ┐
+    10.x0.2.0/24     cluster slot 1       │ each cluster's /24 splits into:
+    ...                                   │   snet-aks-api-<name>    (first /25)
+    10.x0.15.0/24    cluster slot 14      ┘   snet-aks-nodes-<name>  (second /25)
+```
+
+With a `/20` VNet and a reserved `/26` for PE (plus a second `/26` on
+mgmt for runners), each env-region supports ~15 clusters. If a 16th
+cluster is ever needed in one env-region, the operator either splits
+the env by adding a second region or widens the env VNet's
+`address_space` — both are PR-visible, CIDR-math decisions.
+
+**`subnet_slot` contract.**
+
+- Declared **required** in every `cluster.yaml` under
+  `networking.subnet_slot: <int>`. No default.
+- `validate.yaml` PR-check enforces:
+  1. present on every cluster.yaml;
+  2. integer in `[0, capacity-1]` where `capacity` is computed from
+     the env+region VNet's address_space and reserved PE `/26`
+     (≈15 for a `/20`);
+  3. unique across all clusters sharing an (env, region);
+  4. **immutable once set** — changing it in-place re-plans
+     subnet replacement, which destroys/recreates the AKS cluster
+     (cluster.yaml diff in `git` against `main` blocks the PR).
+- Operators pick slots at cluster-creation time. The scaffolded
+  `clusters/_template/cluster.yaml` carries `subnet_slot: 0` with a
+  comment pointing at this section.
+
+**Single-PR new-cluster flow.**
+
+1. Operator `cp -r clusters/_template clusters/<env>/<region>/<name>/`,
+   edits `cluster.yaml` (including `subnet_slot`).
+2. Opens PR → `validate.yaml` runs the `subnet_slot` check and
+   normal schema lint.
+3. On merge, `tf-apply.yaml` runs Stage 1 (creates the two /25
+   azapi subnet resources under the existing env VNet, attaches the
+   AKS node pool to the env-region node ASG, creates the AKS
+   cluster) and Stage 2 (ArgoCD bootstrap) in one matrix leg. No
+   re-run of `bootstrap/environment` is required.
+
+**Peering ownership.**
+
+- Every env↔hub peering is emitted by the sub-vending module (per-VNet
+  `hub_peering_enabled = true`).
+- Mgmt↔hub peering is emitted by the sub-vending call in
+  `bootstrap/fleet` (the mgmt VNet's `hub_peering_enabled = true`).
+- **Mgmt↔env peerings live in the env state** (`bootstrap/environment`)
+  — the peering AVM module is called once per env-region with
+  `create_reverse_peering = true`, so both halves of the peering are
+  provisioned in one plan and destroyed atomically if the env VNet
+  is retired.
+- `bootstrap/fleet` grants the `fleet-meta` UAMI `Network Contributor`
+  scoped to the mgmt VNet resource id so `bootstrap/environment` can
+  write the mgmt→env half under the `fleet-meta` identity.
+
+**Per-cluster private DNS zone links.**
+
+- Derived (not BYO): `[env VNet, mgmt VNet]` for every cluster.
+- Stage 1 creates the two `virtualNetworkLinks` children on the
+  cluster's zone. The env VNet id comes from the env repo variable
+  `<ENV>_<REGION>_VNET_RESOURCE_ID`; the mgmt VNet id from the
+  fleet-scope repo variable `MGMT_VNET_RESOURCE_ID`.
+
+**Application Security Groups for AKS nodes.**
+
+- One ASG per env-region (`asg-nodes-<env>-<region>`) owned by
+  `bootstrap/environment`. Acts as the symbolic source group for
+  rules on `nsg-pe-env-<env>-<region>` (e.g., allow 443 from nodes
+  to PEs in the env).
+- Stage 1 attaches each AKS cluster's node pool to the env-region
+  ASG via the AKS `networkProfile.applicationSecurityGroups` input
+  on the AVM module (subject to the pinned AKS API version
+  exposing that field on agent pools — **confirm at implementation
+  time**).
+- **Fallback** if the pinned AKS API does not support agent-pool
+  ASG attachment: Stage 1 writes per-cluster NSG rules into
+  `nsg-pe-env-<env>-<region>` directly. `bootstrap/environment`
+  pre-grants the `fleet-<env>` UAMI scoped `Network Contributor`
+  on that NSG so the cross-stage write succeeds.
+
+**Repo variables published (extends §4 Stage 0 / §4 `bootstrap/environment`).**
+
+| Variable                                          | Published by              | Consumed by                                                      |
+| ------------------------------------------------- | ------------------------- | ---------------------------------------------------------------- |
+| `MGMT_VNET_RESOURCE_ID`                           | Stage 0 (fleet scope)     | Stage 1 (private DNS zone VNet link); env observability wiring   |
+| `<ENV>_<REGION>_VNET_RESOURCE_ID`                 | `bootstrap/environment`   | Stage 1 (per-cluster subnets parent; DNS zone link)              |
+| `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`             | `bootstrap/environment`   | Stage 1 (AKS node-pool ASG attachment, or NSG rule author)       |
+
 ---
 
 ## 4. Terraform stages
+
+> **Implementation status (2026-04-20) — networking topology.** The
+> repo-owned VNet/subnet topology described in §3.4 supersedes the
+> previous "BYO subnet id per cluster" model. `bootstrap/fleet` now
+> owns the mgmt VNet (via `Azure/avm-ptn-alz-sub-vending/azure`, N=1);
+> `bootstrap/environment` owns env VNets (sub-vending, intra-env mesh),
+> both halves of every mgmt↔env peering (via
+> `Azure/avm-res-network-virtualnetwork/azure//modules/peering` with
+> `create_reverse_peering = true`), and one `asg-nodes-<env>-<region>`
+> per env-region; Stage 1 owns per-cluster `/25` subnets as azapi
+> children of the env VNet and attaches the AKS node pool to the
+> env-region ASG. `cluster.yaml.networking` lost `vnet_id`,
+> `subnet_name`, and `dns_linked_vnet_ids` — replaced by a single
+> **required** `networking.subnet_slot: <int>` operator-set at cluster
+> creation and immutable thereafter (PR-check enforced). Full design
+> in §3.4; remaining implementation tracked in `_TASK.md`.
 
 ### Stage -1 — Bootstrap (`terraform/bootstrap/`)
 
@@ -699,6 +890,27 @@ messages; the rest must be arranged out-of-band by the adopter org.
 
 Creates:
 
+- **Mgmt VNet** (`module "mgmt_vnet"` invoking
+  `Azure/avm-ptn-alz-sub-vending/azure`, N=1, no mesh,
+  `enable_telemetry = false`) named `vnet-<fleet.name>-mgmt` in
+  `rg-net-mgmt`. `hub_peering_enabled = true` against
+  `_fleet.yaml.networking.hub.resource_id`. Subnets (derived CIDRs
+  per §3.4 / docs/naming.md):
+  - `snet-pe-shared` — first `/26`; houses the tfstate SA PE, fleet
+    KV PE, fleet ACR PE. NSG `nsg-pe-shared` authored here.
+  - `snet-runners` — second `/26`; delegated to
+    `Microsoft.App/environments` for the ACA runner pool. NSG
+    `nsg-runners` authored here. `route_table` UDR for hub-egress
+    is adopter-referenced (BYO).
+  Existing PEs/ACA references in `main.state.tf` / `main.fleet-kv.tf`
+  / `main.runner.tf` / `main.acr.tf` (fleet ACR PE) are rewired from
+  operator-supplied subnet ids to the derived subnet resource ids
+  emitted by this module. `_fleet.yaml` loses
+  `networking.{runner.subnet_id, runner.container_registry_pe_subnet_id,
+  tfstate.private_endpoint.subnet_id, fleet_kv.private_endpoint.subnet_id}`.
+- **`Network Contributor` on the mgmt VNet resource id → `fleet-meta`
+  UAMI** — lets `bootstrap/environment` write the mgmt→env half of
+  every peering under the `fleet-meta` identity.
 - **Fleet TF state storage account** (`rg-fleet-tfstate`) with
   `tfstate-fleet` container, soft-delete + versioning on. All downstream
   stages' state lands here (including per-env containers).
@@ -851,6 +1063,34 @@ Creates:
 
 - **Per-env TF state container** `tfstate-<env>` in the shared
   `tfstate-fleet` storage account.
+- **Env VNets** (`module "env_vnets"` invoking
+  `Azure/avm-ptn-alz-sub-vending/azure`, one invocation per env with
+  `N = len(regions)`, `mesh_peering_enabled = true`,
+  `enable_telemetry = false`). Each VNet named
+  `vnet-<fleet.name>-<env>-<region>` in `rg-net-<env>`, with
+  `hub_peering_enabled = true` against
+  `_fleet.yaml.networking.hub.resource_id` (classic hub-and-spoke).
+  Subnets (derived per §3.4):
+  - `snet-pe-env` — first `/26`; houses the env Grafana PE plus any
+    other env-scope PEs. NSG `nsg-pe-env-<env>-<region>` authored
+    here, with an inbound rule allowing `443` from
+    `asg-nodes-<env>-<region>` (below).
+  The remaining `/20` space is reserved for per-cluster `/24` slots
+  owned by Stage 1. The sub-vending module does **not** pre-create
+  per-cluster subnets.
+- **Mgmt↔env peerings** — one call per env-region to
+  `Azure/avm-res-network-virtualnetwork/azure//modules/peering`
+  with `create_reverse_peering = true`, names
+  `peer-<env>-<region>-to-mgmt` and `peer-mgmt-to-<env>-<region>`.
+  Both halves land in the env state. Requires `Network Contributor`
+  on the mgmt VNet resource id — granted to the `fleet-meta` UAMI
+  by `bootstrap/fleet` (see above).
+- **Node Application Security Group** (`azapi_resource`
+  `Microsoft.Network/applicationSecurityGroups`) named
+  `asg-nodes-<env>-<region>` in `rg-net-<env>`. One per env-region;
+  every AKS cluster in the region attaches its node pool NIC
+  identities to it via Stage 1. Referenced by the env PE NSG allow
+  rule above.
 - **`fleet-<env>` UAMI** + federated credential
   `repo:<org>/fleet:environment:fleet-<env>`. RBAC:
   - `Contributor` at subscription or env-root RG scope.
@@ -934,13 +1174,14 @@ Creates:
   **`properties.publicNetworkAccess=Disabled`**.
   - **Private Endpoint** (`azapi_resource`
     `Microsoft.Network/privateEndpoints`) named
-    `pe-amg-<fleet.name>-<env>` in
-    `environments.<env>.networking.grafana_pe_subnet_id`, target
-    subresource `grafana`.
-  - **Private DNS zone** (`azapi_resource`
-    `Microsoft.Network/privateDnsZones`) `privatelink.grafana.azure.com`
-    in `rg-obs-<env>` (one per env), with `virtualNetworkLinks` to
-    every VNet in `environments.<env>.networking.grafana_pe_linked_vnet_ids`.
+    `pe-amg-<fleet.name>-<env>` in the derived `snet-pe-env` subnet
+    of this env-region's VNet (emitted by the sub-vending module above),
+    target subresource `grafana`.
+  - **Private DNS zone**: no per-env zone is created. The Grafana PE
+    registers into the central
+    `_fleet.yaml.networking.private_dns_zones.grafana` zone (BYO).
+    VNet links to that central zone cover both the env VNet and the
+    mgmt VNet.
   - **PE DNS zone group** (`privateEndpoints/privateDnsZoneGroups`)
     registering the PE IP into the private DNS zone.
   - **AMW integration**: `azapi_resource`
@@ -971,9 +1212,14 @@ Creates:
   `MONITOR_WORKSPACE_QUERY_ENDPOINT_<ENV>`, `DCE_ID_<ENV>`,
   `DCE_LOGS_INGESTION_ENDPOINT_<ENV>`, `DCE_METRICS_INGESTION_ENDPOINT_<ENV>`,
   `GRAFANA_ID_<ENV>`, `GRAFANA_ENDPOINT_<ENV>`, `ACTION_GROUP_ID_<ENV>`,
-  `NSP_ID_<ENV>`. Stage 1 does **not** consume these — it looks
-  resources up by derived name via `azapi` data sources (§4 Stage 1).
-  The variables exist for dashboard links and PR-comment summaries only.
+  `NSP_ID_<ENV>`, plus per-region networking outputs
+  `<ENV>_<REGION>_VNET_RESOURCE_ID` and
+  `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID` (consumed by Stage 1 for
+  per-cluster subnet parent refs, AKS ASG attachment, and private
+  DNS zone VNet links). Stage 1 does **not** consume the obs
+  outputs — it looks resources up by derived name via `azapi` data
+  sources (§4 Stage 1). The obs variables exist for dashboard links
+  and PR-comment summaries only.
 
 State backend: `tfstate-fleet` container, key
 `bootstrap/environment/<env>.tfstate`. Authed via `fleet-meta` UAMI.
@@ -1140,6 +1386,7 @@ secret material is ever a Stage 0 output.
 | `fleet_keyvault_id`           | `FLEET_KEYVAULT_ID`             | Stage 1 (`Key Vault Secrets User` role-assignment scope for each cluster's ESO UAMI)                    |
 | `fleet_keyvault_name`         | `FLEET_KEYVAULT_NAME`           | Stage 2 (`platform-identity` secret, ESO `ClusterSecretStore`, ephemeral azapi KV read for Argo creds)  |
 | `fleet_resource_group_name`   | `FLEET_RESOURCE_GROUP_NAME`     | Stage 1 (scoping lookups) — informational                                                               |
+| `mgmt_vnet_resource_id`       | `MGMT_VNET_RESOURCE_ID`         | Stage 1 (private DNS zone VNet link alongside env VNet); passthrough from `bootstrap/fleet`             |
 
 **AAD applications** (object_id = directory object id; application_id = client id / `appId`)
 
@@ -1345,11 +1592,36 @@ environments.<env>.aks.admin_groups` — pure break-glass; members
     (also looked up by derived name). Rule bodies shipped from
     `terraform/modules/aks-cluster/rules/*.yaml` so platform-owned
     alerts are versioned alongside cluster code.
+- **Per-cluster subnets** (`azapi_resource`
+  `Microsoft.Network/virtualNetworks/subnets@<pinned>`) as children of
+  the env VNet (parent id from
+  `vars.<ENV>_<REGION>_VNET_RESOURCE_ID`). Two subnets per cluster,
+  CIDRs derived by the config-loader from `networking.subnet_slot` per
+  §3.4 / docs/naming.md:
+  - `snet-aks-api-<cluster.name>` — first `/25` of the cluster's
+    `/24`; used by the AKS API-server VNet integration (private
+    cluster).
+  - `snet-aks-nodes-<cluster.name>` — second `/25`; used by AKS node
+    pools.
+  These subnets are authored as azapi children (not via the env-VNet
+  sub-vending module) so cluster lifecycle is independent of
+  `bootstrap/environment` re-applies.
+- **AKS node pool ASG attachment** — the AVM AKS module's agent-pool
+  input is passed
+  `networkProfile.applicationSecurityGroups = [vars.<ENV>_<REGION>_NODE_ASG_RESOURCE_ID]`
+  so each node NIC joins the env-region ASG. Fallback (if the pinned
+  AKS API version does not expose ASG on agent pools): author NSG
+  rules on `nsg-pe-env-<env>-<region>` scoped to this cluster's node
+  subnet via cross-stage `Network Contributor` pre-granted by
+  `bootstrap/environment`. Decision point confirmed at implementation
+  time; tracked in `_TASK.md`.
 - **Per-cluster private DNS zone** (`azapi_resource`
   `Microsoft.Network/privateDnsZones`) at `<dns.zone_fqdn>` (derived by
   config-loader per §3.3) in resource group `<dns.zone_rg>`, plus
-  `Microsoft.Network/privateDnsZones/virtualNetworkLinks` to every VNet
-  in `networking.dns_linked_vnet_ids`. External-dns is later configured
+  `Microsoft.Network/privateDnsZones/virtualNetworkLinks` to the
+  derived link list `[env VNet, mgmt VNet]` (ids from
+  `vars.<ENV>_<REGION>_VNET_RESOURCE_ID` and
+  `vars.MGMT_VNET_RESOURCE_ID`). External-dns is later configured
   (via platform-gitops values) with `--domain-filter=<zone.fqdn>` and
   `--txt-owner-id=<cluster.name>`.
 - **Argo / Kargo redirect URIs** — not touched by Stage 1. The complete
@@ -2175,9 +2447,15 @@ Each environment holds its own `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
   environment's variables.
 - **Entra role for bootstrap UAMIs**: `Application Administrator`
   assigned to both `fleet-stage0` and `fleet-meta` UAMIs.
-- **VNets**: pre-existing, referenced from cluster.yaml via
-  `networking.vnet_id` and `networking.dns_linked_vnet_ids`. Not
-  provisioned by this repo.
+- **VNets**: repo-owned per §3.4. Mgmt VNet (N=1) created by
+  `bootstrap/fleet` via `Azure/avm-ptn-alz-sub-vending/azure`; env
+  VNets (one per env-per-region) created by `bootstrap/environment`
+  via the same module with intra-env mesh. Mgmt↔env peerings
+  authored by `bootstrap/environment` via
+  `Azure/avm-res-network-virtualnetwork/azure//modules/peering` with
+  `create_reverse_peering = true`. Adopter-owned hub VNet referenced
+  by resource id from `_fleet.yaml.networking.hub.resource_id` only
+  — not provisioned by this repo.
 
 ## 15. Remaining open items (deferred)
 
@@ -2237,6 +2515,18 @@ Each environment holds its own `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
   GH App / OIDC FIC. Trade-off: strictly more standing privilege
   than the current "run locally once" model. Deferred until the
   operator UX demand justifies the extra privileged identity.
+- **AKS agent-pool ASG API-version confirmation (§3.4)** — the
+  pinned `Azure/avm-res-containerservice-managedcluster/azurerm`
+  version must expose `networkProfile.applicationSecurityGroups` on
+  agent pools for the node-ASG attachment pattern to work directly.
+  To verify at implementation time; fallback is Stage 1 authoring
+  NSG rules on `nsg-pe-env-<env>-<region>` with cross-stage
+  `Network Contributor` pre-granted by `bootstrap/environment`.
+- **AVM module version pins for networking** — exact `~> X.Y`
+  constraints for `Azure/avm-ptn-alz-sub-vending/azure` and
+  `Azure/avm-res-network-virtualnetwork/azure//modules/peering`
+  to be selected at implementation time (latest satisfying
+  `azapi ~> 2.5`, `enable_telemetry = false`).
 
 ## 16. Template-repo adoption model
 
@@ -2294,8 +2584,12 @@ angle-bracket `<...>` placeholders or `TODO` in the rendered yaml):
 - AAD group object IDs (`aad.argocd.owners`, `aad.kargo.owners`,
   per-env `aks.admin_groups`, `rbac_cluster_admins`, `rbac_readers`,
   `grafana.admins`, `grafana.editors`).
-- Per-env `networking.grafana_pe_subnet_id` and
-  `grafana_pe_linked_vnet_ids`.
+- Networking resource ids — `networking.hub.resource_id`,
+  `networking.private_dns_zones.{blob,vaultcore,azurecr,grafana}` —
+  the adopter typically fills these after provisioning (or pointing
+  at) the hub VNet and central private DNS zones out-of-band. Address
+  spaces under `networking.vnets.mgmt` and `networking.envs.*.regions.*`
+  are prompted (they're pure CIDR math, known at adoption time).
 
 These typically aren't known at adoption time and the adopter edits
 `clusters/_fleet.yaml` directly after init. Everything else (CIDRs,
