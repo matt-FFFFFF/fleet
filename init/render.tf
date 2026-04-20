@@ -33,6 +33,10 @@ locals {
     networking_env_mgmt_eastus_address_space    = var.networking_env_mgmt_eastus_address_space
     networking_env_nonprod_eastus_address_space = var.networking_env_nonprod_eastus_address_space
     networking_env_prod_eastus_address_space    = var.networking_env_prod_eastus_address_space
+    # Pod-CIDR slots (0..15, unique per env-region; /12 inside 100.64/10).
+    networking_env_mgmt_eastus_pod_cidr_slot    = var.networking_env_mgmt_eastus_pod_cidr_slot
+    networking_env_nonprod_eastus_pod_cidr_slot = var.networking_env_nonprod_eastus_pod_cidr_slot
+    networking_env_prod_eastus_pod_cidr_slot    = var.networking_env_prod_eastus_pod_cidr_slot
     # CODEOWNERS default-rule owner. Empty input falls back to the org/user
     # itself (guaranteed to resolve); adopters can override with a team spec
     # like `acme/platform-engineers`.
