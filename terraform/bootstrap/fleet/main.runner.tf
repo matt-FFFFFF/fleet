@@ -92,9 +92,11 @@ resource "terraform_data" "runner_preconditions" {
       error_message = "clusters/_fleet.yaml: networking.fleet_kv.private_endpoint.subnet_id is unset, still a `<...>` placeholder, or not a /subscriptions/... resource id. Replace it with the full subnet id that will host the fleet Key Vault private endpoint. See docs/adoption.md §3 + §5.1."
     }
     precondition {
-      # GitHub App IDs are numeric strings from GitHub, not ARM ids — we only
-      # reject null/empty and the legacy `<...>` sentinel.
-      condition     = local.github_app_fleet_runners.app_id != null && local.github_app_fleet_runners.app_id != "" && !startswith(tostring(local.github_app_fleet_runners.app_id), "<") && local.github_app_fleet_runners.installation_id != null && local.github_app_fleet_runners.installation_id != "" && !startswith(tostring(local.github_app_fleet_runners.installation_id), "<")
+      # GitHub App IDs are numeric strings from GitHub, not ARM ids. Coerce
+      # to string before checking so unquoted YAML numeric scalars work too
+      # (adopters editing _fleet.yaml by hand may drop the quotes). Reject
+      # null/empty/whitespace and the legacy `<...>` sentinel.
+      condition     = local.github_app_fleet_runners.app_id != null && trimspace(tostring(local.github_app_fleet_runners.app_id)) != "" && !startswith(tostring(local.github_app_fleet_runners.app_id), "<") && local.github_app_fleet_runners.installation_id != null && trimspace(tostring(local.github_app_fleet_runners.installation_id)) != "" && !startswith(tostring(local.github_app_fleet_runners.installation_id), "<")
       error_message = "clusters/_fleet.yaml: github_app.fleet_runners.{app_id, installation_id} are unset or still `<...>` placeholders. Run ./init-gh-apps.sh to create the three GitHub Apps and let it patch these values in for you. See docs/adoption.md §4 + §5.2."
     }
   }
