@@ -44,7 +44,12 @@ resource "github_repository_ruleset" "this" {
         require_last_push_approval        = pull_request.value.require_last_push_approval
         required_approving_review_count   = pull_request.value.required_approving_review_count
         required_review_thread_resolution = pull_request.value.required_review_thread_resolution
-        allowed_merge_methods             = pull_request.value.allowed_merge_methods
+        # `github_repository_ruleset` rejects an empty set here
+        # ("at least one value must be configured"). Treat an empty /
+        # null input as "omit the attribute" so the default (all three
+        # merge methods allowed) applies. Callers that want to restrict
+        # merge methods pass a non-empty set.
+        allowed_merge_methods = length(coalesce(pull_request.value.allowed_merge_methods, [])) > 0 ? pull_request.value.allowed_merge_methods : null
       }
     }
 
