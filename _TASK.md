@@ -213,42 +213,82 @@
 
 ## Phase D — `bootstrap/environment` env VNets + peerings + ASG
 
-- [ ] `terraform/bootstrap/environment/main.network.tf` (new):
-  - `module "env_vnets"` → sub-vending, N = count of regions for
-    this env, `mesh_peering_enabled = true`,
-    per-VNet `hub_peering_enabled = true`,
-    `enable_telemetry = false`. Inputs driven by
-    `local.fleet.networking.envs[var.env].regions`.
-  - `rg-net-<env>` resource group.
-  - NSG `nsg-pe-env-<env>-<region>` per region with inbound `443`
-    from `asg-nodes-<env>-<region>`.
-  - `azapi_resource` ASG `asg-nodes-<env>-<region>` per region.
-- [ ] `terraform/bootstrap/environment/main.peering.tf` (new):
-  - For each region, one `module "mgmt_peering"` call using the
-    peering AVM module with `create_reverse_peering = true`.
-    Names per PLAN §3.4.
-  - Depends on mgmt VNet being present (pre-existing, as
-    `bootstrap/fleet` must apply first; capture via variable
-    consuming `MGMT_VNET_RESOURCE_ID` repo var).
-  - Workflow identity is `fleet-meta` with `Network Contributor`
-    on the mgmt VNet id, granted by `bootstrap/fleet` — so both
-    halves succeed in the same apply.
-- [ ] Rewire Grafana PE:
-  - Swap `azapi_resource.grafana_pe` parent subnet from
-    `local.environments[var.env].networking.grafana_pe_subnet_id`
-    to the derived `snet-pe-env` subnet id output by the
-    sub-vending module.
-  - Drop the per-env `privatelink.grafana.azure.com` zone creation;
-    register the PE into the central BYO zone under
-    `local.fleet.networking.private_dns_zones.grafana`.
-- [ ] `outputs.tf`: add
-  - `env_region_vnet_resource_ids` map → published as
-    `<ENV>_<REGION>_VNET_RESOURCE_ID` per region.
-  - `env_region_node_asg_resource_ids` map → published as
-    `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID` per region.
-- [ ] Update `env-bootstrap.yaml` publish step to create/patch
-      those per-region variables on the `fleet-<env>` GitHub
-      environment (same mechanism as the obs outputs).
+- [x] `terraform/bootstrap/environment/main.network.tf` (new):
+  - `module "env_network"` → sub-vending `~> 0.2`,
+    `subscription_alias_enabled = false`, `subscription_id = local.env_sub_id`,
+    N = count of regions for this env (driven by
+    `local.env_regions = { for k,v in networking_derived.envs : k=>v if v.env == var.env }`),
+    `mesh_peering_enabled = true` per VNet, per-VNet
+    `hub_peering_enabled = true` (direction = both),
+    `enable_telemetry = false`. RG `rg-net-<env>` created via the
+    module (`resource_group_creation_enabled = true`).
+  - Per-region NSG `nsg-pe-env-<env>-<region>` authored via the
+    module's `network_security_groups` + subnet `key_reference` (no
+    inline rules; the ASG-bound rule needs
+    `sourceApplicationSecurityGroups` which the module's schema does
+    not expose, so it lives out-of-band as
+    `azapi_resource.nsg_pe_env_rule_443`).
+  - Per-region `azapi_resource.node_asg`
+    (`Microsoft.Network/applicationSecurityGroups@2023-11-01`) named
+    `asg-nodes-<env>-<region>`, parent = `rg-net-<env>`. Stage 1
+    will attach AKS node-pool NICs to this id.
+  - Subnet + NSG resource ids synthesised from the deterministic ARM
+    paths (`<vnet-id>/subnets/<name>` and `<rg-id>/providers/.../<name>`)
+    since sub-vending does not emit them.
+  - Early `terraform_data.network_preconditions` rejects empty
+    `networking.envs.<var.env>.regions`, missing region
+    `address_space`, and unset / `<...>` / wrong-suffix
+    `private_dns_zones.grafana` with yaml-anchored error messages.
+- [x] `terraform/bootstrap/environment/main.peering.tf` (new):
+  - One `module "mgmt_peering"` per region from
+    `Azure/avm-res-network-virtualnetwork/azurerm//modules/peering ~> 0.17`
+    with `parent_id = env_vnet_id`, `remote_virtual_network_id =
+    var.mgmt_vnet_resource_id`, `name =
+    networking_derived.envs[k].peering_env_to_mgmt_name`,
+    `create_reverse_peering = true`, `reverse_name = ...peering_mgmt_to_env_name`.
+  - `sync_remote_address_space_enabled = true` triggered on the env
+    VNet's address_space so widening the env CIDR is reflected on
+    the mgmt side without manual intervention. Reverse half is
+    written cross-subscription via the `Network Contributor` grant
+    that `bootstrap/fleet` issues to `uami-fleet-meta` on the mgmt
+    VNet.
+- [x] Rewire Grafana PE in `main.observability.tf`:
+  - `subnet.id` → `local.env_snet_pe_env_id_by_region[local.env_location]`
+    (lookup on the env's primary region; precondition fires if the
+    region is not declared under `networking.envs.<env>.regions`).
+  - Dropped per-env `azapi_resource.pdns_grafana` +
+    `azapi_resource.pdns_grafana_links` (zone now owned centrally by
+    the adopter under `networking.private_dns_zones.grafana`).
+  - DNS zone group registers the PE A-record into
+    `local.networking_central.pdz_grafana`.
+  - Two `lifecycle.precondition` blocks on the PE: subnet not null,
+    central PDZ id not null.
+- [x] `outputs.tf`: added `env_region_vnet_resource_ids`,
+      `env_region_node_asg_resource_ids`, `env_region_pe_subnet_ids`
+      (the third is consumed by Stage 1 for cluster-leg PE rewiring;
+      cheap to publish).
+- [x] `main.github.tf`: `local.env_vars` is now `merge()` of the
+      static env-scope vars + three per-region maps emitting
+      `<ENV>_<REGION>_VNET_RESOURCE_ID`,
+      `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`,
+      `<ENV>_<REGION>_PE_SUBNET_ID` keys onto the existing
+      `github_actions_environment_variable.env_vars` for_each.
+      `env-bootstrap.yaml` does not need a separate publish step —
+      the existing for_each picks up the new keys automatically.
+- [x] `variables.tf`: added `mgmt_vnet_resource_id` (string,
+      ARM-id-validated regex). Sourced by tf-apply.yaml from the
+      `MGMT_VNET_RESOURCE_ID` repo-env variable that
+      `bootstrap/fleet/main.github.tf` publishes onto `fleet-meta`.
+- [x] `providers.tf`: added `modtm ~> 0.3` (sub-vending dependency)
+      with empty `provider "modtm" {}` block; bumped to declare
+      `random ~> 3.8` explicitly (also a sub-vending dep). `azapi
+      ~> 2.9` already satisfies the peering submodule's `~> 2.0`
+      requirement.
+- Verified: `terraform fmt -recursive` clean; `terraform validate`
+  passes on `bootstrap/{fleet,environment}` after rendering
+  `_fleet.yaml` from the CI fixture; `tflint --recursive` clean;
+  `terraform test` — `fleet-identity` 8/8, `init/` 30/30 pass.
+
 
 ## Phase E — Stage 1 per-cluster subnets + AKS integration
 

@@ -36,4 +36,11 @@ locals {
   location = var.location != "" ? var.location : local.fleet.primary_region
 
   derived = module.identity.derived
+
+  # PLAN §3.4 networking. `networking_derived.envs` is keyed
+  # "<env>/<region>"; downstream consumers in main.network.tf /
+  # main.peering.tf re-key per-env to bare region names. `networking_central`
+  # carries the central BYO PDZ ids + adopter hub VNet id.
+  networking_derived = module.identity.networking_derived
+  networking_central = module.identity.networking_central
 }

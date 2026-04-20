@@ -12,8 +12,42 @@
 > Legend: `[x]` done · `[~]` in progress / scaffolded but unapplied
 > `[ ]` not started · `[-]` deferred.
 
-Last updated: 2026-04-20 · Phase C follow-up — `address_space` shape
-bug fix on `feat/networking-topology`:
+Last updated: 2026-04-20 · Phase D (bootstrap/environment env VNets +
+peerings + ASG) landed on `feat/networking-topology`. New
+`main.network.tf` invokes `Azure/avm-ptn-alz-sub-vending/azure ~> 0.2`
+with `subscription_alias_enabled = false` against `local.env_sub_id`,
+N = count of regions for this env, `mesh_peering_enabled = true` per
+VNet, per-VNet `hub_peering_enabled = true` (direction = both). Creates
+`rg-net-<env>` + per-region `vnet-<fleet>-<env>-<region>` + reserved
+`/26` `snet-pe-env` + per-region NSG `nsg-pe-env-<env>-<region>`.
+Per-region `asg-nodes-<env>-<region>` authored as a plain
+`azapi_resource` (no AVM ASG module). Inbound 443 from the node ASG
+to `snet-pe-env` is added out-of-band as
+`azapi_resource.nsg_pe_env_rule_443` because sub-vending's
+`security_rules` schema does not expose
+`sourceApplicationSecurityGroups`. New `main.peering.tf` invokes the
+peering AVM submodule (`Azure/avm-res-network-virtualnetwork/azurerm//modules/peering ~> 0.17`,
+azapi-only despite the parent module being azurerm) once per region
+with `create_reverse_peering = true`, `parent_id = env_vnet_id`,
+`remote_virtual_network_id = var.mgmt_vnet_resource_id`, and
+`sync_remote_address_space_enabled = true`. The reverse half writes
+cross-subscription using the `Network Contributor` grant
+`bootstrap/fleet` issued to `uami-fleet-meta` on the mgmt VNet.
+Grafana PE rewired to derived `snet-pe-env` in `local.env_location`,
+DNS zone group registers into central
+`networking.private_dns_zones.grafana`; per-env `pdns_grafana` zone
++ links removed entirely. New `mgmt_vnet_resource_id` input (ARM-id
+regex-validated). New `outputs.tf` entries
+`env_region_{vnet,node_asg,pe_subnet}_resource_ids`; `main.github.tf`
+publishes `<ENV>_<REGION>_{VNET_RESOURCE_ID,NODE_ASG_RESOURCE_ID,PE_SUBNET_ID}`
+onto `fleet-<env>` via the existing `for_each`. `providers.tf` now
+declares `modtm ~> 0.3` + `random ~> 3.8` (sub-vending deps).
+`terraform validate` passes on `bootstrap/{fleet,environment}`,
+`tflint --recursive` clean, `fleet-identity` 8/8 + `init/` 30/30
+tests still green. Remaining: Phases E–H tracked in `_TASK.md`.
+
+Prior: Phase C follow-up — `address_space` shape bug fix on
+`feat/networking-topology`:
 `init/templates/_fleet.yaml.tftpl` was rendering
 `networking.vnets.mgmt.address_space` and each
 `networking.envs.<env>.regions.<region>.address_space` as a
@@ -25,9 +59,7 @@ before passing to the AVM sub-vending module — expects a scalar
 string. `terraform validate` doesn't evaluate `cidrsubnet()` so the
 mismatch was latent; fleet-identity tests hid it by using scalar
 fixtures. Flipped the template to emit scalars; updated the two
-init test assertions that were indexing `address_space[0]`. All
-tests green (init 30/30, fleet-identity 8/8); `validate` + `tflint`
-clean on `bootstrap/{fleet,environment}`.
+init test assertions that were indexing `address_space[0]`.
 
 Prior: Phase C (bootstrap/fleet mgmt VNet) landed
 on `feat/networking-topology`: new `main.network.tf` invokes
@@ -92,21 +124,26 @@ branch. Remaining implementation (Phases D–H) tracked in `_TASK.md`.
         python3 `ipaddress` helper. Missing: HCL consumers in
         `bootstrap/{fleet,environment}` + Stage 1 (Phases C/D/E).
 - [~] §3.4 Networking topology — **spec + derivation + schema flip +
-      mgmt VNet.** Phase A (derivation): `fleet-identity` emits
-      `networking_derived.{mgmt, envs}`; `load.sh` emits
-      `.derived.networking.*` per cluster. Phase B (schema):
-      `_fleet.yaml.tftpl` + `cluster.yaml` template + example
-      clusters carry the new networking shape; `init/` validates 9
-      new adopter fields. Phase C (mgmt VNet): `bootstrap/fleet`
-      authors mgmt VNet + subnets + NSGs + hub peering via
-      sub-vending `~> 0.2`; tfstate/KV/runner PEs rewired to
-      derived subnets + central PDZs; `fleet-meta` UAMI gets Network
-      Contributor on the mgmt VNet; `MGMT_VNET_RESOURCE_ID`
-      published to the `fleet-meta` GH Environment. Remaining:
-      Phase D env VNets + peerings + ASG in
-      `bootstrap/environment`, Phase E Stage 1 subnets + AKS ASG
-      attachment, Phase F PR-check, Phases G/H docs + cleanup.
-      Tracked in `_TASK.md`.
+      mgmt VNet + env VNets/peerings/ASG.** Phase A (derivation):
+      `fleet-identity` emits `networking_derived.{mgmt, envs}`;
+      `load.sh` emits `.derived.networking.*` per cluster. Phase B
+      (schema): `_fleet.yaml.tftpl` + `cluster.yaml` template +
+      example clusters carry the new networking shape; `init/`
+      validates 9 new adopter fields. Phase C (mgmt VNet):
+      `bootstrap/fleet` authors mgmt VNet + subnets + NSGs + hub
+      peering via sub-vending `~> 0.2`; tfstate/KV/runner PEs
+      rewired to derived subnets + central PDZs; `fleet-meta` UAMI
+      gets Network Contributor on the mgmt VNet;
+      `MGMT_VNET_RESOURCE_ID` published to the `fleet-meta` GH
+      Environment. **Phase D (env VNets):** `bootstrap/environment`
+      authors `rg-net-<env>` + per-region env VNets + `snet-pe-env`
+      + `nsg-pe-env-*` via sub-vending (mesh + hub peering); per-region
+      `asg-nodes-*` ASG via azapi; mgmt↔env peerings via the peering
+      AVM submodule with `create_reverse_peering = true`; Grafana PE
+      rewired to derived `snet-pe-env` + central PDZ; per-region
+      `<ENV>_<REGION>_*` repo-env vars published. Remaining: Phase E
+      Stage 1 subnets + AKS ASG attachment, Phase F PR-check,
+      Phases G/H docs + cleanup. Tracked in `_TASK.md`.
 - [x] Example clusters: `mgmt/eastus/aks-mgmt-01`,
       `nonprod/eastus/aks-nonprod-01` — networking blocks flipped to
       `subnet_slot: 0` (2026-04-20, Phase B); both in distinct env
@@ -164,25 +201,49 @@ branch. Remaining implementation (Phases D–H) tracked in `_TASK.md`.
       UAMI, GH env + variables, observability RG/AG/AMG/AMW/DCE/NSP).
       GH env + UAMI delivered via the vendored
       `modules/github-repo/modules/environment` submodule. Not yet
-      applied. 2026-04-20 (Phase C): Grafana PE + per-env DNS zone
-      links still reference legacy `environment.networking.grafana_pe_*`
-      yaml fields (removed in Phase B); guarded with `try(..., null/[])`
-      so the file parses. Phase D rewires both call sites to the
-      derived `snet-pe-env` + central `networking.private_dns_zones.grafana`.
+      applied. 2026-04-20 (Phase D): env VNets + intra-env mesh + hub
+      peering + per-region NSG/ASG + mgmt↔env peerings + Grafana PE
+      rewire all landed (see §3.4 / §4 Stage -1 Phase D status
+      paragraph above). `bootstrap/environment` still not applied
+      live.
   - [x] yamldecode locals; `var.location` optional.
   - [x] Consumes `fleet_meta_principal_id` input from fleet outputs.
+  - [x] Consumes `mgmt_vnet_resource_id` input (sourced by tf-apply
+        from `MGMT_VNET_RESOURCE_ID` repo-env variable published by
+        `bootstrap/fleet`); ARM-id regex-validated.
   - [x] OIDC subject claims match fleet (ID-based); FIC name preserved
         via `identity.fic_name = "gh-fleet-<env>"` override.
-  - [ ] Env VNets (sub-vending, `mesh_peering_enabled=true`,
-        `hub_peering_enabled=true` per VNet) + `rg-net-<env>` +
-        `snet-pe-env` + `nsg-pe-env-<env>-<region>`. PLAN §3.4.
-  - [ ] Mgmt↔env peerings via peering AVM module with
-        `create_reverse_peering=true` (both halves in env state).
-  - [ ] Per-env-region node ASG `asg-nodes-<env>-<region>`.
-  - [ ] Per-region repo-variable publishes
+  - [x] Env VNets via sub-vending `~> 0.2`
+        (`mesh_peering_enabled = true`, per-VNet `hub_peering_enabled = true`)
+        + `rg-net-<env>` + `snet-pe-env` (first /26 of region
+        address_space) + `nsg-pe-env-<env>-<region>`. Address space
+        sourced from `networking.envs.<env>.regions.<region>.address_space`.
+        PLAN §3.4.
+  - [x] Mgmt↔env peerings via the peering AVM submodule
+        (`Azure/avm-res-network-virtualnetwork/azurerm//modules/peering ~> 0.17`,
+        azapi-only) with `create_reverse_peering = true`. Reverse
+        half writes cross-subscription using the Network Contributor
+        grant `bootstrap/fleet` issued to `uami-fleet-meta` on the
+        mgmt VNet. `sync_remote_address_space_enabled = true`
+        triggered on env address_space.
+  - [x] Per-env-region node ASG `asg-nodes-<env>-<region>` authored
+        as `azapi_resource.node_asg` (no AVM ASG module exists).
+        Stage 1 will attach AKS node-pool NICs via
+        `agent_pools.*.network_profile.application_security_groups`.
+  - [x] Inbound 443 from node ASG to `snet-pe-env` authored
+        out-of-band as
+        `azapi_resource.nsg_pe_env_rule_443` (sub-vending's
+        `security_rules` schema does not support
+        `sourceApplicationSecurityGroups`).
+  - [x] Per-region repo-variable publishes
         `<ENV>_<REGION>_VNET_RESOURCE_ID` +
-        `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`. Grafana PE rewired
-        from BYO subnet to derived `snet-pe-env`.
+        `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID` +
+        `<ENV>_<REGION>_PE_SUBNET_ID` via the existing
+        `github_actions_environment_variable.env_vars` for_each
+        (no separate publish step). Grafana PE rewired to derived
+        `snet-pe-env` + central
+        `networking.private_dns_zones.grafana`; per-env zone +
+        links removed.
 - [~] `bootstrap/team/` — refactored onto the vendored module
       (`module "team_repo"` with `template =` + CODEOWNERS file);
       awaits PLAN §4 Stage -1 `team-bootstrap.yaml` CI flow.

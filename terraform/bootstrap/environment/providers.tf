@@ -10,6 +10,21 @@ terraform {
       source  = "integrations/github"
       version = "~> 6.11"
     }
+    # Required by Azure/avm-ptn-alz-sub-vending/azure (~> 0.2). The
+    # provider emits anonymous module-telemetry; we silence it via the
+    # module's `enable_telemetry = false` flag, but the provider must
+    # still be declared at every callsite.
+    modtm = {
+      source  = "azure/modtm"
+      version = "~> 0.3"
+    }
+    # Sub-vending also depends on `random ~> 3.5`; the existing
+    # azapi/github stack does not pull `random`, so declare it here
+    # explicitly.
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.8"
+    }
   }
 
   backend "azurerm" {
@@ -34,3 +49,7 @@ provider "github" {
   # GITHUB_TOKEN env var in CI — sourced from the fleet-meta GitHub App
   # installation token (via actions/create-github-app-token).
 }
+
+# Telemetry provider required by the sub-vending module. Empty block —
+# `enable_telemetry = false` on the module call disables emission.
+provider "modtm" {}
