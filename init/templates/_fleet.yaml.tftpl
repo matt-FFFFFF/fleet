@@ -90,7 +90,7 @@ networking:                                            # Repo-owned VNets + BYO 
   vnets:
     mgmt:
       location: ${primary_region}
-      address_space: ["${networking_mgmt_address_space}"]
+      address_space: "${networking_mgmt_address_space}"
   # Env-tier VNets owned by `bootstrap/environment` via the same
   # sub-vending module (mesh_peering_enabled=true intra-env,
   # hub_peering to networking.hub.resource_id per VNet). One VNet
@@ -103,14 +103,14 @@ networking:                                            # Repo-owned VNets + BYO 
   envs:
     mgmt:
       regions:
-        ${primary_region}: { address_space: ["${networking_env_mgmt_eastus_address_space}"] }
+        ${primary_region}: { address_space: "${networking_env_mgmt_eastus_address_space}" }
     nonprod:
       regions:
-        ${primary_region}: { address_space: ["${networking_env_nonprod_eastus_address_space}"] }
-        # <second-region>: { address_space: ["<cidr>"] }  # add when second region onboards
+        ${primary_region}: { address_space: "${networking_env_nonprod_eastus_address_space}" }
+        # <second-region>: { address_space: "<cidr>" }  # add when second region onboards
     prod:
       regions:
-        ${primary_region}: { address_space: ["${networking_env_prod_eastus_address_space}"] }
+        ${primary_region}: { address_space: "${networking_env_prod_eastus_address_space}" }
 
 github_app:
   fleet_runners:                                       # KEDA polling App (actions:read + metadata:read)

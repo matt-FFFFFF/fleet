@@ -363,18 +363,18 @@ run "render_networking_shape" {
   }
 
   assert {
-    condition     = yamldecode(local_file.fleet_yaml.content).networking.vnets.mgmt.address_space[0] == "10.50.0.0/20"
-    error_message = "networking.vnets.mgmt.address_space[0] must round-trip var.networking_mgmt_address_space."
+    condition     = yamldecode(local_file.fleet_yaml.content).networking.vnets.mgmt.address_space == "10.50.0.0/20"
+    error_message = "networking.vnets.mgmt.address_space must round-trip var.networking_mgmt_address_space as a scalar string (consumed by cidrsubnet() / sub-vending list-wrap)."
   }
 
   # Env VNets, one entry per env under primary_region.
   assert {
     condition = alltrue([
-      yamldecode(local_file.fleet_yaml.content).networking.envs.mgmt.regions.eastus.address_space[0] == "10.60.0.0/20",
-      yamldecode(local_file.fleet_yaml.content).networking.envs.nonprod.regions.eastus.address_space[0] == "10.70.0.0/20",
-      yamldecode(local_file.fleet_yaml.content).networking.envs.prod.regions.eastus.address_space[0] == "10.80.0.0/20",
+      yamldecode(local_file.fleet_yaml.content).networking.envs.mgmt.regions.eastus.address_space == "10.60.0.0/20",
+      yamldecode(local_file.fleet_yaml.content).networking.envs.nonprod.regions.eastus.address_space == "10.70.0.0/20",
+      yamldecode(local_file.fleet_yaml.content).networking.envs.prod.regions.eastus.address_space == "10.80.0.0/20",
     ])
-    error_message = "networking.envs.<env>.regions.<primary_region>.address_space[0] must round-trip the three per-env address_space vars."
+    error_message = "networking.envs.<env>.regions.<primary_region>.address_space must round-trip the three per-env address_space vars as scalar strings."
   }
 
   # Legacy BYO subnet fields must NOT be present under environments.<env>.networking.

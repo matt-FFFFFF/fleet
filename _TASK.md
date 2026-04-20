@@ -336,6 +336,24 @@
 
 ---
 
+## Phase C followup — address_space shape fix
+
+- [x] **Bug (Phase C):** `init/templates/_fleet.yaml.tftpl` rendered
+      `address_space: ["10.x.0.0/20"]` (list) for mgmt + three env
+      regions, but `modules/fleet-identity/networking_derived` passes
+      the value through `cidrsubnet()` / `split("/", ...)` which
+      require a scalar string, and `config-loader/load.sh` reads it
+      via `jq -r '... .address_space'` which also expects a scalar.
+      Only the sub-vending call site in
+      `bootstrap/fleet/main.network.tf` L151 wraps it in `[...]`,
+      which would have produced a list-of-list input to the AVM
+      module. `terraform validate` does not evaluate `cidrsubnet()`
+      so the mismatch was latent; the fleet-identity tests exercised
+      the derivation with the correct scalar shape and hid it.
+      Resolved by flipping the yaml shape to scalar string in the
+      template, re-rendering, and updating the init test assertions
+      that subscripted `address_space[0]`.
+
 ## Open questions to resolve in-flight
 
 - [x] ~~`MGMT_VNET_RESOURCE_ID` publish path~~ — **resolved** (Phase C):

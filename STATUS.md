@@ -12,7 +12,24 @@
 > Legend: `[x]` done · `[~]` in progress / scaffolded but unapplied
 > `[ ]` not started · `[-]` deferred.
 
-Last updated: 2026-04-20 · Phase C (bootstrap/fleet mgmt VNet) landed
+Last updated: 2026-04-20 · Phase C follow-up — `address_space` shape
+bug fix on `feat/networking-topology`:
+`init/templates/_fleet.yaml.tftpl` was rendering
+`networking.vnets.mgmt.address_space` and each
+`networking.envs.<env>.regions.<region>.address_space` as a
+**list** (`["10.50.0.0/20"]`) but every consumer —
+`modules/fleet-identity`'s `cidrsubnet()` / `split("/", ...)` math,
+`config-loader/load.sh`'s `jq -r`, and
+`bootstrap/fleet/main.network.tf` which already wraps in `[...]`
+before passing to the AVM sub-vending module — expects a scalar
+string. `terraform validate` doesn't evaluate `cidrsubnet()` so the
+mismatch was latent; fleet-identity tests hid it by using scalar
+fixtures. Flipped the template to emit scalars; updated the two
+init test assertions that were indexing `address_space[0]`. All
+tests green (init 30/30, fleet-identity 8/8); `validate` + `tflint`
+clean on `bootstrap/{fleet,environment}`.
+
+Prior: Phase C (bootstrap/fleet mgmt VNet) landed
 on `feat/networking-topology`: new `main.network.tf` invokes
 `Azure/avm-ptn-alz-sub-vending/azure ~> 0.2` with
 `subscription_alias_enabled = false` (we run against the already-
