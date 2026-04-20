@@ -150,7 +150,11 @@ adoption docs extended accordingly.
 
 - [x] Design locked; per-env group bindings expressed as empty `[]`
       with `TODO` comments in rendered `_fleet.yaml` for post-init
-      fill-in (bootstrap preconditions detect unfilled fields).
+      fill-in. `bootstrap/fleet` preconditions catch unfilled fleet-scope
+      fields (null, empty, `<...>` sentinel, or non-`/subscriptions/...`
+      ARM ids) before any provider call; `bootstrap/environment` does
+      not yet guard every TODO uniformly — header of rendered
+      `_fleet.yaml` says so explicitly.
 
 ## §10 CI/CD
 

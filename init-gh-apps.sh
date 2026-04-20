@@ -604,7 +604,14 @@ p = pathlib.Path(yaml_path)
 text = p.read_text()
 
 def replace(text, key, value):
-    pat = re.compile(rf'^(\s+){re.escape(key)}:\s*"[^"]*"(\s*(?:#.*)?)$', re.MULTILINE)
+    # Match the key line with either a quoted string value (`key: "..."`)
+    # or an unquoted scalar (`key: null`, `key: 123`). The template ships
+    # `null`; once patched, subsequent runs would see a quoted numeric
+    # string — both forms round-trip.
+    pat = re.compile(
+        rf'^(\s+){re.escape(key)}:\s*(?:"[^"]*"|[^\s#]+)(\s*(?:#.*)?)$',
+        re.MULTILINE,
+    )
     new, n = pat.subn(rf'\g<1>{key}: "{value}"\g<2>', text, count=1)
     if n == 0:
         raise SystemExit(

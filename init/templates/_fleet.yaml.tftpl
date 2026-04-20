@@ -103,8 +103,8 @@ networking:                                            # Private networking for 
 
 github_app:
   fleet_runners:                                       # KEDA polling App (actions:read + metadata:read)
-    app_id: ""                                         # TODO post-init (numeric GitHub App ID)
-    installation_id: ""                                # TODO post-init
+    app_id: null                                       # TODO post-init (numeric GitHub App ID; init-gh-apps.sh patches)
+    installation_id: null                              # TODO post-init (init-gh-apps.sh patches)
     private_key_kv_secret: fleet-runners-app-pem       # Secret name in the fleet KV (init-gh-apps.sh seeds it post-bootstrap)
 
 aad:

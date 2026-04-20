@@ -74,24 +74,28 @@ resource "terraform_data" "runner_preconditions" {
 
   lifecycle {
     precondition {
-      condition     = local.networking.runner_subnet_id != null && local.networking.runner_subnet_id != ""
-      error_message = "clusters/_fleet.yaml: networking.runner.subnet_id is unset or still a `<...>` placeholder. Replace it with the full /subscriptions/.../subnets/<name> id of the runner ACA subnet. See docs/adoption.md §3 + §5.1."
+      # Reject null / empty / legacy `<...>` sentinel / anything that isn't
+      # a /subscriptions/... resource id. See main.state.tf for rationale.
+      condition     = local.networking.runner_subnet_id != null && local.networking.runner_subnet_id != "" && !startswith(local.networking.runner_subnet_id, "<") && startswith(local.networking.runner_subnet_id, "/subscriptions/")
+      error_message = "clusters/_fleet.yaml: networking.runner.subnet_id is unset, still a `<...>` placeholder, or not a /subscriptions/... resource id. Replace it with the full /subscriptions/.../subnets/<name> id of the runner ACA subnet. See docs/adoption.md §3 + §5.1."
     }
     precondition {
-      condition     = local.networking.runner_acr_pe_subnet_id != null && local.networking.runner_acr_pe_subnet_id != ""
-      error_message = "clusters/_fleet.yaml: networking.runner.container_registry_pe_subnet_id is unset or still a `<...>` placeholder. Replace it with the full subnet id for the runner ACR private endpoint. See docs/adoption.md §3 + §5.1."
+      condition     = local.networking.runner_acr_pe_subnet_id != null && local.networking.runner_acr_pe_subnet_id != "" && !startswith(local.networking.runner_acr_pe_subnet_id, "<") && startswith(local.networking.runner_acr_pe_subnet_id, "/subscriptions/")
+      error_message = "clusters/_fleet.yaml: networking.runner.container_registry_pe_subnet_id is unset, still a `<...>` placeholder, or not a /subscriptions/... resource id. Replace it with the full subnet id for the runner ACR private endpoint. See docs/adoption.md §3 + §5.1."
     }
     precondition {
-      condition     = local.networking.runner_acr_dns_zone_id != null && local.networking.runner_acr_dns_zone_id != ""
-      error_message = "clusters/_fleet.yaml: networking.runner.container_registry_private_dns_zone_id is unset or still a `<...>` placeholder. Replace it with the resource id of the central privatelink.azurecr.io zone. See docs/adoption.md §3 + §5.1."
+      condition     = local.networking.runner_acr_dns_zone_id != null && local.networking.runner_acr_dns_zone_id != "" && !startswith(local.networking.runner_acr_dns_zone_id, "<") && startswith(local.networking.runner_acr_dns_zone_id, "/subscriptions/")
+      error_message = "clusters/_fleet.yaml: networking.runner.container_registry_private_dns_zone_id is unset, still a `<...>` placeholder, or not a /subscriptions/... resource id. Replace it with the resource id of the central privatelink.azurecr.io zone. See docs/adoption.md §3 + §5.1."
     }
     precondition {
-      condition     = local.networking.fleet_kv_pe_subnet_id != null && local.networking.fleet_kv_pe_subnet_id != ""
-      error_message = "clusters/_fleet.yaml: networking.fleet_kv.private_endpoint.subnet_id is unset or still a `<...>` placeholder. Replace it with the full subnet id that will host the fleet Key Vault private endpoint. See docs/adoption.md §3 + §5.1."
+      condition     = local.networking.fleet_kv_pe_subnet_id != null && local.networking.fleet_kv_pe_subnet_id != "" && !startswith(local.networking.fleet_kv_pe_subnet_id, "<") && startswith(local.networking.fleet_kv_pe_subnet_id, "/subscriptions/")
+      error_message = "clusters/_fleet.yaml: networking.fleet_kv.private_endpoint.subnet_id is unset, still a `<...>` placeholder, or not a /subscriptions/... resource id. Replace it with the full subnet id that will host the fleet Key Vault private endpoint. See docs/adoption.md §3 + §5.1."
     }
     precondition {
-      condition     = local.github_app_fleet_runners.app_id != null && local.github_app_fleet_runners.app_id != "" && local.github_app_fleet_runners.installation_id != null && local.github_app_fleet_runners.installation_id != ""
-      error_message = "clusters/_fleet.yaml: github_app.fleet_runners.{app_id, installation_id} are unset. Run ./init-gh-apps.sh to create the three GitHub Apps and let it patch these values in for you. See docs/adoption.md §4 + §5.2."
+      # GitHub App IDs are numeric strings from GitHub, not ARM ids — we only
+      # reject null/empty and the legacy `<...>` sentinel.
+      condition     = local.github_app_fleet_runners.app_id != null && local.github_app_fleet_runners.app_id != "" && !startswith(tostring(local.github_app_fleet_runners.app_id), "<") && local.github_app_fleet_runners.installation_id != null && local.github_app_fleet_runners.installation_id != "" && !startswith(tostring(local.github_app_fleet_runners.installation_id), "<")
+      error_message = "clusters/_fleet.yaml: github_app.fleet_runners.{app_id, installation_id} are unset or still `<...>` placeholders. Run ./init-gh-apps.sh to create the three GitHub Apps and let it patch these values in for you. See docs/adoption.md §4 + §5.2."
     }
   }
 }
