@@ -44,7 +44,11 @@ locals {
 
   # Private-networking identifiers. All try-guarded so older / partial
   # `_fleet.yaml` docs (pre-networking-schema) remain parseable — an
-  # adopter fills these in before the relevant apply.
+  # adopter fills these in before the relevant apply. The rendered yaml
+  # ships these fields as `null` with a TODO comment (see
+  # init/templates/_fleet.yaml.tftpl) so downstream `!= null && != ""`
+  # preconditions catch "adopter forgot to fill this in" with a single
+  # check.
   networking = {
     tfstate_pe_subnet_id           = try(var.fleet_doc.networking.tfstate.private_endpoint.subnet_id, null)
     tfstate_pe_private_dns_zone_id = try(var.fleet_doc.networking.tfstate.private_endpoint.private_dns_zone_id, null)

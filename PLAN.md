@@ -2259,7 +2259,11 @@ no template machinery left behind.
 > and per-field regex checks without a second toolchain or sed quoting
 > hazards. The single-source-of-truth contract (everything lives in
 > `clusters/_fleet.yaml`; bootstrap stages `yamldecode` it) is
-> unchanged.
+> unchanged. Post-init-fill fields (§16.1) render as `null` / `[]` with
+> `TODO` comments rather than angle-bracket `<...>` sentinels: bootstrap
+> preconditions use a single `!= null && != ""` check, and the
+> placeholder string never leaks into provider resources (where
+> azurerm's ID parser would emit an unactionable segment dump).
 
 ### 16.1 Single source of truth
 

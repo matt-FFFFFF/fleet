@@ -265,13 +265,13 @@ create_app() {
   # cleanup closure, call it explicitly on the success path, and install a
   # narrowly-scoped EXIT trap that only runs if the script dies mid-function
   # (because `die` goes straight to `exit 1` without returning).
-  local cb_file port_file listener_pid=""
+  local cb_file port_file conv_file="" listener_pid=""
   cb_file=$(mktemp -t gh-apps-cb.XXXXXX)
   port_file=$(mktemp -t gh-apps-port.XXXXXX)
 
   _create_app_cleanup() {
     [[ -n "${listener_pid:-}" ]] && kill "$listener_pid" 2>/dev/null || true
-    rm -f "${cb_file:-}" "${port_file:-}"
+    rm -f "${cb_file:-}" "${port_file:-}" "${conv_file:-}"
     [[ -n "${form_dir:-}" ]] && rm -rf "$form_dir" || true
   }
   # Install as EXIT trap: only fires if we exit abnormally (die → exit 1).
@@ -409,14 +409,21 @@ PY
   fi
 
   # Persist credentials to state immediately — the API returns them once.
-  # Pipe the raw JSON via stdin so no interpolation into a Python source
-  # string happens: embedding JSON in a `'''...'''` literal makes Python
-  # interpret its `\n` escapes (notably inside `pem`) as real newlines
-  # before json.loads sees them, which corrupts the parse.
+  # Write the raw JSON to a temp file and pass its path as argv[1]; we can't
+  # pipe it on stdin because `python3 - <<'PY'` already consumes stdin to
+  # read the script body, and we can't interpolate it into a `'''...'''`
+  # literal because Python would interpret its `\n` escapes (notably inside
+  # `pem`) as real newlines before json.loads sees them.
+  # `conv_file` was declared at the top of the function and is cleaned up
+  # by `_create_app_cleanup` — no RETURN trap here (RETURN traps leak out
+  # of the function scope in bash; see the cleanup-strategy comment above).
   local payload
-  payload=$(printf '%s' "$conv_json" | python3 - <<'PY'
+  conv_file=$(mktemp -t gh-apps-conv.XXXXXX)
+  printf '%s' "$conv_json" >"$conv_file"
+  payload=$(python3 - "$conv_file" <<'PY'
 import json, sys
-c = json.loads(sys.stdin.read())
+with open(sys.argv[1]) as f:
+    c = json.load(f)
 out = {
     "id": c.get("id"),
     "slug": c.get("slug"),
@@ -597,7 +604,14 @@ p = pathlib.Path(yaml_path)
 text = p.read_text()
 
 def replace(text, key, value):
-    pat = re.compile(rf'^(\s+){re.escape(key)}:\s*"[^"]*"(\s*(?:#.*)?)$', re.MULTILINE)
+    # Match the key line with either a quoted string value (`key: "..."`)
+    # or an unquoted scalar (`key: null`, `key: 123`). The template ships
+    # `null`; once patched, subsequent runs would see a quoted numeric
+    # string — both forms round-trip.
+    pat = re.compile(
+        rf'^(\s+){re.escape(key)}:\s*(?:"[^"]*"|[^\s#]+)(\s*(?:#.*)?)$',
+        re.MULTILINE,
+    )
     new, n = pat.subn(rf'\g<1>{key}: "{value}"\g<2>', text, count=1)
     if n == 0:
         raise SystemExit(

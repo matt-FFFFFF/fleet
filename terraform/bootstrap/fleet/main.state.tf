@@ -131,8 +131,13 @@ resource "azapi_resource" "state_pe" {
 
   lifecycle {
     precondition {
-      condition     = local.networking.tfstate_pe_subnet_id != null && local.networking.tfstate_pe_subnet_id != ""
-      error_message = "networking.tfstate.private_endpoint.subnet_id must be set in clusters/_fleet.yaml before applying bootstrap/fleet. See docs/adoption.md §5.1."
+      # Reject null / empty / legacy `<...>` sentinel / anything that isn't
+      # a recognisable ARM resource id. The shape check catches adopters
+      # upgrading from the old template who left `<resource-id>` verbatim —
+      # without it the azurerm/azapi providers fail much later with a cryptic
+      # "parsing the Subnet ID: segments didn't match" dump.
+      condition     = local.networking.tfstate_pe_subnet_id != null && local.networking.tfstate_pe_subnet_id != "" && !startswith(local.networking.tfstate_pe_subnet_id, "<") && startswith(local.networking.tfstate_pe_subnet_id, "/subscriptions/")
+      error_message = "clusters/_fleet.yaml: networking.tfstate.private_endpoint.subnet_id is unset, still a `<...>` placeholder, or not a /subscriptions/... resource id. Replace it with the full /subscriptions/.../subnets/<name> id of the subnet that will host the tfstate storage account's private endpoint. See docs/adoption.md §3 + §5.1."
     }
   }
 }

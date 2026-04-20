@@ -7,10 +7,16 @@
 #   - bootstrap/environment   (yamldecode in locals, selects environments[var.env])
 #   - config-loader/load.sh   (deep-merged into every cluster's tfvars)
 #
-# Angle-bracketed placeholders (`<...>`) were intentionally NOT filled in by
-# init — they require cloud-side identities (AAD group object IDs, VNet
-# resource IDs) that typically aren't known until after the tenant is wired
-# up. Fill them in before running the corresponding bootstrap stage.
+# Fields that ship as `null` or `[]` with a `TODO` comment require
+# cloud-side identities (AAD group object IDs, VNet resource IDs, GitHub
+# App coordinates) that typically aren't known at init time. Fill each
+# one in before running the stage that consumes it. `bootstrap/fleet`
+# guards its required fields with `precondition` blocks that name the
+# exact yaml path on failure; other stages (notably `bootstrap/
+# environment`) do not yet enforce every `TODO` field uniformly, so
+# leaving a per-env list empty may let an apply succeed while skipping
+# required wiring (e.g. no Private DNS zone VNet links). Treat the
+# `TODO` comments as the source of truth for what must be set.
 
 fleet:
   name: ${fleet_name}
@@ -58,46 +64,47 @@ state:
 networking:                                            # Private networking for Stage -1 / Stage 0
   tfstate:
     private_endpoint:
-      # Subnet (in rg-fleet-shared or the hub) that will host the PE for the
-      # tfstate storage account. Must have `privateEndpointNetworkPolicies`
-      # effectively disabled.
-      subnet_id: <resource-id>                         # TODO post-init
-      # Central privatelink.blob.core.windows.net zone (typically in the hub
-      # connectivity subscription). Leave as null to skip automatic DNS
-      # wiring — in that case the adopter is responsible for A-record
-      # registration.
-      private_dns_zone_id: null                        # TODO post-init (optional)
+      # TODO: full resource id of the subnet (in rg-fleet-shared or the hub)
+      # that will host the PE for the tfstate storage account. Must have
+      # `privateEndpointNetworkPolicies` effectively disabled.
+      # e.g. /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>
+      subnet_id: null
+      # Optional: full resource id of the central privatelink.blob.core.windows.net
+      # zone (typically in the hub connectivity subscription). Leave null to skip
+      # automatic DNS wiring — adopter is then responsible for A-record registration.
+      private_dns_zone_id: null
   runner:
-    # Subnet that hosts the Azure Container Apps environment for the fleet
-    # runner pool. Delegated to Microsoft.App/environments, UDR egress via
-    # hub firewall.
-    subnet_id: <resource-id>                           # TODO post-init
-    # Subnet for the runner's per-pool private ACR private endpoint. May be
-    # the same as networking.tfstate.private_endpoint.subnet_id.
-    container_registry_pe_subnet_id: <resource-id>     # TODO post-init
-    # Central privatelink.azurecr.io zone (typically in the hub
-    # connectivity subscription, symmetric with tfstate above). The runner
-    # pool does NOT create this zone — it must pre-exist and the operator
-    # running bootstrap/fleet needs Private DNS Zone Contributor on it so
-    # the module can register the PE's A record via the PE's DNS zone
-    # group.
-    container_registry_private_dns_zone_id: <resource-id>  # TODO post-init
+    # TODO: full resource id of the subnet that hosts the Azure Container Apps
+    # environment for the fleet runner pool. Delegated to
+    # Microsoft.App/environments, UDR egress via hub firewall.
+    subnet_id: null
+    # TODO: full resource id of the subnet for the runner's per-pool private ACR
+    # private endpoint. May be the same as networking.tfstate.private_endpoint.subnet_id.
+    container_registry_pe_subnet_id: null
+    # TODO: full resource id of the central privatelink.azurecr.io zone
+    # (typically in the hub connectivity subscription, symmetric with tfstate
+    # above). The runner pool does NOT create this zone — it must pre-exist
+    # and the operator running bootstrap/fleet needs Private DNS Zone
+    # Contributor on it so the module can register the PE's A record via the
+    # PE's DNS zone group.
+    container_registry_private_dns_zone_id: null
   fleet_kv:
     private_endpoint:
-      # Subnet (in rg-fleet-shared or the hub) that will host the PE for
-      # the fleet Key Vault. Must have `privateEndpointNetworkPolicies`
-      # effectively disabled. May be the same subnet as the tfstate PE.
-      subnet_id: <resource-id>                         # TODO post-init
-      # Central privatelink.vaultcore.azure.net zone (typically in the hub
-      # connectivity subscription, symmetric with tfstate + runner ACR).
-      # Leave as null to skip automatic DNS wiring — in that case the
-      # adopter is responsible for A-record registration.
-      private_dns_zone_id: null                        # TODO post-init (optional)
+      # TODO: full resource id of the subnet (in rg-fleet-shared or the hub)
+      # that will host the PE for the fleet Key Vault. Must have
+      # `privateEndpointNetworkPolicies` effectively disabled. May be the
+      # same subnet as the tfstate PE.
+      subnet_id: null
+      # Optional: full resource id of the central privatelink.vaultcore.azure.net
+      # zone (typically in the hub connectivity subscription, symmetric with
+      # tfstate + runner ACR). Leave null to skip automatic DNS wiring — adopter
+      # is then responsible for A-record registration.
+      private_dns_zone_id: null
 
 github_app:
   fleet_runners:                                       # KEDA polling App (actions:read + metadata:read)
-    app_id: ""                                         # TODO post-init (numeric GitHub App ID)
-    installation_id: ""                                # TODO post-init
+    app_id: null                                       # TODO post-init (numeric GitHub App ID; init-gh-apps.sh patches)
+    installation_id: null                              # TODO post-init (init-gh-apps.sh patches)
     private_key_kv_secret: fleet-runners-app-pem       # Secret name in the fleet KV (init-gh-apps.sh seeds it post-bootstrap)
 
 aad:
@@ -143,15 +150,20 @@ environments:
   mgmt:
     subscription_id: ${sub_mgmt}
     networking:
-      grafana_pe_subnet_id: <resource-id>              # TODO post-init
-      grafana_pe_linked_vnet_ids:                      # TODO post-init
-        - <vnet-resource-id>
+      # TODO: full resource id of the subnet that will host the Grafana PE.
+      grafana_pe_subnet_id: null
+      # TODO: full resource ids of every VNet that should resolve the Grafana
+      # private DNS zone. Typically includes the hub and each spoke VNet.
+      grafana_pe_linked_vnet_ids: []
     aks:
-      admin_groups: [<grp-aks-admin-mgmt>]               # TODO: break-glass (bypass K8s RBAC)
-      rbac_cluster_admins: [<grp-platform-admin>]        # TODO: platform SRE (AAD → K8s RBAC)
+      # TODO: AAD group object IDs. Break-glass (bypass K8s RBAC).
+      admin_groups: []
+      # TODO: AAD group object IDs. Platform SRE (AAD → K8s RBAC).
+      rbac_cluster_admins: []
       rbac_readers: []
     grafana:
-      admins: [<grp-grafana-mgmt-admins>]                # TODO
+      # TODO: AAD group object IDs for Grafana admins.
+      admins: []
       editors: []
     action_group:
       receivers:
@@ -160,16 +172,15 @@ environments:
   nonprod:
     subscription_id: ${sub_nonprod}
     networking:
-      grafana_pe_subnet_id: <resource-id>
-      grafana_pe_linked_vnet_ids:
-        - <vnet-resource-id>
+      grafana_pe_subnet_id: null                       # TODO
+      grafana_pe_linked_vnet_ids: []                   # TODO
     aks:
-      admin_groups: [<grp-aks-admin-nonprod>]
-      rbac_cluster_admins: [<grp-platform-admin-nonprod>]
-      rbac_readers: [<grp-platform-reader-nonprod>]
+      admin_groups: []                                 # TODO
+      rbac_cluster_admins: []                          # TODO
+      rbac_readers: []                                 # TODO
     grafana:
-      admins: [<grp-grafana-nonprod-admins>]
-      editors: [<grp-grafana-nonprod-editors>]
+      admins: []                                       # TODO
+      editors: []                                      # TODO
     action_group:
       receivers:
         slack: { webhook_url_kv_secret: slack-webhook-nonprod }
@@ -177,16 +188,15 @@ environments:
   prod:
     subscription_id: ${sub_prod}
     networking:
-      grafana_pe_subnet_id: <resource-id>
-      grafana_pe_linked_vnet_ids:
-        - <vnet-resource-id>
+      grafana_pe_subnet_id: null                       # TODO
+      grafana_pe_linked_vnet_ids: []                   # TODO
     aks:
-      admin_groups: [<grp-aks-admin-prod>]               # very small
-      rbac_cluster_admins: [<grp-platform-admin-prod>]
-      rbac_readers: [<grp-platform-reader-prod>]
+      admin_groups: []                                 # TODO: very small
+      rbac_cluster_admins: []                          # TODO
+      rbac_readers: []                                 # TODO
     grafana:
-      admins: [<grp-grafana-prod-admins>]
-      editors: [<grp-grafana-prod-editors>]
+      admins: []                                       # TODO
+      editors: []                                      # TODO
     action_group:
       receivers:
         pagerduty: { integration_key_kv_secret: pagerduty-prod }
