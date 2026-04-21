@@ -32,20 +32,36 @@
       + `init/variables.tf` + `init/render.tf` +
       `.github/fixtures/adopter-test.tfvars` + `init/tests/unit/`:
       dropped `fleet.primary_region`, renamed top-level `environments:`
-      → `envs:` with new `envs.mgmt.location`, replaced flat
-      `networking.hub.resource_id` with nested
-      `networking.hubs.{nonprod,prod}.regions.<region>.resource_id`
-      (single hub var fans out; adopters split post-init), removed
-      `networking.vnets.mgmt` block (mgmt folded into
-      `networking.envs.mgmt.regions.<region>` uniformly), renamed
-      `networking_mgmt_address_space` → gone, renamed the three env
-      address-space vars to drop `_eastus_` infix, emitted
-      `address_space` as a YAML list, added
-      `mgmt_environment_for_vnet_peering: prod` on mgmt env-region,
-      omitted `create_reverse_peering` (bootstrap default true),
-      updated comments to `snet-pe-fleet`, rewrote the pairwise
-      overlap validation to 3-way. `init/tests/unit/init.tftest.hcl`
-      rewritten: 32 runs pass.
+      → `envs:` with new `envs.mgmt.location`. Input surface collapsed
+      to a single `variable "environments"` of type
+      `map(object({ subscription_id, address_space, hub_resource_id,
+      mgmt_peering_target_env }))` — n-env extensible; mgmt key
+      required by convention; per-env `hub_resource_id` required on
+      non-mgmt, must be null on mgmt; `mgmt_peering_target_env`
+      defaults to `"prod"` and is validated to name a real non-mgmt
+      env. Template iterates the map with `%{ for env, cfg in
+      environments }` loops to fan out `networking.hubs.<env>`,
+      `networking.envs.<env>`, and top-level `envs.<env>` uniformly;
+      mgmt env-region carries `mgmt_environment_for_vnet_peering:
+      ${cfg.mgmt_peering_target_env}` and no hub entry; non-mgmt has
+      no location field. `address_space` emitted as a YAML list;
+      `create_reverse_peering` omitted (bootstrap default true).
+      Pairwise address-space overlap validation rewritten with
+      `setproduct(keys, keys)` so it scales to n envs. Removed
+      scalars: `sub_mgmt`, `sub_nonprod`, `sub_prod`,
+      `networking_hub_resource_id`,
+      `networking_env_{mgmt,nonprod,prod}_address_space`. Kept:
+      `sub_shared`, `primary_region`, `networking_pdz_*`. Adopter
+      flow: top-level scalars carry `__PROMPT__` sentinels and are
+      swept by `init-fleet.sh`; map-interior sentinels are
+      intentionally ignored (prompt regex anchored at column 0) —
+      adopters edit the `environments` map by hand. `--values-file`
+      overlay rewritten to `cp` the file verbatim since fixture is
+      exhaustive. `init/tests/unit/init.tftest.hcl` rewritten: 37
+      runs pass, including `render_open_map_extra_env` (declares a
+      `dev` env and asserts uniform fan-out into
+      `hubs`/`networking.envs`/`envs`) + 14 `reject_environments_*`
+      runs covering every validation rule.
 - [x] `clusters/_defaults.yaml` + env `_defaults.yaml`.
 - [x] `clusters/_template/cluster.yaml` onboarding scaffold with
       `networking.subnet_slot` required field.
@@ -442,10 +458,14 @@ self-contained enough to land in its own PR.
 2. **Renderer — `init/`**. ✅ **Done.** Rewrote
    `init/templates/_fleet.yaml.tftpl`, `init/variables.tf`,
    `init/render.tf`, `.github/fixtures/adopter-test.tfvars`, and
-   `init/tests/unit/init.tftest.hcl` to emit the new schema. Kept
-   per-env address-space scalars (hard-coded `primary_region`); open
-   map over `(env, region)` deferred — adopters add additional regions
-   post-init by editing `_fleet.yaml`. 32 tests pass.
+   `init/tests/unit/init.tftest.hcl` to emit the new schema. Input
+   surface collapsed to a single `environments` map-of-objects so
+   n envs are supported without renderer changes; template iterates
+   the map to fan out `hubs` / `networking.envs` / `envs` uniformly;
+   `init-fleet.sh` prompt regex anchored column-0 so map-interior
+   sentinels are adopter-edited; `--values-file` overlay now `cp`s
+   verbatim. 37 tests pass incl. `render_open_map_extra_env` +
+   14 validation-rejection runs.
 3. **Config loader — `terraform/config-loader/load.sh`**. Rename
    yaml reads, fix mgmt naming (per-region), add `snet-pe-fleet` /
    `snet-pe-env` / `snet-runners` derivations, fix
