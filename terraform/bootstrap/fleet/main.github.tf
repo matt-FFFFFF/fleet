@@ -234,6 +234,12 @@ locals {
     TFSTATE_STORAGE_ACCOUNT = local.derived.state_storage_account
     TFSTATE_RESOURCE_GROUP  = local.derived.state_resource_group
     FLEET_NAME              = local.fleet.name
+    # PLAN §3.4: Stage 0 lands the fleet ACR PE in the mgmt VNet's
+    # `snet-pe-fleet` co-located with `acr.location`. The tf-apply.yaml
+    # workflow parses this JSON map and passes it in as the
+    # `mgmt_pe_fleet_subnet_ids` tfvar. Also published on the
+    # `fleet-meta` env below for observability/diagnostics.
+    MGMT_PE_FLEET_SUBNET_IDS = jsonencode(local.mgmt_snet_pe_fleet_ids)
   }
   meta_env_vars = {
     AZURE_CLIENT_ID         = module.fleet_repo.environments["meta"].identity.client_id
