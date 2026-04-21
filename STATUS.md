@@ -9,7 +9,9 @@
 > sub-item's state changes. If in doubt, it doesn't belong.
 >
 > Legend: `[x]` done · `[~]` in progress / scaffolded but unapplied
-> `[ ]` not started · `[-]` deferred.
+> `[!]` **rework required** — code landed for a prior PLAN revision
+> and drifts from current PLAN; must be re-aligned before new work
+> on the same sub-item · `[ ]` not started · `[-]` deferred.
 
 ## §1 Decisions (locked)
 
@@ -23,73 +25,210 @@
 
 ## §3 Cluster config schema
 
-- [~] §3.1 `clusters/_fleet.yaml` rendered by `init/`. Fleet identity,
-      ACR, state SA, AAD apps, observability, per-`envs` blocks landed;
-      networking schema rework (flat `networking.hubs.<env>.regions.<region>`
-      map, uniform `networking.envs.<env>.regions.<region>` incl. `mgmt`
-      with `mgmt_environment_for_vnet_peering` + `create_reverse_peering`,
-      top-level `envs.mgmt.location`, removal of `networking.vnets.mgmt`
-      and `fleet.primary_region`) not yet applied to
-      `init/templates/_fleet.yaml.tftpl` or `init/variables.tf`.
+- [!] §3.1 `clusters/_fleet.yaml` rendered by `init/` — **rework
+      required** (pre-143d18b schema still emitted). Concrete drift in
+      `init/templates/_fleet.yaml.tftpl` + `init/variables.tf` +
+      `init/render.tf`:
+  - `fleet.primary_region` still emitted (template L28) and still
+    declared as a variable (`init/variables.tf` L87-95, passed through
+    `init/render.tf` L19). PLAN removes it; replacement is
+    `envs.mgmt.location`.
+  - Top-level `environments:` (template L174-204) → rename to `envs:`.
+  - `envs.mgmt.location` is not emitted anywhere.
+  - `networking.hub.resource_id` (scalar) at template L66-70 +
+    `init/variables.tf` L169-176 → replace with
+    `networking.hubs.<env>.regions.<region>.resource_id` (nested
+    map). Per-env-region hub input variable shape does not exist.
+  - `networking.vnets.mgmt` block still emitted (template L90-93) →
+    remove entirely; mgmt becomes an entry under
+    `networking.envs.mgmt.regions.<region>`.
+  - `init/variables.tf` `networking_mgmt_address_space` (L220-239)
+    treats mgmt as a distinct special VNet → fold into uniform
+    per-env-region input.
+  - Per-env-region variables are hard-coded to `eastus`
+    (`init/variables.tf` L241, L262, L283) and the 4-way pairwise
+    overlap validation (L302-330) is hard-coded to four VNets → must
+    become an open map over `(env, region)`.
+  - No input channels for the new per-env-region fields
+    `create_reverse_peering` and `mgmt_environment_for_vnet_peering`.
+  - Subnet naming `snet-pe-shared` in `init/variables.tf` docstring
+    L221, template comment L84-89 → rename to `snet-pe-fleet`.
+  - Validation messaging assumes mgmt is special for peering; needs
+    rewriting.
 - [x] `clusters/_defaults.yaml` + env `_defaults.yaml`.
 - [x] `clusters/_template/cluster.yaml` onboarding scaffold with
       `networking.subnet_slot` required field.
 - [x] §3.2 DNS hierarchy; zone FQDN pattern encoded in `_fleet.yaml`.
-- [~] §3.3 Derivation rules in `config-loader/load.sh`:
-  - [~] Subscription stitching from `_fleet.yaml.envs.<env>` — loader
-        still reads `environments.<env>`; rename pending.
-  - [~] Networking derivations (fleet-scope + env-scope in
-        `modules/fleet-identity/`; cluster-scope in `load.sh`) — shape
-        pre-dates uniform env-region model; rework pending to consume
-        new hubs map + mgmt-as-env-region.
-  - [ ] Full name-derivation parity with `docs/naming.md` — pending
-        audit against bootstrap-stage HCL locals.
-- [~] §3.4 Networking topology — spec rewritten to uniform env-region
-      model (mgmt is an env; `bootstrap/fleet` owns only fleet-plane
-      subnets `snet-pe-fleet` + `snet-runners` on mgmt VNets;
-      `bootstrap/environment` owns cluster-workload subnets on every
-      env incl. mgmt; UDR route table associated with both api and
-      nodes subnets; peering honours per-env-region
-      `create_reverse_peering`). Implementation across
-      `bootstrap/fleet`, `bootstrap/environment`, `config-loader`,
-      `init/`, and Stage 1 DNS-link list pending.
+- [!] §3.3 Derivation rules — **rework required** across
+      `config-loader/load.sh` and `modules/fleet-identity/`:
+  - `config-loader/load.sh`:
+    - L114 reads `.environments[$env].subscription_id` → rename to
+      `.envs[$env].subscription_id`.
+    - L108-110, L136-138 comments reference removed `networking.vnets.mgmt`
+      and "pre-Phase-B" wording → rewrite.
+    - L212 `mgmt_vnet_name="vnet-${fleet_name}-mgmt"` (region-less)
+      → must become `vnet-<fleet>-mgmt-<region>` (uniform per-region).
+    - L214 `mgmt_net_rg="rg-net-mgmt"` (region-less) → must be
+      `rg-net-mgmt-<region>`.
+    - L271-272 emit `mgmt_vnet_name` / `mgmt_net_resource_group` into
+      every cluster's `derived.networking` treating mgmt as singleton
+      → must derive from the cluster's own env-region (including when
+      `env=mgmt`) via the uniform map.
+    - No derivation of `snet-pe-fleet`, `snet-runners`, or
+      `snet-pe-env` names; only `snet-aks-api-<cluster>` +
+      `snet-aks-nodes-<cluster>` (L218-219). Add the three missing
+      subnet name derivations.
+    - L150-152 parses `address_space` as scalar; PLAN §3.1 shows it
+      as a YAML list — confirm intent and fix parsing accordingly
+      (Python `ipaddress.ip_network` at L167 will crash on a list).
+  - `modules/fleet-identity/`:
+    - `variables.tf` L12, L19 docstrings still advertise
+      `fleet.primary_region` → rewrite for `envs.mgmt.location`.
+    - `main.tf` L42, L111 fall back to `local.fleet.primary_region`
+      → switch to `local.envs.mgmt.location` (or env-region-specific
+      lookup).
+    - `main.tf` L55 reads `networking.hub.resource_id` scalar →
+      rebuild `networking_central` output as a nested map over
+      `<env>.<region>`.
+    - `main.tf` L86-87 reads `networking.vnets.mgmt` → remove;
+      derive mgmt from `networking.envs.mgmt.regions.<region>`.
+    - `main.tf` L107-128 derives a singleton `networking_derived.mgmt`
+      object with `vnet_name = "vnet-<fleet>-mgmt"` and
+      `rg_name = "rg-net-mgmt"` (no region) → must become a map keyed
+      by region, parallel to non-mgmt envs.
+    - `main.tf` L120 `snet_pe_shared_cidr`, `outputs.tf` L22 →
+      rename to `snet_pe_fleet_cidr`.
+    - Mgmt branch only carves `snet_pe_shared_cidr` + `snet_runners_cidr`;
+      missing uniform cluster-workload fields (`snet_pe_env_cidr`,
+      api pool, nodes pool, node ASG, NSG name, peering names,
+      `cluster_slot_capacity`) which PLAN §3.3/§3.4 now require on
+      mgmt VNets too.
+    - `main.tf` L94-104 `env_regions` flatten doesn't read
+      `create_reverse_peering` or `mgmt_environment_for_vnet_peering`
+      → extend.
+    - `main.tf` L131-154 peering-name derivation hard-codes
+      `peer-<env>-<region>-to-mgmt` / reverse; must honour
+      `mgmt_environment_for_vnet_peering` and gate the reverse half
+      on `create_reverse_peering`.
+    - CIDR math: fleet-plane subnets currently carved from the FIRST
+      two /26s of the /20; PLAN §3.4 L683/L695/L705 places the
+      fleet-plane zone at the HIGH end (second /21 within /20). Must
+      relocate.
+  - Naming parity sub-item (`docs/naming.md` vs bootstrap HCL locals)
+    was already `[ ]`; stays `[ ]` but is now blocked on the above
+    rework.
+- [!] §3.4 Networking topology — spec rewritten in PLAN (commit
+      143d18b) to uniform env-region model. No implementation
+      landed yet; all work tracked under the §4 Stage -1 rows and
+      the Stage 1 DNS-link rework below.
 - [x] Example clusters: `mgmt/eastus/aks-mgmt-01`,
-      `nonprod/eastus/aks-nonprod-01`.
+      `nonprod/eastus/aks-nonprod-01` (will need YAML migration to
+      new `envs:` shape once schema rework lands).
 
 ## §4 Terraform stages
 
 ### Stage -1 — `terraform/bootstrap/`
 
-- [~] `bootstrap/fleet/` — scaffolded (state SA, stage0 + meta UAMIs,
-      FICs, GH repo + `main`-branch ruleset, env variables, private
-      tfstate SA endpoint, self-hosted runner pool, fleet KV with PE,
-      mgmt VNet + subnets + NSGs + hub peering, `Network Contributor`
-      on mgmt VNet → `fleet-meta`, `MGMT_VNET_RESOURCE_ID` published
-      to the `fleet-meta` GH Environment). Delivered via vendored
-      `terraform/modules/github-repo` and `terraform/modules/cicd-runners`.
-      **Not yet applied against a live tenant.** Pending PLAN
-      realignment: rework to create one mgmt env-region VNet shell per
-      `networking.envs.mgmt.regions.<region>`, own only fleet-plane
-      subnets (`snet-pe-fleet` + `snet-runners` /23 ACA-delegated),
-      drop fleet-scope `MGMT_VNET_RESOURCE_ID` in favour of uniform
-      `MGMT_<REGION>_{VNET_RESOURCE_ID,PE_FLEET_SUBNET_ID,RUNNERS_SUBNET_ID}`.
+- [!] `bootstrap/fleet/` — **rework required**. Current code targets
+      the pre-143d18b schema (single mgmt VNet, `snet-pe-shared`,
+      fleet-scope `MGMT_VNET_RESOURCE_ID`). Concrete drift:
+  - `main.network.tf` L70-206: single `module "mgmt_network"`
+    invocation with `mgmt_vnet_key = "mgmt"` (L77) creates ONE VNet
+    with a single address_space (L147-205). Must become one VNet per
+    `networking.envs.mgmt.regions.<region>` (iterable).
+  - `main.network.tf` L79 `snet_pe_shared_name = "snet-pe-shared"` →
+    rename to `snet-pe-fleet`. Propagate rename through L82, L126,
+    L154-155, L218-221 (IDs/outputs), and `outputs.tf` L47-50.
+  - `main.network.tf` L153-180 subnet map only declares
+    `pe-shared` + `runners`; CIDRs are at the LOW end (first two
+    /26s). PLAN requires them at the HIGH end (fleet-plane zone =
+    second /21 of the /20). Relocate.
+  - `main.network.tf` L126 `nsg-pe-shared`, L135 `nsg-runners` →
+    must carry `<region>` suffix per PLAN §4 L1136/L1139.
+  - `main.network.tf` L36 hub lookup reads
+    `local.networking_central.hub_resource_id` (scalar) → consume
+    per-env-region hub map.
+  - `main.network.tf` L40-43 uses single `mgmt_address_space` → must
+    iterate per-region.
+  - `main.network.tf` L240-252 authors a single Network Contributor
+    role assignment for `fleet-meta` on the one mgmt VNet → must be
+    `for_each` over mgmt env-regions.
+  - `main.github.tf` L246-252 publishes fleet-scope
+    `MGMT_VNET_RESOURCE_ID = local.mgmt_vnet_id` → REMOVE. Replace
+    with per-region `MGMT_<REGION>_VNET_RESOURCE_ID` map and add
+    `MGMT_<REGION>_PE_FLEET_SUBNET_ID` +
+    `MGMT_<REGION>_RUNNERS_SUBNET_ID` publishes (currently absent).
+  - `outputs.tf` L42-55 exposes scalar `mgmt_vnet_resource_id`,
+    `mgmt_snet_pe_shared_id`, `mgmt_snet_runners_id` → convert all
+    three to per-region maps and rename `snet_pe_shared` →
+    `snet_pe_fleet`.
+  - `main.state.tf` L114, `main.kv.tf` L78, `main.runner.tf` L133-134
+    all consume the scalar `snet_pe_shared_id` / `snet_runners_id`
+    → must pick the correct mgmt region for each resource (state SA
+    region, fleet KV region, runner pool region).
+  - Stale comments in `main.tf` L7-31, `main.state.tf` L98-99,
+    `main.kv.tf` L64-65, `main.runner.tf` L126-127 reference
+    "snet-pe-shared" / "mgmt VNet" singular / `MGMT_VNET_RESOURCE_ID`
+    → update.
+  - **Scope expansion**: `bootstrap/fleet` must NO LONGER author
+    cluster-workload subnets on the mgmt VNet. It authors the VNet
+    shell + fleet-plane subnets only; cluster-workload subnets
+    become `bootstrap/environment`'s responsibility (see below).
   - [ ] GH Apps (`fleet-meta`, `stage0-publisher`, `fleet-runners`) —
         documented as TODO in `main.github.tf`; manifest-flow helper
-        not written.
-- [~] `bootstrap/environment/` — scaffolded (env state container,
-      env UAMI, GH env + variables, observability stack, env VNets +
-      intra-env mesh + hub peering + per-region NSG/ASG + mgmt↔env
-      peerings with reverse half, Grafana PE on derived subnet,
-      per-region `<ENV>_<REGION>_*` repo-env vars). **Not yet
-      applied.** Pending PLAN realignment: run uniformly for every
-      env incl. `mgmt` (for `mgmt` references pre-existing VNet
-      shell and carves cluster-workload subnets as azapi children);
-      own `snet-pe-env` on every env-region VNet (hosts mgmt cluster
-      KV PE on mgmt); route table associated with both api and
-      nodes subnets; honour per-env-region `create_reverse_peering`
-      toggle on mgmt↔spoke peering.
+        not written. Not affected by drift.
+- [!] `bootstrap/environment/` — **rework required**. Concrete drift:
+  - `main.tf` L30-32 reads `local.fleet_doc.environments[var.env]` →
+    `envs[var.env]`.
+  - `main.tf` L36 defaults location from `local.fleet.primary_region`
+    → must default from `local.envs.mgmt.location` (for env=mgmt) or
+    from the env-region map for other envs.
+  - `variables.tf` L15-29 validation yamldecodes `.environments` →
+    `.envs`.
+  - `variables.tf` L54-70 `variable "mgmt_vnet_resource_id"` (scalar
+    ARM id, docstring referencing `MGMT_VNET_RESOURCE_ID`) → REMOVE
+    entirely. Replace with a per-region map input (e.g.
+    `mgmt_vnet_resource_ids = { <region> = <id> }`) sourced from
+    `MGMT_<REGION>_VNET_RESOURCE_ID` GH env vars.
+  - `main.network.tf` has NO `var.env == "mgmt"` branch. Must add:
+    when `env == "mgmt"`, skip VNet creation (VNets pre-exist from
+    `bootstrap/fleet`) and carve cluster-workload subnets as
+    `azapi_resource` children on the referenced VNet id using the
+    Network Contributor grant pre-placed by `bootstrap/fleet`.
+  - `main.network.tf` L166-174 `subnets = { pe-env = {...} }` is
+    missing api pool, nodes pool, and route table. PLAN §4.1 L1326-1334
+    requires `snet-aks-api` (api pool `/24`), `snet-aks-nodes`
+    (nodes pool `/21`), and `rt-aks-<env>-<region>` with `0.0.0.0/0`
+    → `networking.egress_next_hop_ip` UDR, associated with BOTH the
+    api and nodes subnets. Currently the file's comment L17-19 says
+    these are "NOT created here" — directly contradicts PLAN.
+  - `main.network.tf` L177-178 reads scalar
+    `local.networking_central.hub_resource_id` → per-env-region hub
+    map.
+  - `main.peering.tf` L27 iterates `local.vnet_keys_by_region`
+    unconditionally → must guard `var.env != "mgmt"` (mgmt doesn't
+    peer to itself).
+  - `main.peering.tf` L32 `remote_virtual_network_id = var.mgmt_vnet_resource_id`
+    (scalar) → pick per-region mgmt VNet id via
+    `mgmt_environment_for_vnet_peering` + region lookup.
+  - `main.peering.tf` L41-46 hardcodes `create_reverse_peering = true`
+    and unconditionally populates reverse-peering fields → must read
+    `networking.envs.<env>.regions.<region>.create_reverse_peering`
+    (default true) and null reverse fields when false.
+  - `main.network.tf` L227-250 `node_asg` for env=mgmt resolves
+    `local.env_rg_id` to `rg-net-mgmt` (wrong, must be
+    `rg-net-mgmt-<region>`).
+  - `main.github.tf` L130-168 publishes per-region
+    `<ENV>_<REGION>_VNET_RESOURCE_ID` +
+    `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID` correctly in shape, but
+    for env=mgmt the underlying map sources from a module that
+    won't run → path is structurally broken until the env=mgmt
+    branch above lands.
+  - `outputs.tf` L31-42 per-region outputs rely on module outputs;
+    same structural dependency as above.
 - [~] `bootstrap/team/` — refactored onto the vendored module;
-      awaits `team-bootstrap.yaml` CI flow.
+      awaits `team-bootstrap.yaml` CI flow. Not affected by networking
+      drift.
 
 ### Stage 0 — `terraform/stages/0-fleet`
 
@@ -103,26 +242,45 @@
   - [x] Kargo mgmt UAMI (`uami-kargo-mgmt`) + `AcrPull` on fleet ACR.
   - [x] Redirect URIs derived from cluster inventory.
   - [x] Outputs exported per PLAN §4 Stage 0 table.
-  - [ ] Fleet ACR private endpoint rewire to derived `snet-pe-shared`
-        + central `privatelink.azurecr.io` zone.
+  - [!] Fleet ACR private endpoint rewire to derived subnet — was
+        tracked as `snet-pe-shared`; rename to `snet-pe-fleet` per
+        PLAN and source from per-region mgmt subnet map.
 
 ### Stage 1 — `terraform/stages/1-cluster`
 
-- [~] Networking slice landed: root scaffolding, per-cluster `/28` api
-      + `/25` nodes subnets as azapi children of the env-region VNet,
-      AVM AKS wrapper with curated `cluster.aks.*` passthrough,
-      per-cluster private DNS zone + VNet links to env-region VNet +
-      mgmt env-region VNet in same region (mgmt clusters collapse to
-      single link), node pool attachment to env-region ASG. Pending
-      realignment: drop fleet-scope `MGMT_VNET_RESOURCE_ID`
-      consumption in favour of uniform
-      `MGMT_<REGION>_VNET_RESOURCE_ID` lookup.
+- [!] Networking slice — **rework required**. Current code consumes a
+      fleet-scope `var.mgmt_vnet_resource_id` / `MGMT_VNET_RESOURCE_ID`.
+      Concrete drift:
+  - `variables.tf` L25-27 header comment documents fleet-scope
+    `MGMT_VNET_RESOURCE_ID` pipeline → rewrite.
+  - `variables.tf` L62-73 `variable "mgmt_vnet_resource_id"` (scalar)
+    → replace with `mgmt_region_vnet_resource_id` (or similar
+    per-region resolution) sourced from
+    `MGMT_<REGION>_VNET_RESOURCE_ID`.
+  - `main.tf` L17, L31-33, L68, L90-93 all reference the fleet-scope
+    mgmt variable in comments, locals, and preconditions → update.
+  - `main.aks.tf` L18, L80, L91-94: `linked_vnet_ids` map uses
+    fleet-scope mgmt id. Must use mgmt env-region VNet id for the
+    cluster's region. Missing: mgmt-cluster collapse — when
+    `local.cluster.env == "mgmt"` the env and mgmt ids are the same
+    VNet and the link list must deduplicate.
+  - `providers.tf` L17-22 header comment documents
+    `MGMT_VNET_RESOURCE_ID` publishing by `bootstrap/fleet` → rewrite
+    (ownership moves to `bootstrap/environment` per PLAN §4 Stage 1
+    L859-866).
+  - **Missing (not drifted, gap)**: Stage 1 does NOT author a route
+    table association on either the api or nodes subnet. PLAN §3.4
+    now requires `routeTableId` set on BOTH subnets from the
+    `bootstrap/environment`-owned `rt-aks-<env>-<region>`. No
+    `var.route_table_resource_id` input exists; neither subnet's
+    `properties.routeTable.id` is set in `main.network.tf`. This
+    blocks live apply (UDR egress).
   - [ ] Identity/RBAC follow-up: cluster KV, UAMIs (external-dns,
         ESO, per-team), role assignments (AcrPull on kubelet, RBAC
         Cluster Admin for `fleet-<env>` + AAD groups, RBAC Reader
         for Kargo mgmt, Private DNS Zone Contributor, Monitoring
         Metrics Publisher), managed Prometheus DCR/DCRA + rules,
-        Kargo mgmt OIDC secret rotation.
+        Kargo mgmt OIDC secret rotation. Not affected by drift.
 - [x] Pod CIDR / service CIDR hard-coded fleet-wide constants
       (`100.64.0.0/16` / `100.127.0.0/16`) in `modules/aks-cluster`.
 - [x] `validate.yaml` subnet_slot PR-check (presence, type, range,
@@ -167,13 +325,36 @@
 - [x] `.github/workflows/tflint.yaml` + `.tflint.hcl` recursive
       enforcement.
 - [x] `terraform test` unit suites (template-side): `init/tests/unit/`
-      and `modules/fleet-identity/tests/unit/`.
+      and `modules/fleet-identity/tests/unit/`. **Tests will need
+      updating** in lockstep with §3.1/§3.3 schema rework.
 
 ## §11 Operator UX
 
-- [x] `docs/adoption.md`.
-- [x] `docs/networking.md`.
-- [x] `docs/onboarding-cluster.md`.
+- [!] `docs/adoption.md` — rework required: L49 `primary_region`
+      default, L61 single-region mgmt assumption, L234
+      `networking.hub.resource_id` scalar, L239 mgmt VNet owned by
+      `bootstrap/fleet` + `networking.vnets.mgmt.address_space`,
+      L240 `snet-pe-shared` → `snet-pe-fleet`.
+- [!] `docs/networking.md` — rework required: L29 mgmt row (single
+      VNet, owned by `bootstrap/fleet`), L35/L39 `networking.hub`
+      scalar in Mermaid, L38-41 + L61-64 Mermaid diagrams assume
+      single mgmt VNet, L82-84 `bootstrap/fleet` owns mgmt VNet,
+      L121 `snet-pe-shared` token in CIDR diagram, L215-231 capacity
+      tables don't reflect mgmt-has-fleet-plane-zone split,
+      L290-295 peering ownership table, L306
+      `publish MGMT_VNET_RESOURCE_ID` (stale var), L313 missing
+      `MGMT_<REGION>_{PE_FLEET_SUBNET_ID,RUNNERS_SUBNET_ID}`,
+      L336-337 DNS-link pair wording, L367-372 repo variables table.
+      Route-table/UDR section missing entirely.
+- [!] `docs/onboarding-cluster.md` — rework required: L126-131 +
+      L162-163 reference fleet-scope `MGMT_VNET_RESOURCE_ID` and
+      always-two-link phrasing (mgmt-cluster collapse missing).
+- [!] `docs/naming.md` — rework required: L21 `fleet.primary_region`,
+      L22 `environments.<env>` → `envs.<env>`, L27
+      `networking.vnets.mgmt`, L72 `vnet-<fleet>-mgmt` (region-less),
+      L74 `rg-net-mgmt` (region-less), L76-77 `snet-pe-shared` +
+      `networking.vnets.mgmt.address_space`, L85 `nsg-pe-shared`,
+      missing `snet-pe-env` on mgmt.
 - [ ] `onboarding-team.md`, `upgrades.md`, `promotion.md`.
 
 ## §12 Risks and mitigations
@@ -184,17 +365,23 @@
 
 - [~] **Phase 1 (Skeleton)** — in progress:
   - [x] Repo scaffold per §2.
-  - [x] `_fleet.yaml` (generated) + `_defaults.yaml`.
-  - [~] `bootstrap/fleet` code; not applied.
-  - [~] `bootstrap/environment` code; not applied.
-  - [~] `stages/0-fleet` body; not applied.
-  - [~] `stages/1-cluster` — networking slice landed; identity/RBAC
-        surface pending.
-  - [ ] `config-loader/load.sh` naming-derivation parity.
+  - [!] `_fleet.yaml` (generated) + `_defaults.yaml` — rendering
+        driven by `init/` which drifts from PLAN; see §3.1 above.
+  - [!] `bootstrap/fleet` code; not applied; **rework required** per
+        §4 Stage -1 above.
+  - [!] `bootstrap/environment` code; not applied; **rework required**
+        per §4 Stage -1 above.
+  - [!] `stages/0-fleet` body; not applied; **rework required** on
+        ACR PE subnet name + source.
+  - [!] `stages/1-cluster` — **rework required** on mgmt VNet
+        resolution (per-region) + DNS-link collapse for mgmt +
+        missing route table association.
+  - [ ] `config-loader/load.sh` naming-derivation parity — blocked
+        on §3.3 rework.
   - [ ] CI workflows (`validate`, `tf-plan`, `tf-apply`,
         `env-bootstrap`).
   - [ ] **Exit criterion** (both clusters provision and pull from
-        fleet ACR) — not met.
+        fleet ACR) — not met; blocked on schema rework + route table.
 - [ ] Phase 2 (ArgoCD bootstrap).
 - [ ] Phase 3 (Platform services pre-Kargo).
 - [ ] Phase 4 (Kargo install).
@@ -212,8 +399,11 @@
 
 ## §16 Template-repo adoption model
 
-- [x] §16.1 Single source of truth (`clusters/_fleet.yaml` generated).
-- [x] §16.2 Bootstrap TF reads yaml (both stacks refactored).
+- [!] §16.1 Single source of truth (`clusters/_fleet.yaml` generated)
+      — rendered by `init/` which drifts; rework lands with §3.1.
+- [!] §16.2 Bootstrap TF reads yaml — rework required; both stacks
+      still read `environments.<env>` / `networking.hub` /
+      `networking.vnets.mgmt`.
 - [x] §16.3 `init-fleet.sh` wrapper over `init/` TF module.
 - [x] §16.4 `init-gh-apps.sh` — manifest flow for `fleet-meta` /
       `stage0-publisher` / `fleet-runners` Apps; writes
@@ -221,17 +411,20 @@
       `_fleet.yaml` with runner IDs; self-deletes. Stage 0 wiring of
       the tfvars overlay remains TODO.
 - [x] §16.5 GitHub template mechanics; `import` block for fleet repo.
-- [x] §16.6 `docs/naming.md`.
+- [!] §16.6 `docs/naming.md` — rework required; see §11.
   - [ ] CI diff between `load.sh` and bootstrap HCL locals — deferred.
 - [x] §16.7 Safety rails (banner, dirty-tree refusal, TF validation).
-- [x] §16.8 Template self-test workflow.
-- [~] §16.9 File additions/modifications landed for prior schema;
-      rework pending to land uniform env-region networking schema
-      (`envs` rename, `networking.hubs` map, `envs.mgmt.location`,
-      per-env-region `create_reverse_peering`,
-      `mgmt_environment_for_vnet_peering`) in
-      `init/templates/_fleet.yaml.tftpl` + `init/variables.tf`
-      + `config-loader/load.sh` + `modules/fleet-identity/`.
+- [x] §16.8 Template self-test workflow. Selftest fixture will need
+      updating to new schema in lockstep.
+- [!] §16.9 File additions/modifications — **rework required** to
+      land uniform env-region networking schema (`envs` rename,
+      `networking.hubs` map, `envs.mgmt.location`, per-env-region
+      `create_reverse_peering`, `mgmt_environment_for_vnet_peering`,
+      `snet-pe-fleet` rename, mgmt-as-env-region) in:
+      `init/templates/_fleet.yaml.tftpl`, `init/variables.tf`,
+      `init/render.tf`, `config-loader/load.sh`,
+      `modules/fleet-identity/`, `bootstrap/fleet/`,
+      `bootstrap/environment/`, `stages/1-cluster/`, and docs.
 - [x] §16.10.1–9 Execution order complete.
   - [-] §16.10.10 CI naming-diff — deferred to Phase 2 CI work.
 
@@ -240,16 +433,17 @@
 ## Outside-PLAN scaffolding
 
 - [x] `.fleet-initialized` marker contract.
-- [x] `.github/fixtures/adopter-test.tfvars` selftest input.
+- [x] `.github/fixtures/adopter-test.tfvars` selftest input —
+      will need regenerating post-schema-rework.
 - [x] `AGENTS.md` — agent onboarding preamble.
 - [x] `terraform/modules/github-repo/` vendored fork. See
       `VENDORING.md` for upstream diff.
 - [x] `terraform/modules/cicd-runners/` vendored fork. See
       `VENDORING.md` for upstream diff.
-- [x] `terraform/modules/fleet-identity/` pure-function derivation
-      module (names + networking identifiers + GH-App coordinates
-      from parsed `_fleet.yaml`); consumed by both `bootstrap/fleet`
-      and `bootstrap/environment`.
+- [!] `terraform/modules/fleet-identity/` pure-function derivation
+      module — **rework required** per §3.3 above (singleton mgmt,
+      scalar hub, `snet-pe-shared`, `primary_region` fallback, no
+      per-env-region peering toggles).
 - [x] `allow_public_state_during_bootstrap` first-apply-only variable
       on `bootstrap/fleet` (tfstate SA public toggle).
 - [x] Terraform floor `~> 1.14` across all first-party modules + CI;
@@ -257,21 +451,62 @@
 - [x] `main`-branch protection via vendored `modules/ruleset`
       (Kargo-bot bypass deferred per §10 / §15).
 
-## Next likely units of work
+## Rework program (PLAN §3.1 / §3.3 / §3.4 / §4 realignment)
 
-1. Land uniform env-region networking schema per PLAN §3.1/§3.4 rework:
-   `init/templates/_fleet.yaml.tftpl` + `init/variables.tf`,
-   `config-loader/load.sh` (envs rename, hubs map, mgmt-as-env-region),
-   `modules/fleet-identity/` derivations, `bootstrap/fleet` (mgmt VNet
-   shells + fleet-plane subnets only), `bootstrap/environment`
-   (cluster-workload subnets on every env incl. mgmt; per-env-region
-   `create_reverse_peering`), Stage 1 DNS-link list.
-2. Route-table + node-subnet + api-subnet association so UDR egress
-   apply works against a live tenant.
-3. Stage 1 identity/RBAC follow-up (cluster KV, UAMIs, role
-   assignments, managed Prometheus, Kargo mgmt rotation).
-4. First live apply of `bootstrap/fleet` + `stages/0-fleet` against
-   a real tenant.
-5. `validate.yaml` + `tf-plan.yaml` + `tf-apply.yaml` CI workflows.
-6. CI parity check between `load.sh` naming and bootstrap / Stage 0
-   HCL locals.
+Ordered units of work to clear every `[!]` above. Each unit is
+self-contained enough to land in its own PR.
+
+1. **Schema base — `modules/fleet-identity/`**. Rewrite the parsed-yaml
+   contract: consume `envs.<env>` (not `environments.<env>`),
+   `networking.hubs.<env>.regions.<region>.resource_id`,
+   `networking.envs.mgmt.regions.<region>` uniformly, drop
+   `networking.vnets.mgmt`, replace `fleet.primary_region` fallback
+   with `envs.mgmt.location`. Re-derive `networking_derived` as a
+   uniform map over `(env, region)` including mgmt; add
+   `create_reverse_peering` + `mgmt_environment_for_vnet_peering`
+   passthrough; rename `snet_pe_shared_cidr` → `snet_pe_fleet_cidr`;
+   relocate fleet-plane zone to HIGH end of mgmt /20. Update
+   `init/tests/unit/` and `modules/fleet-identity/tests/unit/` to
+   cover new shape.
+2. **Renderer — `init/`**. Update `init/templates/_fleet.yaml.tftpl`,
+   `init/variables.tf`, `init/render.tf` to emit the new schema.
+   Convert hard-coded-region variables into an open map input.
+   Update `.github/fixtures/adopter-test.tfvars`.
+3. **Config loader — `terraform/config-loader/load.sh`**. Rename
+   yaml reads, fix mgmt naming (per-region), add `snet-pe-fleet` /
+   `snet-pe-env` / `snet-runners` derivations, fix
+   address_space scalar-vs-list handling.
+4. **`bootstrap/fleet` network** — per-region mgmt VNet shells,
+   fleet-plane subnets at HIGH end, rename `snet-pe-shared` →
+   `snet-pe-fleet`, per-region NSGs, per-region Network Contributor
+   grants, drop fleet-scope `MGMT_VNET_RESOURCE_ID`, publish
+   `MGMT_<REGION>_{VNET_RESOURCE_ID,PE_FLEET_SUBNET_ID,RUNNERS_SUBNET_ID}`.
+   Update `outputs.tf` to per-region maps. Update `main.state.tf`,
+   `main.kv.tf`, `main.runner.tf` to pick the correct mgmt region
+   per resource.
+5. **`bootstrap/environment` network** — add env=mgmt branch that
+   references pre-existing mgmt VNet via per-region input and
+   carves subnets as `azapi_resource` children; add api pool +
+   nodes pool subnets and `rt-aks-<env>-<region>` route table with
+   `0.0.0.0/0` UDR associated to both subnets; rewrite
+   `main.peering.tf` to guard `var.env != "mgmt"` and honour
+   per-env-region `create_reverse_peering`; replace scalar
+   `var.mgmt_vnet_resource_id` with per-region map; fix `main.tf`
+   `envs.<env>` rename and location default.
+6. **Stage 1 rework** — replace `var.mgmt_vnet_resource_id` with
+   per-region resolution; add mgmt-cluster DNS-link collapse; add
+   `var.route_table_resource_id` input and set `routeTableId` on
+   both api and nodes subnets.
+7. **Stage 0 ACR PE** — rewire to derived `snet-pe-fleet` in the
+   correct mgmt region.
+8. **Docs** — rewrite `docs/naming.md`, `docs/networking.md`,
+   `docs/adoption.md`, `docs/onboarding-cluster.md` per §11
+   drift list.
+9. **Identity/RBAC Stage 1 follow-up** (pre-existing `[ ]`; gated
+   by unit 6).
+10. **Live apply** of `bootstrap/fleet` + `stages/0-fleet` against a
+    real tenant (pre-existing `[ ]`; gated by units 1-7).
+11. **CI workflows** (`validate`, `tf-plan`, `tf-apply`,
+    `env-bootstrap`) — unblocks Phase 1 exit criterion.
+12. **Naming-diff CI** between `load.sh` and bootstrap HCL locals
+    (deferred, but should land before Phase 2).
