@@ -110,15 +110,22 @@ locals {
       rg_name       = "rg-net-mgmt"
       address_space = local.mgmt_address_space
       location      = try(local.mgmt_vnet.location, local.fleet.primary_region)
+      # All CIDR math below is guarded by `can(cidrnetmask(...))` so a
+      # malformed address_space (missing `/N`, non-CIDR string) yields
+      # nulls rather than crashing plan-time. `init/`'s validation block
+      # already rejects bad CIDRs at the schema boundary, but this
+      # module is also consumed by bootstrap stages post-adoption where
+      # the YAML could drift; nulls flow to downstream preconditions
+      # which emit typed errors.
       # First /26 of the VNet, regardless of VNet size.
-      snet_pe_shared_cidr = local.mgmt_address_space == null ? null : cidrsubnet(local.mgmt_address_space, 26 - tonumber(split("/", local.mgmt_address_space)[1]), 0)
+      snet_pe_shared_cidr = can(cidrnetmask(local.mgmt_address_space)) ? cidrsubnet(local.mgmt_address_space, 26 - tonumber(split("/", local.mgmt_address_space)[1]), 0) : null
       # Second /26 of the VNet — ACA-delegated runner pool.
-      snet_runners_cidr = local.mgmt_address_space == null ? null : cidrsubnet(local.mgmt_address_space, 26 - tonumber(split("/", local.mgmt_address_space)[1]), 1)
+      snet_runners_cidr = can(cidrnetmask(local.mgmt_address_space)) ? cidrsubnet(local.mgmt_address_space, 26 - tonumber(split("/", local.mgmt_address_space)[1]), 1) : null
       # Cluster-slot capacity (for completeness; mgmt VNet currently
       # hosts a single cluster per region but the math is symmetric).
       # Two-pool layout: min(16, 2 * (2^(24-N) - 2)). Api-pool-bound
       # at /20 and wider.
-      cluster_slot_capacity = local.mgmt_address_space == null ? null : min(16, 2 * (pow(2, 24 - tonumber(split("/", local.mgmt_address_space)[1])) - 2))
+      cluster_slot_capacity = can(cidrnetmask(local.mgmt_address_space)) ? min(16, 2 * (pow(2, 24 - tonumber(split("/", local.mgmt_address_space)[1])) - 2)) : null
     }
 
     envs = {
@@ -130,12 +137,12 @@ locals {
         vnet_name     = "vnet-${local.fleet.name}-${r.env}-${r.region}"
         rg_name       = "rg-net-${r.env}"
         # First /26 of the env VNet — shared PE subnet for the env
-        # (Grafana PE, etc.).
-        snet_pe_env_cidr = r.address_space == null ? null : cidrsubnet(r.address_space, 26 - tonumber(split("/", r.address_space)[1]), 0)
+        # (Grafana PE, etc.). Guarded as above.
+        snet_pe_env_cidr = can(cidrnetmask(r.address_space)) ? cidrsubnet(r.address_space, 26 - tonumber(split("/", r.address_space)[1]), 0) : null
         # Number of usable cluster slots in this env-region (two-pool
         # layout): min(16, 2 * (2^(24-N) - 2)). Api-pool-bound at /20
         # and wider.
-        cluster_slot_capacity = r.address_space == null ? null : min(16, 2 * (pow(2, 24 - tonumber(split("/", r.address_space)[1])) - 2))
+        cluster_slot_capacity = can(cidrnetmask(r.address_space)) ? min(16, 2 * (pow(2, 24 - tonumber(split("/", r.address_space)[1])) - 2)) : null
         # Peering names (both halves — mgmt↔env peering lives in the
         # env state via the peering AVM module with
         # create_reverse_peering = true).

@@ -18,9 +18,10 @@ terraform {
       source  = "Azure/modtm"
       version = "~> 0.3"
     }
-    # Sub-vending also depends on `random ~> 3.5`; the existing
-    # azapi/github stack does not pull `random`, so declare it here
-    # explicitly.
+    # Sub-vending requires `random` (floor `~> 3.5` per its own
+    # required_providers) — the existing azapi/github stack does not
+    # pull `random`, so declare it here explicitly. Pinned to
+    # `~> 3.8` (current pessimistic-minor per AGENTS.md §6).
     random = {
       source  = "hashicorp/random"
       version = "~> 3.8"

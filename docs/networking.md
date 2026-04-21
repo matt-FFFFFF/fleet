@@ -84,7 +84,9 @@ All referenced by registry, not vendored. Pessimistic-minor pinned,
   already-bootstrapped subscriptions. In `bootstrap/fleet` N=1 (mgmt).
   In `bootstrap/environment` N=count of regions for that env, with
   `mesh_peering_enabled = true` and per-VNet `hub_peering_enabled =
-  true`. Requires `azapi ~> 2.5`, `modtm ~> 0.3`, `random ~> 3.5`.
+  true`. Declares `azapi ~> 2.9`, `modtm ~> 0.3`, `random ~> 3.8` at
+  the callsite (the sub-vending module's own `required_providers`
+  uses lower floors — `random ~> 3.5` etc. — which `~> 3.8` satisfies).
 - `Azure/avm-res-network-virtualnetwork/azurerm//modules/peering ~> 0.17`
   — mgmt↔env peering pair. Azapi-only (`azapi ~> 2.0`) despite the
   parent `azurerm` module. Called with `create_reverse_peering = true`
