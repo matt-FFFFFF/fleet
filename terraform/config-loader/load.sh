@@ -141,7 +141,6 @@ case "$subnet_slot" in
   ''|*[!0-9]*) die "networking.subnet_slot must be a non-negative integer; got: $subnet_slot" ;;
 esac
 
-mgmt_address_space="$(printf '%s' "$fleet_json" | jq -r '.networking.vnets.mgmt.address_space // empty')"
 env_address_space="$(printf '%s' "$fleet_json" | jq -r --arg env "$env" --arg region "$region" '
   .networking.envs[$env].regions[$region].address_space // empty
 ')"

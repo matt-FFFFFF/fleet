@@ -48,19 +48,40 @@ jobs:
           terraform_version: ${{ steps.tf_version.outputs.version }}
           terraform_wrapper: false
 
-      # `clusters/_fleet.yaml` is a rendered byproduct (gitignored);
-      # re-render from the committed test fixture so the validator can
-      # read per-env-region `address_space` and derive capacities.
-      # Adopters' real `_fleet.yaml` IS committed, in which case this
-      # step is a no-op overwrite. We prefer the fixture in CI so the
-      # workflow is self-contained.
-      - name: Render clusters/_fleet.yaml from test fixture
+      # `clusters/_fleet.yaml` is a rendered byproduct in the *template*
+      # repo (the `init/` + `.github/fixtures/` scaffold lives here and
+      # the file is not committed). In *adopter* repos, `init-fleet.sh`
+      # removes `init/` and `.github/fixtures/` and the adopter commits
+      # their real `clusters/_fleet.yaml` — so this render step must be
+      # skipped there. We detect "template-mode" by the presence of
+      # both the init module and the test fixture; adopters who kept
+      # just one of them by accident will fall through to the skip path.
+      - name: Detect template-mode render inputs
+        id: render_check
+        run: |
+          if [[ -d init && -f .github/fixtures/adopter-test.tfvars ]]; then
+            echo "template_mode=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "template_mode=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Render clusters/_fleet.yaml from test fixture (template-mode only)
+        if: steps.render_check.outputs.template_mode == 'true'
         working-directory: init
         run: |
           terraform init -backend=false
           terraform apply -auto-approve \
             -var-file=../.github/fixtures/adopter-test.tfvars \
             -target=local_file.fleet_yaml
+
+      - name: Verify committed _fleet.yaml exists (adopter-mode only)
+        if: steps.render_check.outputs.template_mode == 'false'
+        run: |
+          # Adopter repos commit clusters/_fleet.yaml (per AGENTS.md it is
+          # the single source of truth rendered by init/ on first run and
+          # then edited in place). Fail loudly if it's missing rather than
+          # silently validating nothing.
+          test -f clusters/_fleet.yaml
 
       - name: Verify yq is available
         run: |

@@ -21,12 +21,12 @@
 # Kubelet identity stays the AKS-managed default (needed for AcrPull
 # role assignment in the identity/RBAC phase); the *cluster* identity
 # is a fleet-owned UAMI so its principal id is stable and referenceable
-# across stage boundaries without an Azure data-source call. Name
-# mirrors the PLAN §3.3 convention `uami-<cluster>-<purpose>`.
+# across stage boundaries without an Azure data-source call. Name per
+# docs/naming.md: `uami-<cluster.name>-cp`.
 
 resource "azapi_resource" "cluster_uami" {
   type      = "Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31"
-  name      = "uami-aks-${var.cluster_name}"
+  name      = "uami-${var.cluster_name}-cp"
   parent_id = var.parent_id
   location  = var.location
 

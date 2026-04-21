@@ -34,8 +34,9 @@ variable "doc" {
   description = <<-EOT
     Merged cluster document from `terraform/config-loader/load.sh`. See
     that script's header for the canonical schema; stages/1-cluster only
-    consumes a narrow subset (cluster, fleet, derived.networking,
-    platform, aks) and treats everything else as opaque passthrough.
+    consumes a narrow subset (cluster, fleet, derived.networking, aks)
+    and treats everything else (including `platform`, which is consumed
+    by Stage 2) as opaque passthrough.
   EOT
   # Intentionally untyped — the loader contract + lifecycle.precondition
   # blocks in main.tf are the schema; forcing a HCL type here would make
