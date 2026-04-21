@@ -55,7 +55,7 @@ locals {
   # Preconditions fire against these via a terraform_data null resource.
   # Keeping the check list local so the error message can name the
   # exact yaml path that failed.
-  _required_networking = {
+  required_networking = {
     subnet_slot         = local.net.subnet_slot
     snet_aks_api_cidr   = try(local.net.snet_aks_api_cidr, null)
     snet_aks_nodes_cidr = try(local.net.snet_aks_nodes_cidr, null)
@@ -72,27 +72,27 @@ locals {
 resource "terraform_data" "network_preconditions" {
   lifecycle {
     precondition {
-      condition     = local._required_networking.subnet_slot != null
+      condition     = local.required_networking.subnet_slot != null
       error_message = "cluster.yaml is missing required field networking.subnet_slot (PLAN §3.4)."
     }
     precondition {
-      condition     = local._required_networking.snet_aks_api_cidr != null && local._required_networking.snet_aks_nodes_cidr != null
+      condition     = local.required_networking.snet_aks_api_cidr != null && local.required_networking.snet_aks_nodes_cidr != null
       error_message = "config-loader did not emit derived.networking.snet_aks_{api,nodes}_cidr. Check _fleet.yaml.networking.envs.<env>.regions.<region>.address_space is set (PLAN §3.4)."
     }
     precondition {
-      condition     = local._required_networking.pod_cidr != null
+      condition     = local.required_networking.pod_cidr != null
       error_message = "config-loader did not emit derived.networking.pod_cidr. Check _fleet.yaml.networking.envs.<env>.regions.<region>.pod_cidr_slot is set (PLAN §3.4)."
     }
     precondition {
-      condition     = local._required_networking.env_region_vnet_id != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", local._required_networking.env_region_vnet_id))
+      condition     = local.required_networking.env_region_vnet_id != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", local.required_networking.env_region_vnet_id))
       error_message = "TF_VAR_env_region_vnet_resource_id must be a full VNet ARM id. Published by bootstrap/environment as <ENV>_<REGION>_VNET_RESOURCE_ID."
     }
     precondition {
-      condition     = local._required_networking.mgmt_vnet_id != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", local._required_networking.mgmt_vnet_id))
+      condition     = local.required_networking.mgmt_vnet_id != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", local.required_networking.mgmt_vnet_id))
       error_message = "TF_VAR_mgmt_vnet_resource_id must be a full VNet ARM id. Published by bootstrap/fleet as MGMT_VNET_RESOURCE_ID."
     }
     precondition {
-      condition     = local._required_networking.node_asg_id != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/applicationSecurityGroups/[^/]+$", local._required_networking.node_asg_id))
+      condition     = local.required_networking.node_asg_id != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/applicationSecurityGroups/[^/]+$", local.required_networking.node_asg_id))
       error_message = "TF_VAR_node_asg_resource_id must be a full ASG ARM id. Published by bootstrap/environment as <ENV>_<REGION>_NODE_ASG_RESOURCE_ID."
     }
   }

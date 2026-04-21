@@ -83,16 +83,16 @@ locals {
   # At /20 (the default) that's 16 slots (api-pool-bound). Widening the
   # VNet does not raise capacity beyond 16 — the api pool is a fixed
   # /24 with room for 16 /28s.
-  _mgmt_vnet          = try(var.fleet_doc.networking.vnets.mgmt, null)
-  _mgmt_address_space = try(local._mgmt_vnet.address_space, null)
+  mgmt_vnet          = try(var.fleet_doc.networking.vnets.mgmt, null)
+  mgmt_address_space = try(local.mgmt_vnet.address_space, null)
 
-  _env_regions_raw = try(var.fleet_doc.networking.envs, {})
+  env_regions_raw = try(var.fleet_doc.networking.envs, {})
 
   # Flatten `envs.<env>.regions.<region>` into a map keyed "<env>/<region>".
   # Map values stay `try()`-guarded so a partial region block doesn't crash
   # the derivation.
-  _env_regions = merge([
-    for env_name, env_block in local._env_regions_raw : {
+  env_regions = merge([
+    for env_name, env_block in local.env_regions_raw : {
       for region_name, region_block in try(env_block.regions, {}) :
       "${env_name}/${region_name}" => {
         env           = env_name
@@ -105,24 +105,24 @@ locals {
   ]...)
 
   networking_derived = {
-    mgmt = local._mgmt_vnet == null ? null : {
+    mgmt = local.mgmt_vnet == null ? null : {
       vnet_name     = "vnet-${local.fleet.name}-mgmt"
       rg_name       = "rg-net-mgmt"
-      address_space = local._mgmt_address_space
-      location      = try(local._mgmt_vnet.location, local.fleet.primary_region)
+      address_space = local.mgmt_address_space
+      location      = try(local.mgmt_vnet.location, local.fleet.primary_region)
       # First /26 of the VNet, regardless of VNet size.
-      snet_pe_shared_cidr = local._mgmt_address_space == null ? null : cidrsubnet(local._mgmt_address_space, 26 - tonumber(split("/", local._mgmt_address_space)[1]), 0)
+      snet_pe_shared_cidr = local.mgmt_address_space == null ? null : cidrsubnet(local.mgmt_address_space, 26 - tonumber(split("/", local.mgmt_address_space)[1]), 0)
       # Second /26 of the VNet — ACA-delegated runner pool.
-      snet_runners_cidr = local._mgmt_address_space == null ? null : cidrsubnet(local._mgmt_address_space, 26 - tonumber(split("/", local._mgmt_address_space)[1]), 1)
+      snet_runners_cidr = local.mgmt_address_space == null ? null : cidrsubnet(local.mgmt_address_space, 26 - tonumber(split("/", local.mgmt_address_space)[1]), 1)
       # Cluster-slot capacity (for completeness; mgmt VNet currently
       # hosts a single cluster per region but the math is symmetric).
       # Two-pool layout: min(16, 2 * (2^(24-N) - 2)). Api-pool-bound
       # at /20 and wider.
-      cluster_slot_capacity = local._mgmt_address_space == null ? null : min(16, 2 * (pow(2, 24 - tonumber(split("/", local._mgmt_address_space)[1])) - 2))
+      cluster_slot_capacity = local.mgmt_address_space == null ? null : min(16, 2 * (pow(2, 24 - tonumber(split("/", local.mgmt_address_space)[1])) - 2))
     }
 
     envs = {
-      for key, r in local._env_regions : key => {
+      for key, r in local.env_regions : key => {
         env           = r.env
         region        = r.region
         location      = r.location
