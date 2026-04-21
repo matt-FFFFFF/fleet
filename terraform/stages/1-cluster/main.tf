@@ -11,8 +11,9 @@
 #                       children of the env VNet
 #   - modules/aks-cluster : thin wrapper around
 #                       Azure/avm-res-containerservice-managedcluster/azurerm
-#                       with the networking inputs (subnets, node-pool ASG,
-#                       pod_cidr) wired
+#                       with the networking inputs (subnets, node-pool ASG)
+#                       wired; pod CIDR is a fleet-wide constant
+#                       (100.64.0.0/16) hard-coded inside the module
 #   - modules/cluster-dns : private DNS zone + virtualNetworkLinks to
 #                       [env VNet, mgmt VNet]
 #
@@ -63,7 +64,6 @@ locals {
     subnet_slot         = local.net.subnet_slot
     snet_aks_api_cidr   = try(local.net.snet_aks_api_cidr, null)
     snet_aks_nodes_cidr = try(local.net.snet_aks_nodes_cidr, null)
-    pod_cidr            = try(local.net.pod_cidr, null)
     env_region_vnet_id  = var.env_region_vnet_resource_id
     mgmt_vnet_id        = var.mgmt_vnet_resource_id
     node_asg_id         = var.node_asg_resource_id
@@ -82,10 +82,6 @@ resource "terraform_data" "network_preconditions" {
     precondition {
       condition     = local.required_networking.snet_aks_api_cidr != null && local.required_networking.snet_aks_nodes_cidr != null
       error_message = "config-loader did not emit derived.networking.snet_aks_{api,nodes}_cidr. Check _fleet.yaml.networking.envs.<env>.regions.<region>.address_space is set (PLAN §3.4)."
-    }
-    precondition {
-      condition     = local.required_networking.pod_cidr != null
-      error_message = "config-loader did not emit derived.networking.pod_cidr. Check _fleet.yaml.networking.envs.<env>.regions.<region>.pod_cidr_slot is set (PLAN §3.4)."
     }
     precondition {
       condition     = local.required_networking.env_region_vnet_id != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", local.required_networking.env_region_vnet_id))

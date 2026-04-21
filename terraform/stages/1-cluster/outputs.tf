@@ -44,11 +44,6 @@ output "node_subnet_id" {
   value       = azapi_resource.snet_aks_nodes.output.id
 }
 
-output "pod_cidr" {
-  description = "CGNAT /16 pod CIDR (derivation per PLAN §3.4; consumed by network_profile.pod_cidr inside modules/aks-cluster)."
-  value       = local.net.pod_cidr
-}
-
 # --- DNS outputs (consumed by platform-gitops ApplicationSet params) --------
 
 output "dns_zone_fqdn" {

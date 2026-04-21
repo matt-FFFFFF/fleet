@@ -126,11 +126,12 @@ fi
 #   API pool   = second /24 of env VNet   → 16 × /28 (AKS api-server delegated)
 #   nodes pool = third /24 onward         → 2 × /25 per /24 (CNI-Overlay nodes)
 #
-# Pod IPs live in CGNAT (100.64.0.0/10), independent of the VNet address
-# plan. Each env-region reserves a /12 via its `pod_cidr_slot`, and every
-# cluster gets a /16 keyed on `subnet_slot`:
-#
-#   pod_cidr = 100.[64 + pod_cidr_slot * 16 + subnet_slot].0.0/16
+# Pod IPs live in CGNAT (100.64.0.0/10) and are non-routable outside the
+# cluster (CNI Overlay + Cilium). Every cluster reuses the same pod CIDR
+# (100.64.0.0/16); cross-cluster disambiguation is handled by
+# `_ResourceId` / cluster name in observability queries. See PLAN §3.4
+# Implementation status for the rationale behind dropping per-cluster
+# pod-CIDR uniqueness.
 #
 # Silence-on-absence: pre-Phase-B `_fleet.yaml` renders lack
 # `networking.vnets.mgmt` / `networking.envs` — those fields drop
@@ -149,9 +150,6 @@ subnet_slot=$((10#$subnet_slot))
 env_address_space="$(printf '%s' "$fleet_json" | jq -r --arg env "$env" --arg region "$region" '
   .networking.envs[$env].regions[$region].address_space // empty
 ')"
-env_pod_cidr_slot="$(printf '%s' "$fleet_json" | jq -r --arg env "$env" --arg region "$region" '
-  .networking.envs[$env].regions[$region].pod_cidr_slot // empty
-')"
 
 # CIDR math via python (portable; avoids a jq-only bit-twiddling dance).
 # For address_space A = `<ip>/N`:
@@ -160,13 +158,10 @@ env_pod_cidr_slot="$(printf '%s' "$fleet_json" | jq -r --arg env "$env" --arg re
 #   capacity   = min(16, 2 * (slots_total - 2))
 #   cluster i  → snet-aks-api   = i-th /28 of api pool
 #             → snet-aks-nodes = (i % 2)-th /25 of the (2 + i//2)-th /24 of A
-# Pod CIDR (CGNAT):
-#   pod_cidr = 100.[64 + pod_cidr_slot*16 + i].0.0/16
-#   (null when env_pod_cidr_slot is unset — stage preconditions catch)
 derive_cluster_cidrs() {
-  local address_space="$1" slot="$2" pod_cidr_slot="$3"
+  local address_space="$1" slot="$2"
   [[ -z "$address_space" ]] && { echo "{}" ; return ; }
-  python3 - "$address_space" "$slot" "$pod_cidr_slot" <<'PY'
+  python3 - "$address_space" "$slot" <<'PY'
 import ipaddress, json, sys
 try:
     net = ipaddress.ip_network(sys.argv[1], strict=True)
@@ -182,7 +177,6 @@ try:
 except ValueError:
     print(json.dumps({"error": f"subnet_slot must be an integer; got: {sys.argv[2]!r}"}))
     sys.exit(0)
-pod_slot_raw = sys.argv[3]
 slots_total = 2 ** (24 - net.prefixlen)   # number of /24s in the VNet
 if slots_total < 3:
     print(json.dumps({"error": f"VNet /{net.prefixlen} too small: needs at least /22 to host reserved + api pool + one nodes /24"}))
@@ -202,37 +196,11 @@ out = {
     "snet_aks_nodes_cidr":   str(nodes),
     "cluster_slot_capacity": capacity,
 }
-# Pod CIDR derivation (CGNAT 100.64.0.0/10). Env-region's pod_cidr_slot
-# gates the entire derivation — absent → null passthrough so the loader
-# still produces parseable tfvars for pre-Phase-B _fleet.yaml; Stage 1
-# precondition-checks non-null before reading.
-if pod_slot_raw:
-    try:
-        pod_slot = int(pod_slot_raw)
-    except ValueError:
-        print(json.dumps({"error": f"pod_cidr_slot for env region must be an integer; got: {pod_slot_raw!r}"}))
-        sys.exit(0)
-    if pod_slot < 0 or pod_slot > 15:
-        print(json.dumps({"error": f"pod_cidr_slot {pod_slot} out of range [0, 15]"}))
-        sys.exit(0)
-    third_octet = 64 + pod_slot * 16 + i
-    # Upper bound 126 (not 127): 100.127.0.0/16 is reserved for the
-    # fleet-wide AKS service_cidr (see modules/aks-cluster/main.tf +
-    # PLAN §3.4). Lowering the bound fences that /16 off so no pod
-    # allocation can collide with the virtual ClusterIP pool.
-    if third_octet > 126:
-        print(json.dumps({"error": f"pod_cidr third octet {third_octet} exceeds CGNAT upper bound 126 (100.127.0.0/16 is reserved for service_cidr); shrink pod_cidr_slot or subnet_slot"}))
-        sys.exit(0)
-    out["pod_cidr"] = f"100.{third_octet}.0.0/16"
-    out["pod_cidr_slot"] = pod_slot
-else:
-    out["pod_cidr"] = None
-    out["pod_cidr_slot"] = None
 print(json.dumps(out))
 PY
 }
 
-cluster_cidrs="$(derive_cluster_cidrs "$env_address_space" "$subnet_slot" "$env_pod_cidr_slot")"
+cluster_cidrs="$(derive_cluster_cidrs "$env_address_space" "$subnet_slot")"
 if printf '%s' "$cluster_cidrs" | jq -e '.error' >/dev/null 2>&1; then
   err="$(printf '%s' "$cluster_cidrs" | jq -r '.error')"
   die "cluster $name networking.subnet_slot=$subnet_slot rejected against env $env/$region address_space '$env_address_space': $err"

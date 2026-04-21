@@ -9,9 +9,11 @@
 #                           api-server VNet integration (private cluster).
 #   snet-aks-nodes-<name> — /25 in the env VNet's nodes pool, used as
 #                           vnet_subnet_id for every agent pool. Pod IPs
-#                           come from networking.pod_cidr (CGNAT via CNI
-#                           Overlay + Cilium), so this subnet only holds
-#                           node NICs + internal load balancers.
+#                           come from the fleet-wide shared /16 in CGNAT
+#                           (100.64.0.0/16, hard-coded in
+#                           modules/aks-cluster) via CNI Overlay + Cilium,
+#                           so this subnet only holds node NICs + internal
+#                           load balancers.
 #
 # CIDRs arrive from the loader as `derived.networking.snet_aks_{api,nodes}_cidr`
 # (derivation in config-loader/load.sh + docs/naming.md). Subnet names

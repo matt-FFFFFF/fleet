@@ -355,7 +355,6 @@ run "networking_derived_populates_topology_at_slash20" {
             regions = {
               eastus = {
                 address_space = "10.20.0.0/20"
-                pod_cidr_slot = 3
               }
             }
           }
@@ -440,17 +439,6 @@ run "networking_derived_populates_topology_at_slash20" {
     condition     = output.networking_derived.envs["nonprod/eastus"].location == "eastus"
     error_message = "env location must default to the region name when not explicitly set."
   }
-
-  # --- CGNAT pod CIDR passthrough + envelope derivation ---
-  assert {
-    condition     = output.networking_derived.envs["nonprod/eastus"].pod_cidr_slot == 3
-    error_message = "pod_cidr_slot must pass through verbatim from the region block."
-  }
-
-  assert {
-    condition     = output.networking_derived.envs["nonprod/eastus"].pod_cidr_envelope == "100.112.0.0/12"
-    error_message = "pod_cidr_envelope for slot=3 must be 100.[64+3*16=112].0.0/12."
-  }
 }
 
 # ---- networking_derived: multi-env + multi-region flatten correctly --------
@@ -488,13 +476,13 @@ run "networking_derived_flattens_multi_env_multi_region" {
         envs = {
           nonprod = {
             regions = {
-              eastus  = { address_space = "10.20.0.0/20", pod_cidr_slot = 0 }
-              westus2 = { address_space = "10.21.0.0/20", pod_cidr_slot = 1 }
+              eastus  = { address_space = "10.20.0.0/20" }
+              westus2 = { address_space = "10.21.0.0/20" }
             }
           }
           prod = {
             regions = {
-              eastus = { address_space = "10.30.0.0/20" } # pod_cidr_slot intentionally omitted
+              eastus = { address_space = "10.30.0.0/20" }
             }
           }
         }
@@ -524,18 +512,6 @@ run "networking_derived_flattens_multi_env_multi_region" {
   assert {
     condition     = output.networking_derived.envs["prod/eastus"].peering_env_to_mgmt_name == "peer-prod-eastus-to-mgmt"
     error_message = "Prod env-region peering names must not collide with nonprod."
-  }
-
-  # Per-region pod_cidr_slot passthrough and envelope derivation. nonprod/westus2
-  # uses slot=1 → envelope 100.80.0.0/12; prod/eastus omits the field → null.
-  assert {
-    condition = alltrue([
-      output.networking_derived.envs["nonprod/eastus"].pod_cidr_envelope == "100.64.0.0/12",
-      output.networking_derived.envs["nonprod/westus2"].pod_cidr_envelope == "100.80.0.0/12",
-      output.networking_derived.envs["prod/eastus"].pod_cidr_slot == null,
-      output.networking_derived.envs["prod/eastus"].pod_cidr_envelope == null,
-    ])
-    error_message = "pod_cidr_envelope derivation must track pod_cidr_slot; an omitted slot must yield null on both fields."
   }
 }
 

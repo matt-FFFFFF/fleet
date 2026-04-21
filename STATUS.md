@@ -12,6 +12,31 @@
 > Legend: `[x]` done · `[~]` in progress / scaffolded but unapplied
 > `[ ]` not started · `[-]` deferred.
 
+Last updated: 2026-04-21 · **Pod CIDR uniqueness dropped** (round 8 of
+PR #9 Copilot review, `feat/networking-topology`). Every cluster now
+shares the fleet-wide pod CIDR `100.64.0.0/16` hard-coded in
+`modules/aks-cluster/main.tf`; per-env-region `pod_cidr_slot` and the
+`/12`-envelope derivation are gone. Rationale: pod IPs are non-
+routable outside the node (CNI Overlay + Cilium) and observability
+disambiguates by `_ResourceId` / cluster name, so the allocation grid
+bought no uniqueness benefit while costing one required `_fleet.yaml`
+field per env-region and a hard 16-env-region fleet cap. Touched:
+`init/{variables.tf,inputs.auto.tfvars,render.tf,templates/_fleet.yaml.tftpl,tests/unit/init.tftest.hcl}`
+(3 vars + distinctness validation + round-trip + 3 rejection tests
+removed); `.github/fixtures/adopter-test.tfvars`;
+`terraform/config-loader/load.sh` (pod-CIDR python block + third-
+octet fence gone); `terraform/modules/fleet-identity/{main.tf,outputs.tf,tests/unit/fleet_identity.tftest.hcl}`
+(`pod_cidr_slot` / `pod_cidr_envelope` passthrough + assertions
+removed); `terraform/modules/aks-cluster/{variables.tf,main.tf}`
+(dropped `pod_cidr` variable; hard-coded fleet-wide constant);
+`terraform/stages/1-cluster/{main.tf,main.aks.tf,outputs.tf}`
+(dropped precondition, module-call arg, output); `docs/{naming.md,networking.md,adoption.md,onboarding-cluster.md}`
+(collapsed "Pod CIDR allocation" to "Pod CIDR (shared)" everywhere;
+removed adopter-facing slot row). PLAN §3.4 gained a new
+Implementation-status paragraph (dated 2026-04-21) flagging the
+downstream "Pod CIDR allocation" narrative as obsolete pending a
+cleanup revision.
+
 Last updated: 2026-04-21 · **Networking topology (PLAN §3.4) landed
 end-to-end** on `feat/networking-topology` (PR #9). Phases A–H complete. The
 repo-owned VNet/subnet topology supersedes the previous BYO model
@@ -401,29 +426,36 @@ branch. Remaining implementation (Phases D–H) tracked in `_TASK.md`.
       (external-dns owns record writes). Role assignment
       (`Private DNS Zone Contributor` → external-dns UAMI) deferred
       to the identity/RBAC phase. PLAN §3.4.
-- [x] **Pod CIDR derivation (CGNAT):** per-env-region `pod_cidr_slot`
-      (0..15, immutable, fleet-unique — validated in `init/`) reserves
-      a `/12` envelope at `100.[64 + slot*16].0.0/12`, and every cluster
-      carves a `/16` at `100.[64 + pod_cidr_slot*16 + subnet_slot].0.0/16`.
-      Wired in `init/templates/_fleet.yaml.tftpl` (3 new scalar keys),
-      `init/variables.tf` + `inputs.auto.tfvars`,
-      `modules/fleet-identity/main.tf` (`networking_derived.envs.<k>`
-      now emits `pod_cidr_slot` + `pod_cidr_envelope`),
-      `config-loader/load.sh` (python3 block validates [0,15] + third
-      octet ≤ 126; emits `.derived.networking.{pod_cidr, pod_cidr_slot}`),
-      and consumed by the Stage 1 AKS module
-      (`network_profile.pod_cidr`). 33/33 init tests + 8/8
-      fleet-identity tests pass. Also fixed stale
-      `docs/naming.md` capacity table (`/21`=12 was `10`, `/22`=4 was
-      `2`; `fleet-identity/main.tf` and the cluster.yaml template
-      were already correct — docs-only bug).
-      Bound lowered from 127 to 126 (2026-04-21, PR #9 round 6) to
-      reserve `100.127.0.0/16` for the fleet-wide AKS `service_cidr`;
-      `modules/aks-cluster/main.tf` now hard-codes
-      `service_cidr = 100.127.0.0/16` + `dns_service_ip =
-      100.127.0.10` (previously `10.0.0.0/16` — collision risk with
-      adopter VNets in 10/8). See PLAN §3.4 Implementation-status
-      paragraph + `docs/networking.md` "Service CIDR".
+- [x] **Pod CIDR (shared, 2026-04-21 simplification — round 8 of
+      PR #9 Copilot review):** every cluster in the fleet uses the
+      same pod CIDR, `100.64.0.0/16`, hard-coded in
+      `modules/aks-cluster/main.tf`. The earlier per-env-region
+      `pod_cidr_slot` × per-cluster `subnet_slot` derivation (which
+      keyed a `/12` envelope in CGNAT and yielded per-cluster `/16`s)
+      is gone: pod IPs are non-routable outside the node under CNI
+      Overlay + Cilium, and every observability surface
+      disambiguates by `_ResourceId` / cluster name rather than
+      source IP. Removed: `pod_cidr_slot` from `_fleet.yaml` (init
+      schema, prompts, template, 3 rejection tests), the python pod-
+      CIDR block and third-octet fence in `config-loader/load.sh`,
+      the `pod_cidr_slot` / `pod_cidr_envelope` passthrough and
+      associated assertions in `modules/fleet-identity`, the
+      `pod_cidr` variable + regex in `modules/aks-cluster`, the
+      `pod_cidr` precondition / module-call arg / stage output in
+      `stages/1-cluster`, and the `pod_cidr_slot` row + "Pod CIDR
+      allocation" sections in `docs/{adoption,onboarding-cluster,
+      naming,networking}.md` (replaced with short "Pod CIDR
+      (shared)" references). PLAN §3.4 carries a new Implementation-
+      status paragraph flagging the downstream "Pod CIDR allocation"
+      narrative as obsolete pending a cleanup revision. 100.127.0.0/16
+      remains reserved fleet-wide for `service_cidr`; disjoint from
+      the shared pod `/16` by construction. `modules/aks-cluster`
+      still hard-codes `service_cidr = 100.127.0.0/16` +
+      `dns_service_ip = 100.127.0.10` (introduced PR #9 round 6,
+      2026-04-21; see PLAN §3.4 service-CIDR Implementation status).
+      If ClusterMesh or any cross-cluster pod routing is introduced
+      later, the pod CIDR becomes a per-cluster input again and the
+      derivation returns.
 - [~] Provider set: **azurerm + random carveout** (PLAN §2) declared
       in `stages/1-cluster/providers.tf` + `modules/aks-cluster/terraform.tf`.
       The AVM AKS module authors the cluster via azapi but ships

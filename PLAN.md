@@ -521,7 +521,7 @@ the per-cluster tfvars.json before Terraform ever sees it:
 | `networking.snet_runners.cidr` | second `/26` of mgmt VNet's address_space (`snet-runners`, ACA-delegated)                     |
 | `networking.snet_aks_api.cidr` | i-th `/28` of the API pool (second `/24` of env VNet), where i = `networking.subnet_slot` |
 | `networking.snet_aks_nodes.cidr` | i-th `/25` of the nodes pool (3rd `/24` onward of env VNet), where i = `networking.subnet_slot` |
-| `networking.pod_cidr`     | `100.[64 + R*16 + i].0.0/16` where R = env-region's `pod_cidr_slot`, i = cluster's `subnet_slot` (CGNAT, Overlay CNI) |
+| `networking.pod_cidr`     | `100.64.0.0/16` (fleet-wide constant, hard-coded in `modules/aks-cluster/main.tf`; see §3.4 Implementation status 2026-04-21) |
 | `networking.peering_name.env_to_mgmt` | `peer-<env>-<region>-to-mgmt`                                                         |
 | `networking.peering_name.mgmt_to_env` | `peer-mgmt-to-<env>-<region>`                                                         |
 | `networking.node_asg_name`      | `asg-nodes-<env>-<region>` (one ASG per env-region, shared by all clusters in that VNet)   |
@@ -574,6 +574,29 @@ every cluster in the fleet, which is safe because ClusterIPs are
 cluster-local. Per-cluster service CIDRs (derived similarly to
 `pod_cidr` inside a reserved `100.112.0.0/12`) remain an option if
 cross-cluster service meshes without NAT ever become a requirement.
+
+**Implementation status (pod CIDR uniqueness — dropped 2026-04-21).**
+Earlier drafts (see "Pod CIDR allocation" below, to be collapsed in
+the next PLAN revision) prescribed per-cluster pod `/16`s derived
+from a per-env-region `pod_cidr_slot` × per-cluster `subnet_slot`
+grid, with a fleet-wide uniqueness invariant and a hard cap of 16
+env-regions per fleet. The pod CIDR is now a fleet-wide constant
+(`100.64.0.0/16`, hard-coded in `modules/aks-cluster/main.tf`). Pod
+IPs are non-routable outside the node (Azure CNI Overlay encapsulates
+pod-to-pod on the node; egress SNATs to the node IP), and every
+observability tool that surfaces pod IPs (Log Analytics, managed
+Prometheus, kube-state-metrics scrapes) carries `_ResourceId` /
+cluster name in the same row, so cross-cluster disambiguation was
+already solved upstream. Collapsing the allocation grid removes:
+`pod_cidr_slot` from `_fleet.yaml` (init schema + prompts), the
+`/12`-envelope math in `modules/fleet-identity/main.tf` + tests, the
+pod-CIDR python block in `terraform/config-loader/load.sh`, the
+cross-env uniqueness validation in `init/`, and the 16-env-region
+cap. If ClusterMesh or any other cross-cluster pod routing is
+introduced later, `pod_cidr` becomes a per-cluster input again and
+the derivation returns. The "Pod CIDR allocation" subsection further
+down in this §3.4 is now **obsolete**; a cleanup commit will strike
+it in the next PLAN revision.
 
 **Tiers.**
 

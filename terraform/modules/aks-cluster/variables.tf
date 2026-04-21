@@ -61,16 +61,6 @@ variable "node_subnet_id" {
   nullable    = false
 }
 
-variable "pod_cidr" {
-  description = "CGNAT `/16` pod CIDR derived per PLAN §3.4. Fed to `network_profile.pod_cidr`; required since we hard-code CNI Overlay + Cilium."
-  type        = string
-  nullable    = false
-  validation {
-    condition     = can(regex("^100\\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-6])\\.0\\.0/16$", var.pod_cidr))
-    error_message = "pod_cidr must be a /16 inside the CGNAT 100.64.0.0/10 range, excluding 100.127.0.0/16 (reserved fleet-wide for service_cidr). Authored by config-loader; see PLAN §3.4 + docs/naming.md."
-  }
-}
-
 variable "node_asg_ids" {
   description = "List of Application Security Group resource ids attached to every node pool via `network_profile.application_security_groups`. Stage 1 passes the single shared env-region `asg-nodes-<env>-<region>` id."
   type        = list(string)

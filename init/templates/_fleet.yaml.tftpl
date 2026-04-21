@@ -104,33 +104,27 @@ networking:                                            # Repo-owned VNets + BYO 
   #                   third-onward /24s of this space by Stage 1, keyed
   #                   off `networking.subnet_slot` in each cluster.yaml
   #                   (/20 → 16 slots; /21 → 12; /22 → 4). See PLAN §3.4.
-  #   pod_cidr_slot   Integer in [0,15]. Selects this env-region's /12
-  #                   slice of the fleet's CGNAT (100.64.0.0/10) pod
-  #                   space. Every cluster in this region is assigned a
-  #                   /16 pod CIDR as 100.[64 + pod_cidr_slot*16 +
-  #                   cluster.subnet_slot].0.0/16. Must be unique across
-  #                   the fleet's env-regions. Immutable after first
-  #                   apply; changing it re-creates every cluster in the
-  #                   region. See PLAN §3.4 + docs/networking.md.
+  #
+  # Pod CIDR: all clusters share 100.64.0.0/16 (hard-coded in
+  # modules/aks-cluster). Non-routable under CNI Overlay + Cilium;
+  # disambiguation in logs/metrics comes from `_ResourceId` / cluster
+  # name, not from the pod IP itself. See PLAN §3.4 Implementation
+  # status.
   envs:
     mgmt:
       regions:
         ${primary_region}:
           address_space: "${networking_env_mgmt_eastus_address_space}"
-          pod_cidr_slot: ${networking_env_mgmt_eastus_pod_cidr_slot}
     nonprod:
       regions:
         ${primary_region}:
           address_space: "${networking_env_nonprod_eastus_address_space}"
-          pod_cidr_slot: ${networking_env_nonprod_eastus_pod_cidr_slot}
         # <second-region>:
         #   address_space: "<cidr>"
-        #   pod_cidr_slot: <0..15, unique fleet-wide>
     prod:
       regions:
         ${primary_region}:
           address_space: "${networking_env_prod_eastus_address_space}"
-          pod_cidr_slot: ${networking_env_prod_eastus_pod_cidr_slot}
 
 github_app:
   fleet_runners:                                       # KEDA polling App (actions:read + metadata:read)

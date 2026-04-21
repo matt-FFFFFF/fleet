@@ -374,68 +374,52 @@ stage that owns it — no Stage 0 passthrough.
 
 The fleet assumes **Azure CNI Overlay + Cilium** on every AKS cluster:
 
-- Pod IPs come from a deterministic per-cluster `/16` in CGNAT
-  (`100.64.0.0/10`) — see "Pod CIDR allocation" below — not from
-  `cluster.networking.pod_cidr` in `_defaults.yaml` (the legacy key
-  is ignored by Stage 1 and will be removed in a cleanup commit).
+- Pod IPs come from a shared fleet-wide `/16` in CGNAT
+  (`100.64.0.0/16`) hard-coded in `modules/aks-cluster/main.tf` — see
+  "Pod CIDR (shared)" below. The legacy `cluster.networking.pod_cidr`
+  key in `_defaults.yaml` is ignored by Stage 1 and will be removed
+  in a cleanup commit.
 - Nodes subnet only holds nodes + internal load balancers → `/25` is
   comfortably sized for realistic node counts.
 - Services CIDR is hard-coded to `100.127.0.0/16` inside
   `modules/aks-cluster` (DNS at `100.127.0.10`). Reserved from the
-  top of CGNAT, fenced off from pod allocations by the third-octet
-  ≤ 126 bound in `config-loader/load.sh`. Virtual / in-cluster only
-  — safe to share across every cluster in the fleet. See the
-  "Service CIDR" section below for the rationale.
+  top of CGNAT; disjoint from the shared pod `/16` by construction.
+  Virtual / in-cluster only — safe to share across every cluster in
+  the fleet. See the "Service CIDR" section below for the rationale.
 
 If the fleet ever moves off CNI Overlay, the nodes subnet sizing
 needs to be re-derived against `nodes × (1 + max_pods)`; this is a
 PLAN §3.4 amendment plus changes in the three parity files.
 
-## Pod CIDR allocation (CGNAT)
+## Pod CIDR (shared)
 
-Pod IPs live in `100.64.0.0/10` (RFC 6598 CGNAT), completely disjoint
-from the VNet address plan. Allocation is two-dimensional:
+Every cluster in the fleet uses the same pod CIDR: `100.64.0.0/16`,
+hard-coded in `modules/aks-cluster/main.tf`. Cross-cluster uniqueness
+buys nothing because pod IPs are non-routable outside the node —
+Azure CNI Overlay encapsulates pod-to-pod traffic on the node, and
+egress SNATs to the node IP. Observability queries (Log Analytics,
+managed Prometheus) disambiguate across clusters by `_ResourceId` /
+cluster name rather than by source IP.
 
-- **`pod_cidr_slot`** — integer `[0, 15]`, declared per env-region in
-  `_fleet.yaml.networking.envs.<env>.regions.<region>.pod_cidr_slot`.
-  Unique across the entire fleet; immutable once set. Reserves a
-  `/12` envelope at `100.[64 + pod_cidr_slot*16].0.0/12`.
-- **`subnet_slot`** — the per-cluster integer already declared in
-  `cluster.yaml.networking.subnet_slot`. The same slot indexes the
-  cluster's subnets *and* its pod CIDR.
+Earlier drafts of the fleet carried a per-env-region `pod_cidr_slot`
+(integer `[0, 15]`) that keyed a `/12` envelope in CGNAT, combined
+with the cluster's `subnet_slot` to yield a unique `/16` per cluster.
+Dropping that machinery removes:
 
-Per-cluster pod CIDR:
+- the hard cap of 16 env-regions per fleet;
+- the loader's pod-CIDR derivation and its third-octet ≤ 126 fence;
+- the `pod_cidr_slot` / `pod_cidr_envelope` passthrough in
+  `modules/fleet-identity`;
+- one required `_fleet.yaml` field per env-region.
 
-```
-pod_cidr = 100.[64 + pod_cidr_slot*16 + subnet_slot].0.0/16
-```
+If ClusterMesh or any future cross-cluster pod routing is introduced,
+the pod CIDR becomes a per-cluster input again and the derivation
+returns — the design choice is recorded in PLAN §3.4 Implementation
+status.
 
-Worked examples (from `.github/fixtures/adopter-test.tfvars`):
-
-| env / region       | pod_cidr_slot | subnet_slot | pod_cidr             |
-| ------------------ | ------------- | ----------- | -------------------- |
-| mgmt / eastus      | 0             | 0           | `100.64.0.0/16`      |
-| nonprod / eastus   | 1             | 0           | `100.80.0.0/16`      |
-| nonprod / eastus   | 1             | 3           | `100.83.0.0/16`      |
-| prod / eastus      | 2             | 0           | `100.96.0.0/16`      |
-
-Capacity: 16 env-regions × 16 clusters × `/16` each (65 536 pod IPs
-per cluster → 262 nodes at the default `max_pods=250`). Operators
-hitting the 16-env-region cap add a second CGNAT pool by design
-change (PLAN §3.4 update required).
-
-Pod CIDRs are never routed outside the node (Overlay CNI encapsulates
-pod-to-pod traffic); no peering, UDR, or firewall configuration
-depends on them. The `pod_cidr_slot` × `subnet_slot` grid exists
-purely to keep debugging output (`kubectl get pods -o wide`) readable
-across clusters — prod vs nonprod pod IPs never overlap.
-
-**Reserved `/16` for service CIDR.** The top /16 of CGNAT —
-`100.127.0.0/16` — is reserved fleet-wide for the AKS `service_cidr`
-(see next section). `config-loader/load.sh` upper-bounds the pod
-third octet at 126 to fence it off, reducing the effective pod cap
-from 64 /16s to 63 /16s (still far beyond the 16 env-region × 16
-cluster product we document here).
+`100.127.0.0/16` is reserved fleet-wide for the AKS `service_cidr`
+(see next section); it is disjoint from `100.64.0.0/16` by
+construction.
 
 ## Service CIDR (reserved 100.127.0.0/16)
 
@@ -461,13 +445,13 @@ The fleet sidesteps it by reserving `100.127.0.0/16` inside CGNAT:
 - `init/variables.tf` requires every `address_space` variable to be
   RFC-1918 — CGNAT (RFC 6598) is disjoint from RFC-1918 by
   construction, so no legal adopter VNet can overlap.
-- `config-loader/load.sh` enforces the pod third-octet ≤ 126 bound
-  so pod allocations can never collide with the service /16.
+- The shared pod `/16` at `100.64.0.0/16` is disjoint from
+  `100.127.0.0/16` by construction.
 
 If the fleet ever needs per-cluster service CIDRs (e.g. cross-cluster
 service mesh without NAT), the derivation pattern is already known:
-`100.[112 + subnet_slot].0.0/16` carves a /12 at `100.112.0.0/12`
-alongside pod allocations. This would be a PLAN §3.4 amendment.
+`100.[112 + subnet_slot].0.0/16` carves a /12 at `100.112.0.0/12`.
+This would be a PLAN §3.4 amendment.
 
 
 ## Pre-Phase-B (legacy) note

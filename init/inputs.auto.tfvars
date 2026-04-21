@@ -50,10 +50,9 @@ dns_fleet_root = "__PROMPT__" # e.g. int.acme.example — parent of every per-cl
 # vending-module-rendered VNet; per-cluster /28 api + /25 nodes subnets are
 # carved by Stage 1 (two-pool layout, see PLAN §3.4).
 #
-# Pod CIDRs live in CGNAT (100.64.0.0/10). Each env-region picks a
-# `pod_cidr_slot` (0..15, unique fleet-wide) reserving a /12 slice;
-# individual cluster /16 pod CIDRs are derived as
-# 100.[64 + pod_cidr_slot*16 + cluster.subnet_slot].0.0/16.
+# Pod CIDR is the same /16 in every cluster (100.64.0.0/16, hard-coded in
+# modules/aks-cluster). Pod IPs are non-routable via CNI Overlay + Cilium;
+# disambiguation across clusters comes from _ResourceId / cluster name.
 
 networking_hub_resource_id = "__PROMPT__" # /subscriptions/<sub-hub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet-hub>
 
@@ -66,7 +65,3 @@ networking_mgmt_address_space               = "__PROMPT__" # e.g. 10.50.0.0/20 �
 networking_env_mgmt_eastus_address_space    = "__PROMPT__" # e.g. 10.60.0.0/20 — mgmt env VNet in primary_region
 networking_env_nonprod_eastus_address_space = "__PROMPT__" # e.g. 10.70.0.0/20 — nonprod env VNet in primary_region
 networking_env_prod_eastus_address_space    = "__PROMPT__" # e.g. 10.80.0.0/20 — prod env VNet in primary_region
-
-networking_env_mgmt_eastus_pod_cidr_slot    = 0 # CGNAT /12 slot for mgmt-eastus   (0..15, unique fleet-wide)
-networking_env_nonprod_eastus_pod_cidr_slot = 1 # CGNAT /12 slot for nonprod-eastus
-networking_env_prod_eastus_pod_cidr_slot    = 2 # CGNAT /12 slot for prod-eastus

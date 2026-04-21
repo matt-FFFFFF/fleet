@@ -59,7 +59,10 @@ Prompted fields:
 | `networking_pdz_grafana`                      | BYO `privatelink.grafana.azure.com` private DNS zone id.                                  |
 | `networking_mgmt_address_space`               | Mgmt VNet CIDR, min `/20`, RFC1918. Carved by `bootstrap/fleet`.                          |
 | `networking_env_<env>_<region>_address_space` | One per env-region (mgmt, nonprod, prod in primary_region). Min `/20`, RFC1918, disjoint. |
-| `networking_env_<env>_<region>_pod_cidr_slot` | Integer `0..15`, **unique fleet-wide**. Keys each env-region's `/12` in CGNAT `100.64.0.0/10`. |
+
+Pod IPs use a shared fleet-wide `/16` in CGNAT (`100.64.0.0/16`) hard-
+coded in `modules/aks-cluster`, so there is no per-region pod-CIDR slot
+to pick; see `docs/networking.md` § "Pod CIDR (shared)" for rationale.
 
 Pairwise-distinct and CIDR-syntax validators run at `terraform apply`
 time inside `init/`; malformed inputs are rejected before anything
@@ -101,12 +104,14 @@ first Terraform apply — the file documents each with a `TODO` or
 Networking (everything under `networking.*` in `_fleet.yaml`) was
 prompted in §2 and is already fully populated — the hub VNet id, the
 four central private DNS zones (blob / vaultcore / azurecr / grafana),
-and the four repo-owned VNet address spaces + per-env-region
-`pod_cidr_slot`. There is **no** per-service BYO subnet id to fill in:
-`bootstrap/fleet` and `bootstrap/environment` carve every PE / runner /
-AKS subnet themselves from those address spaces. See
-`docs/networking.md` for the two-pool layout and `docs/onboarding-cluster.md`
-for the single-PR new-cluster flow (picking `subnet_slot`).
+and the four repo-owned VNet address spaces. Pod IPs use a shared
+fleet-wide `/16` (`100.64.0.0/16`) hard-coded in `modules/aks-cluster`,
+so there is no per-region pod-CIDR slot to set. There is **no** per-
+service BYO subnet id to fill in: `bootstrap/fleet` and
+`bootstrap/environment` carve every PE / runner / AKS subnet themselves
+from those address spaces. See `docs/networking.md` for the two-pool
+layout and `docs/onboarding-cluster.md` for the single-PR new-cluster
+flow (picking `subnet_slot`).
 
 Commit the initialized repo:
 

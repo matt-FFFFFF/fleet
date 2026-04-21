@@ -16,8 +16,8 @@ Prerequisites:
   and region (`vnet-<fleet>-<env>-<region>` exists; the env-region ASG
   `asg-nodes-<env>-<region>` exists; mgmt↔env peering is up).
 - The target env-region has a declared
-  `networking.envs.<env>.regions.<region>.{address_space, pod_cidr_slot}`
-  in `clusters/_fleet.yaml`.
+  `networking.envs.<env>.regions.<region>.address_space` in
+  `clusters/_fleet.yaml`.
 
 ## 1. Scaffold the cluster directory
 
@@ -37,15 +37,17 @@ zone, etc.).
 
 `cluster.yaml.networking.subnet_slot` is the **single** per-cluster
 knob the operator picks. It is a non-negative integer that indexes
-both per-cluster subnets and the per-cluster pod CIDR:
+the two per-cluster subnets:
 
 - `snet-aks-api-<name>` — `/28` at index `i` of the env VNet's API
   pool (delegated to `Microsoft.ContainerService/managedClusters`).
 - `snet-aks-nodes-<name>` — `/25` at index `i` of the env VNet's
   nodes pool (Azure CNI Overlay + Cilium).
-- `pod_cidr` — `100.[64 + pod_cidr_slot*16 + subnet_slot].0.0/16`
-  in CGNAT (`pod_cidr_slot` comes from the env-region's `_fleet.yaml`
-  block; see `docs/networking.md` "Pod CIDR allocation").
+
+Pod IPs are **not** indexed by `subnet_slot`. Every cluster in the
+fleet shares the same `/16` pod CIDR (`100.64.0.0/16`, hard-coded in
+`modules/aks-cluster/main.tf`); see `docs/networking.md` § "Pod CIDR
+(shared)".
 
 ### Rules
 
@@ -82,9 +84,9 @@ At `/20`, an env-region holds 16 clusters. When the 17th is needed:
 
 1. **Preferred — add a second region.** Edit `_fleet.yaml` to
    declare a new `networking.envs.<env>.regions.<new-region>.*`
-   block (including a fleet-unique `pod_cidr_slot`) and run
-   `env-bootstrap.yaml` for that env. New clusters land under
-   `clusters/<env>/<new-region>/...` starting at `subnet_slot: 0`.
+   block and run `env-bootstrap.yaml` for that env. New clusters land
+   under `clusters/<env>/<new-region>/...` starting at
+   `subnet_slot: 0`.
 2. **Rarely — widen the pool shape.** Requires an amendment to
    PLAN §3.4 plus synchronized edits to `docs/naming.md`,
    `terraform/config-loader/load.sh`, and

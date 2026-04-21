@@ -10,8 +10,11 @@
 # Hard-coded in modules/aks-cluster, NOT overridable per cluster:
 #   - Entra-only auth: disable_local_accounts + aad_profile.managed +
 #     enable_azure_rbac (tenant_id + admin_groups from _fleet.yaml).
-#   - CNI: Azure CNI Overlay + Cilium dataplane, pod_cidr from the
-#     loader-derived CGNAT allocation (PLAN §3.4).
+#   - CNI: Azure CNI Overlay + Cilium dataplane. Pod CIDR is hard-coded
+#     fleet-wide to 100.64.0.0/16 in modules/aks-cluster (pod IPs are
+#     non-routable outside the cluster; cross-cluster disambiguation is
+#     handled by `_ResourceId` / cluster name in observability queries).
+#     See PLAN §3.4 Implementation status for rationale.
 #   - OIDC issuer + workload identity on (Stage 2 FICs depend on it).
 #   - Private cluster with API-server VNet integration on the
 #     /28 subnet this stack creates.
@@ -31,7 +34,6 @@ module "aks" {
   # Networking inputs — all loader-derived or passed from bootstrap.
   api_subnet_id  = local.cluster_subnet_ids.api
   node_subnet_id = local.cluster_subnet_ids.nodes
-  pod_cidr       = local.net.pod_cidr
   node_asg_ids   = [var.node_asg_resource_id]
 
   # AAD / RBAC — sourced from _fleet.yaml (aad.aks tenant + env-scope

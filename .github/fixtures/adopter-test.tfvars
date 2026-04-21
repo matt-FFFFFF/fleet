@@ -27,8 +27,3 @@ networking_mgmt_address_space               = "10.50.0.0/20"
 networking_env_mgmt_eastus_address_space    = "10.60.0.0/20"
 networking_env_nonprod_eastus_address_space = "10.70.0.0/20"
 networking_env_prod_eastus_address_space    = "10.80.0.0/20"
-
-# Pod-CIDR slots (0..15, unique per env-region; /12 inside 100.64.0.0/10).
-networking_env_mgmt_eastus_pod_cidr_slot    = 0
-networking_env_nonprod_eastus_pod_cidr_slot = 1
-networking_env_prod_eastus_pod_cidr_slot    = 2

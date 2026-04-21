@@ -40,9 +40,6 @@ variables {
   networking_env_mgmt_eastus_address_space    = "10.60.0.0/20"
   networking_env_nonprod_eastus_address_space = "10.70.0.0/20"
   networking_env_prod_eastus_address_space    = "10.80.0.0/20"
-  networking_env_mgmt_eastus_pod_cidr_slot    = 0
-  networking_env_nonprod_eastus_pod_cidr_slot = 1
-  networking_env_prod_eastus_pod_cidr_slot    = 2
 }
 
 # ---- happy path: content round-trips fixture values ------------------------
@@ -380,16 +377,6 @@ run "render_networking_shape" {
     error_message = "networking.envs.<env>.regions.<primary_region>.address_space must round-trip the three per-env address_space vars as scalar strings."
   }
 
-  # Per-env-region pod_cidr_slot integers (PLAN §3.4 CGNAT pod CIDR).
-  assert {
-    condition = alltrue([
-      yamldecode(local_file.fleet_yaml.content).networking.envs.mgmt.regions.eastus.pod_cidr_slot == 0,
-      yamldecode(local_file.fleet_yaml.content).networking.envs.nonprod.regions.eastus.pod_cidr_slot == 1,
-      yamldecode(local_file.fleet_yaml.content).networking.envs.prod.regions.eastus.pod_cidr_slot == 2,
-    ])
-    error_message = "networking.envs.<env>.regions.<primary_region>.pod_cidr_slot must round-trip the three per-env pod_cidr_slot vars as integers."
-  }
-
   # Legacy BYO subnet fields must NOT be present under environments.<env>.networking.
   assert {
     condition = alltrue([
@@ -461,31 +448,4 @@ run "reject_env_prod_overlap_with_mgmt" {
     networking_env_prod_eastus_address_space = "10.50.0.0/20"
   }
   expect_failures = [var.networking_env_prod_eastus_address_space]
-}
-
-# ---- pod_cidr_slot rejections ----------------------------------------------
-
-run "reject_pod_cidr_slot_out_of_range" {
-  command = plan
-  variables {
-    networking_env_mgmt_eastus_pod_cidr_slot = 16
-  }
-  expect_failures = [var.networking_env_mgmt_eastus_pod_cidr_slot]
-}
-
-run "reject_pod_cidr_slot_negative" {
-  command = plan
-  variables {
-    networking_env_nonprod_eastus_pod_cidr_slot = -1
-  }
-  expect_failures = [var.networking_env_nonprod_eastus_pod_cidr_slot]
-}
-
-run "reject_pod_cidr_slots_not_distinct" {
-  command = plan
-  variables {
-    # prod duplicates mgmt's slot → distinct-count rule on prod var fires.
-    networking_env_prod_eastus_pod_cidr_slot = 0
-  }
-  expect_failures = [var.networking_env_prod_eastus_pod_cidr_slot]
 }

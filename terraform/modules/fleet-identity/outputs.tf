@@ -27,21 +27,20 @@ output "networking_derived" {
           vnet_name, rg_name,
           snet_pe_env_cidr, cluster_slot_capacity,
           peering_env_to_mgmt_name, peering_mgmt_to_env_name,
-          node_asg_name, nsg_pe_name,
-          pod_cidr_slot, pod_cidr_envelope
+          node_asg_name, nsg_pe_name
         }
       }
 
     `mgmt` is null when `networking.vnets.mgmt` is absent; `envs` is an
     empty map when `networking.envs` is absent. Individual CIDR fields
-    are null when the corresponding `address_space` is absent;
-    `pod_cidr_slot` / `pod_cidr_envelope` are null when the region
-    block omits `pod_cidr_slot`.
+    are null when the corresponding `address_space` is absent.
 
-    Cluster-scope per-slot `/28` api + `/25` nodes CIDRs and the
-    per-cluster `/16` pod CIDR are NOT emitted here — they live in
-    `config-loader/load.sh` and Stage 1, which have cluster identity
-    as input. Parity contract: docs/naming.md.
+    Cluster-scope per-slot `/28` api + `/25` nodes CIDRs are NOT emitted
+    here — they live in `config-loader/load.sh` and Stage 1, which have
+    cluster identity as input. Pod IPs use a shared CGNAT /16
+    (`100.64.0.0/16`) hard-coded in `modules/aks-cluster/main.tf`; see
+    PLAN §3.4 Implementation status for rationale. Parity contract:
+    docs/naming.md.
   EOT
   value       = local.networking_derived
 }

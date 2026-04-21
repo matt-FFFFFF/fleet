@@ -6,7 +6,8 @@
 # Scope today (Phase E of PLAN §3.4) is the *networking* slice of
 # Stage 1: private cluster + api-server VNet integration on the /28
 # subnet, agent pools attached to the env-region ASG, Azure CNI
-# Overlay + Cilium with a CGNAT pod_cidr. Everything else (cluster
+# Overlay + Cilium with a fleet-wide shared pod CIDR
+# (100.64.0.0/16). Everything else (cluster
 # KV, UAMIs, role assignments, managed Prometheus DCR/DCRA + rules,
 # Kargo mgmt rotation) is deferred — see STATUS §4 Stage 1 TODOs and
 # PLAN §4 Stage 1 for the full surface.
@@ -98,7 +99,7 @@ module "aks" {
   auto_upgrade_profile = var.auto_upgrade_profile
   auto_scaler_profile  = var.auto_scaler_profile
 
-  # --- Network profile: CNI Overlay + Cilium, CGNAT pod_cidr -------------
+  # --- Network profile: CNI Overlay + Cilium, shared CGNAT pod_cidr ------
   network_profile = {
     network_plugin      = "azure"
     network_plugin_mode = "overlay"
@@ -114,7 +115,16 @@ module "aks" {
     # and cannot be changed later (ARM-level immutability).
     outbound_type     = "userDefinedRouting"
     load_balancer_sku = "standard"
-    pod_cidr          = var.pod_cidr
+    # Pod CIDR is fleet-wide constant. Pod IPs are non-routable outside
+    # the cluster (CNI Overlay SNATs to the node IP on egress), so
+    # cross-cluster uniqueness buys nothing: Log Analytics / Prometheus
+    # queries key on `_ResourceId` / cluster name rather than source IP.
+    # Dropping per-cluster uniqueness collapses the Phase-B pod_cidr_slot
+    # machinery (`/12` envelope, loader derivation, fleet-identity
+    # passthrough). If ClusterMesh or cross-cluster pod routing is
+    # introduced later, this constant becomes an input again. See
+    # PLAN §3.4 Implementation status + docs/naming.md.
+    pod_cidr = "100.64.0.0/16"
     # service_cidr is the in-cluster virtual ClusterIP pool. It never
     # appears on any wire — kube-proxy (here: Cilium) DNATs ClusterIP
     # → pod IP at dispatch. BUT: if service_cidr overlaps any VNet
@@ -123,9 +133,8 @@ module "aks" {
     # adopter VNet addressed out of RFC-1918 10/8). To guarantee
     # disjointness from any adopter VNet, service_cidr is reserved
     # inside the fleet's CGNAT envelope at 100.127.0.0/16 (the top /16
-    # of 100.64.0.0/10). Pod CIDR allocation upper-bounds the third
-    # octet at 126 in config-loader/load.sh to keep 100.127.0.0/16
-    # fenced off. See PLAN §3.4 + docs/networking.md.
+    # of 100.64.0.0/10). Disjoint from the shared pod /16 above. See
+    # PLAN §3.4 + docs/networking.md.
     service_cidr   = "100.127.0.0/16"
     dns_service_ip = "100.127.0.10"
   }

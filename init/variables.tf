@@ -158,12 +158,13 @@ variable "template_commit" {
 # registers into the matching central zone — the repo never creates a
 # zone itself.
 #
-# Pod CIDRs live in CGNAT (100.64.0.0/10). Each env-region reserves a
-# /12 slice via its `pod_cidr_slot` (0..15, unique fleet-wide); each
-# cluster inside the region gets a /16 at
-# 100.[64 + pod_cidr_slot*16 + cluster.subnet_slot].0.0/16. The 3 vars
-# below seed the initial mgmt/nonprod/prod slots; widen by editing
-# `clusters/_fleet.yaml` post-init.
+# Pod CIDRs: every cluster uses the same CGNAT `/16` (100.64.0.0/16),
+# hard-coded in `modules/aks-cluster/main.tf`. Rationale: pod IPs are
+# non-routable (CNI Overlay + Cilium); cross-cluster disambiguation is
+# already provided by `_ResourceId` / cluster name in every Log
+# Analytics and Prometheus query. A future ClusterMesh requirement
+# would reintroduce uniqueness additively. See PLAN §3.4 Implementation
+# status.
 
 variable "networking_hub_resource_id" {
   description = "Full ARM resource id of the adopter-owned hub VNet. Every env VNet hub-peers to it; bootstrap/fleet's mgmt VNet hub-peers too."
@@ -305,50 +306,3 @@ variable "networking_env_prod_eastus_address_space" {
   }
 }
 
-# Pod-CIDR slot allocation per env-region (PLAN §3.4). Each slot reserves
-# a /12 inside the fleet's CGNAT (100.64.0.0/10) pod space; every cluster
-# in the env-region is assigned a /16 at
-# 100.[64 + pod_cidr_slot*16 + cluster.subnet_slot].0.0/16. Slots must be
-# unique across every declared env-region (distinctness enforced below
-# on the prod slot, which is declared last).
-
-variable "networking_env_mgmt_eastus_pod_cidr_slot" {
-  description = "CGNAT pod-CIDR slot (0..15) for the mgmt env in primary_region. Each slot reserves a /12 inside 100.64.0.0/10 for cluster pod /16s."
-  type        = number
-  default     = 0
-  validation {
-    condition     = var.networking_env_mgmt_eastus_pod_cidr_slot >= 0 && var.networking_env_mgmt_eastus_pod_cidr_slot <= 15 && floor(var.networking_env_mgmt_eastus_pod_cidr_slot) == var.networking_env_mgmt_eastus_pod_cidr_slot
-    error_message = "networking_env_mgmt_eastus_pod_cidr_slot must be an integer in [0, 15]."
-  }
-}
-
-variable "networking_env_nonprod_eastus_pod_cidr_slot" {
-  description = "CGNAT pod-CIDR slot (0..15) for the nonprod env in primary_region. Must differ from every other declared env-region's slot."
-  type        = number
-  default     = 1
-  validation {
-    condition     = var.networking_env_nonprod_eastus_pod_cidr_slot >= 0 && var.networking_env_nonprod_eastus_pod_cidr_slot <= 15 && floor(var.networking_env_nonprod_eastus_pod_cidr_slot) == var.networking_env_nonprod_eastus_pod_cidr_slot
-    error_message = "networking_env_nonprod_eastus_pod_cidr_slot must be an integer in [0, 15]."
-  }
-}
-
-variable "networking_env_prod_eastus_pod_cidr_slot" {
-  description = "CGNAT pod-CIDR slot (0..15) for the prod env in primary_region. Must differ from every other declared env-region's slot."
-  type        = number
-  default     = 2
-  validation {
-    condition     = var.networking_env_prod_eastus_pod_cidr_slot >= 0 && var.networking_env_prod_eastus_pod_cidr_slot <= 15 && floor(var.networking_env_prod_eastus_pod_cidr_slot) == var.networking_env_prod_eastus_pod_cidr_slot
-    error_message = "networking_env_prod_eastus_pod_cidr_slot must be an integer in [0, 15]."
-  }
-  # Cross-field distinctness — every declared env-region must pick a
-  # distinct slot. Declared on `prod` (the last of the three vars) so
-  # that all three values are in scope at validation time.
-  validation {
-    condition = length(distinct([
-      var.networking_env_mgmt_eastus_pod_cidr_slot,
-      var.networking_env_nonprod_eastus_pod_cidr_slot,
-      var.networking_env_prod_eastus_pod_cidr_slot,
-    ])) == 3
-    error_message = "The three env-region pod_cidr_slot values (mgmt/nonprod/prod in primary_region) must be distinct."
-  }
-}
