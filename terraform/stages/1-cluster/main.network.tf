@@ -45,6 +45,14 @@ resource "azapi_resource" "snet_aks_api" {
       # No NSG attached at the api subnet: the delegated API-server
       # infra manages its own traffic. Attaching an NSG here can
       # break control-plane health probes on some AKS versions.
+      # UDR egress: associate the env-region route table so
+      # api-server VNet integration egresses 0.0.0.0/0 through the
+      # same hub-firewall next-hop as nodes (PLAN §3.4). The route
+      # table shell is authored unconditionally by
+      # bootstrap/environment; the default-route entry exists only
+      # when networking.envs.<env>.regions.<region>.egress_next_hop_ip
+      # is non-null.
+      routeTable                        = { id = var.route_table_resource_id }
       privateEndpointNetworkPolicies    = "Disabled"
       privateLinkServiceNetworkPolicies = "Enabled"
     }
@@ -72,6 +80,10 @@ resource "azapi_resource" "snet_aks_nodes" {
       addressPrefix                     = local.net.snet_aks_nodes_cidr
       privateEndpointNetworkPolicies    = "Disabled"
       privateLinkServiceNetworkPolicies = "Enabled"
+      # UDR egress: same `rt-aks-<env>-<region>` route table as the
+      # api subnet so node traffic and api-server VNet integration
+      # share a single hub-firewall next-hop (PLAN §3.4).
+      routeTable = { id = var.route_table_resource_id }
       # No delegations on the nodes subnet — AKS attaches node NICs
       # directly. ASG membership is asserted on each agent pool via
       # networkProfile.applicationSecurityGroups (the env-scope

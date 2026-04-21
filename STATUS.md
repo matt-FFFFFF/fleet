@@ -215,33 +215,32 @@
 
 ### Stage 1 — `terraform/stages/1-cluster`
 
-- [!] Networking slice — **rework required**. Current code consumes a
-      fleet-scope `var.mgmt_vnet_resource_id` / `MGMT_VNET_RESOURCE_ID`.
-      Concrete drift:
-  - `variables.tf` L25-27 header comment documents fleet-scope
-    `MGMT_VNET_RESOURCE_ID` pipeline → rewrite.
-  - `variables.tf` L62-73 `variable "mgmt_vnet_resource_id"` (scalar)
-    → replace with `mgmt_region_vnet_resource_id` (or similar
-    per-region resolution) sourced from
-    `MGMT_<REGION>_VNET_RESOURCE_ID`.
-  - `main.tf` L17, L31-33, L68, L90-93 all reference the fleet-scope
-    mgmt variable in comments, locals, and preconditions → update.
-  - `main.aks.tf` L18, L80, L91-94: `linked_vnet_ids` map uses
-    fleet-scope mgmt id. Must use mgmt env-region VNet id for the
-    cluster's region. Missing: mgmt-cluster collapse — when
-    `local.cluster.env == "mgmt"` the env and mgmt ids are the same
-    VNet and the link list must deduplicate.
-  - `providers.tf` L17-22 header comment documents
-    `MGMT_VNET_RESOURCE_ID` publishing by `bootstrap/fleet` → rewrite
-    (ownership moves to `bootstrap/environment` per PLAN §4 Stage 1
-    L859-866).
-  - **Missing (not drifted, gap)**: Stage 1 does NOT author a route
-    table association on either the api or nodes subnet. PLAN §3.4
-    now requires `routeTableId` set on BOTH subnets from the
-    `bootstrap/environment`-owned `rt-aks-<env>-<region>`. No
-    `var.route_table_resource_id` input exists; neither subnet's
-    `properties.routeTable.id` is set in `main.network.tf`. This
-    blocks live apply (UDR egress).
+- [~] Networking slice — **rework done** (unit 6): aligned with
+      PLAN §3.4 uniform env-region model. `variables.tf` rewritten:
+      scalar `var.mgmt_vnet_resource_id` replaced with
+      `var.mgmt_region_vnet_resource_id` sourced per-cluster from
+      `fromJSON(vars.MGMT_VNET_RESOURCE_IDS)[derived.networking.peer_mgmt_region]`
+      (same-region-else-first resolution done in
+      `config-loader/load.sh`); added `var.route_table_resource_id`
+      sourced from `<ENV>_<REGION>_ROUTE_TABLE_RESOURCE_ID`; header
+      comment rewritten. `main.tf` locals updated (`var.doc.fleet.environments`
+      → `.envs` catching up with unit 3 rename; new `local.mgmt_cluster`
+      flag from id-equality detection); preconditions block carries
+      new error messages for `mgmt_region_vnet_resource_id` (map-index
+      pipeline) and `route_table_resource_id` (ARM-id + egress next-hop
+      note). `main.network.tf` sets `properties.routeTable.id` on both
+      the api and nodes subnets (PLAN §3.4 UDR egress: api-server VNet
+      integration + nodes share one next-hop). `main.aks.tf`
+      `linked_vnet_ids` now collapses to a single `mgmt` link when
+      `local.mgmt_cluster` (env and mgmt ids equal), else the two-entry
+      `{env, mgmt}` map — collapse is id-equality driven, not `env ==
+      "mgmt"`, so it's schema-agnostic. `providers.tf` header comment
+      rewritten for the JSON-map pipeline. `bootstrap/environment`
+      extended in the same unit: `outputs.tf` exposes
+      `env_region_route_table_resource_ids` (map(region → rt id));
+      `main.github.tf` publishes `<ENV>_<REGION>_ROUTE_TABLE_RESOURCE_ID`
+      alongside the existing VNet/NodeASG/PE-subnet vars.
+      `terraform validate` + `fmt -recursive` pass on both dirs.
   - [ ] Identity/RBAC follow-up: cluster KV, UAMIs (external-dns,
         ESO, per-team), role assignments (AcrPull on kubelet, RBAC
         Cluster Admin for `fleet-<env>` + AAD groups, RBAC Reader
@@ -344,9 +343,10 @@
         `mgmt_vnet_resource_ids` map).
   - [!] `stages/0-fleet` body; not applied; **rework required** on
         ACR PE subnet name + source.
-  - [!] `stages/1-cluster` — **rework required** on mgmt VNet
-        resolution (per-region) + DNS-link collapse for mgmt +
-        missing route table association.
+  - [~] `stages/1-cluster` — **rework done** on mgmt VNet resolution
+        (per-region via JSON-map index), DNS-link collapse for mgmt
+        clusters, and route table association on both api and nodes
+        subnets (unit 6). Identity/RBAC follow-up still pending.
   - [ ] `config-loader/load.sh` naming-derivation parity — blocked
         on §3.3 rework.
   - [ ] CI workflows (`validate`, `tf-plan`, `tf-apply`,
@@ -536,10 +536,26 @@ self-contained enough to land in its own PR.
       §4 bootstrap stages + §14 + §16.1 rewritten in lockstep (all
       `networking.hubs` / `mgmt_environment_for_vnet_peering` refs
       gone).
-6. **Stage 1 rework** — replace `var.mgmt_vnet_resource_id` with
-   per-region resolution; add mgmt-cluster DNS-link collapse; add
-   `var.route_table_resource_id` input and set `routeTableId` on
-   both api and nodes subnets.
+6. **Stage 1 rework** — ✅ **Done.** Replaced scalar
+   `var.mgmt_vnet_resource_id` with per-region
+   `var.mgmt_region_vnet_resource_id`, selected per-cluster by
+   `fromJSON(vars.MGMT_VNET_RESOURCE_IDS)[derived.networking.peer_mgmt_region]`
+   (loader does same-region-else-first resolution). Added
+   `var.route_table_resource_id`; both the `/28` api subnet and the
+   `/25` nodes subnet now set `properties.routeTable.id` so
+   api-server VNet integration + node egress share one hub-firewall
+   next-hop (PLAN §3.4 UDR). Added mgmt-cluster DNS-link collapse
+   (`local.mgmt_cluster = env_region_vnet_resource_id ==
+   mgmt_region_vnet_resource_id`) — schema-driven not
+   `env=="mgmt"`-driven. Caught + fixed a stale `fleet.environments`
+   → `fleet.envs` reference in `local.env_aks`. Extended
+   `bootstrap/environment/outputs.tf` +
+   `main.github.tf` to publish
+   `<ENV>_<REGION>_ROUTE_TABLE_RESOURCE_ID` per region symmetric with
+   the existing VNet/NodeASG/PE-subnet vars. Preconditions block +
+   header comments rewritten on every touched file. `terraform
+   validate` + `fmt -recursive` pass on `stages/1-cluster` and
+   `bootstrap/environment`.
 7. **Stage 0 ACR PE** — rewire to derived `snet-pe-fleet` in the
    correct mgmt region.
 8. **Docs** — rewrite `docs/naming.md`, `docs/networking.md`,

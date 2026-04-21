@@ -45,3 +45,8 @@ output "env_region_pe_subnet_ids" {
   description = "Map of region → derived `snet-pe-env` subnet resource id."
   value       = local.env_snet_pe_env_id_by_region
 }
+
+output "env_region_route_table_resource_ids" {
+  description = "Map of region → `rt-aks-<env>-<region>` route table resource id. Stage 1 sets `routeTableId` on both the per-cluster api and nodes subnets from this (PLAN §3.4 UDR egress)."
+  value       = { for r, rt in azapi_resource.route_table : r => rt.id }
+}

@@ -88,9 +88,19 @@ module "cluster_dns" {
 
   zone_fqdn = local.derived.dns_zone_fqdn
   parent_id = "/subscriptions/${local.cluster.subscription_id}/resourceGroups/${local.derived.dns_zone_resource_group}"
-  linked_vnet_ids = {
+  # Link the zone to the cluster's env-region VNet and the mgmt VNet
+  # for this cluster's peering region (derived.networking.peer_mgmt_region
+  # → fromJSON(MGMT_VNET_RESOURCE_IDS)[...] in tf-apply.yaml). Mgmt
+  # clusters collapse to a single link — their env-region VNet *is*
+  # the mgmt VNet, so both ids are equal and the cluster-dns module's
+  # azapi children would otherwise collide on the same
+  # `virtualNetwork.id`. Detect by id equality rather than cluster.env
+  # so the collapse is schema-driven (see local.mgmt_cluster).
+  linked_vnet_ids = local.mgmt_cluster ? {
+    mgmt = var.env_region_vnet_resource_id
+    } : {
     env  = var.env_region_vnet_resource_id
-    mgmt = var.mgmt_vnet_resource_id
+    mgmt = var.mgmt_region_vnet_resource_id
   }
 
   tags = {

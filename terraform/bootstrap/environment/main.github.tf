@@ -150,9 +150,11 @@ locals {
     },
     # PLAN §3.4 / Phase D — per-region networking ids. Stage 1 picks
     # `<ENV>_<REGION>_VNET_RESOURCE_ID` / `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`
-    # off the env (selected by `cluster.env`) and routes them into
+    # / `<ENV>_<REGION>_ROUTE_TABLE_RESOURCE_ID` off the env (selected
+    # by `cluster.env`) and routes them into
     # TF_VAR_env_region_vnet_resource_id / TF_VAR_node_asg_resource_id
-    # for each cluster leg of tf-apply.yaml.
+    # / TF_VAR_route_table_resource_id for each cluster leg of
+    # tf-apply.yaml.
     {
       for r, vid in local.env_vnet_id_by_region :
       "${upper(var.env)}_${upper(r)}_VNET_RESOURCE_ID" => vid
@@ -160,6 +162,10 @@ locals {
     {
       for r, asg in azapi_resource.node_asg :
       "${upper(var.env)}_${upper(r)}_NODE_ASG_RESOURCE_ID" => asg.id
+    },
+    {
+      for r, rt in azapi_resource.route_table :
+      "${upper(var.env)}_${upper(r)}_ROUTE_TABLE_RESOURCE_ID" => rt.id
     },
     {
       for r, sid in local.env_snet_pe_env_id_by_region :
