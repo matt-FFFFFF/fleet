@@ -62,10 +62,12 @@ jobs:
             -var-file=../.github/fixtures/adopter-test.tfvars \
             -target=local_file.fleet_yaml
 
-      - name: Install yq
+      - name: Verify yq is available
         run: |
-          # ubuntu-24.04 already ships mikefarah/yq, but pin explicitly
-          # so failures are reproducible.
+          # ubuntu-24.04 ships mikefarah/yq preinstalled. The runner
+          # image is the pin (refreshed on the hosted-runner cadence);
+          # we just confirm the binary resolves before running the
+          # validator so failures are clearly attributable.
           yq --version
 
       - name: Validate subnet slots

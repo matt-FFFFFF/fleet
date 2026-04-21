@@ -6,12 +6,16 @@
 # to `environments.<env>.subscription_id` per PLAN §3.3). Every AKS,
 # KV, UAMI, subnet, and DNS resource authored here lives there.
 #
-# Stage 0 publishes the fleet-scope repo variables this stack needs
-# (`MGMT_VNET_RESOURCE_ID`, `FLEET_KEYVAULT_ID`, `KARGO_MGMT_UAMI_PRINCIPAL_ID`);
+# `bootstrap/fleet` publishes the fleet-scope repo + fleet-meta
+# variables this stack needs (`MGMT_VNET_RESOURCE_ID` on the
+# `fleet-meta` GitHub Environment; `FLEET_KEYVAULT_ID`,
+# `KARGO_MGMT_UAMI_PRINCIPAL_ID` as fleet-scope repo variables);
 # `bootstrap/environment` publishes the per-env-region variables
 # (`<ENV>_<REGION>_VNET_RESOURCE_ID`, `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`).
-# The `tf-apply.yaml` workflow (PLAN §10; not yet implemented — see
-# STATUS §10) pipes those into `TF_VAR_*` so this stack never does a
+# Stage 0 does **not** proxy any of these — adopters wire them
+# directly from the `bootstrap/*` outputs into the `tf-apply.yaml`
+# workflow (PLAN §10; not yet implemented — see STATUS §10), which
+# pipes the values into `TF_VAR_*` so this stack never does a
 # plan-time Azure data-source call.
 
 terraform {
@@ -37,10 +41,6 @@ terraform {
     azuread = {
       source  = "hashicorp/azuread"
       version = "~> 3.8"
-    }
-    time = {
-      source  = "hashicorp/time"
-      version = "~> 0.13"
     }
   }
 

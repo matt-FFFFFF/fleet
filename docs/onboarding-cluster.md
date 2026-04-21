@@ -50,7 +50,7 @@ both per-cluster subnets and the per-cluster pod CIDR:
    `subnet_slot: 0`; edit to the value you pick.
 2. **Range.** `0 ≤ subnet_slot < capacity`, where
    `capacity = min(16, 2 * (2^(24-N) - 2))` for an env VNet of size
-   `/N`. `/20` → 16 slots (API-pool bound); `/21` → 10; `/22` → 4.
+   `/N`. `/20` → 16 slots (API-pool bound); `/21` → 12; `/22` → 4.
 3. **Unique per `(env, region)`.** Two clusters in the same
    env-region may not share a slot. Slots may freely repeat across
    different env-regions (they carve disjoint VNets).

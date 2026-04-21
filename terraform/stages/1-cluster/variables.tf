@@ -20,7 +20,8 @@
 #        env_region_vnet_resource_id  ← <ENV>_<REGION>_VNET_RESOURCE_ID
 #                                       (bootstrap/environment)
 #        mgmt_vnet_resource_id        ← MGMT_VNET_RESOURCE_ID
-#                                       (bootstrap/fleet → Stage 0 passthrough)
+#                                       (bootstrap/fleet → fleet-meta
+#                                       GitHub environment variable)
 #        node_asg_resource_id         ← <ENV>_<REGION>_NODE_ASG_RESOURCE_ID
 #                                       (bootstrap/environment)
 #
@@ -60,7 +61,8 @@ variable "mgmt_vnet_resource_id" {
     owned by `bootstrap/fleet`. Linked to this cluster's private DNS
     zone so in-cluster hostnames resolve from the mgmt plane (Kargo,
     fleet-wide tooling, platform CI). Published as the fleet-scope
-    `MGMT_VNET_RESOURCE_ID` repo variable (Stage 0 passthrough).
+    `MGMT_VNET_RESOURCE_ID` variable on the `fleet-meta` GitHub
+    Environment directly by `bootstrap/fleet` (no Stage 0 hop).
   EOT
   type        = string
   nullable    = false
