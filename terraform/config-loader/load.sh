@@ -133,7 +133,7 @@ fi
 # Implementation status for the rationale behind dropping per-cluster
 # pod-CIDR uniqueness.
 #
-# Silence-on-absence: pre-Phase-B `_fleet.yaml` renders lack
+# Silence-on-absence: pre-Phase-B `_fleet.yaml` renders without
 # `networking.vnets.mgmt` / `networking.envs` — those fields drop
 # through as null and Stage 1 must precondition-check before using.
 

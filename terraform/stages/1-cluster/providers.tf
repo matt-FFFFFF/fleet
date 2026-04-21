@@ -1,10 +1,18 @@
 # stages/1-cluster/providers.tf
 #
-# Same provider set as Stage 0 (azapi + azuread), with one difference:
-# this stack plans against the **cluster's own subscription** (read
-# from the loader-emitted `cluster.subscription_id`, which falls back
-# to `environments.<env>.subscription_id` per PLAN §3.3). Every AKS,
-# KV, UAMI, subnet, and DNS resource authored here lives there.
+# Provider set: azapi + azurerm + random. Plans against the **cluster's
+# own subscription** (read from the loader-emitted
+# `cluster.subscription_id`, which falls back to
+# `environments.<env>.subscription_id` per PLAN §3.3). Every AKS, KV,
+# UAMI, subnet, and DNS resource authored here lives there.
+#
+# `azuread` is intentionally NOT declared here: no `azuread_*`
+# resource or data source is referenced in this stage today, and
+# declaring it would force an unused provider install plus Entra/Graph
+# permission provisioning on the stage identity for no benefit. The
+# identity/RBAC follow-up (cluster KV role assignments, team UAMIs
+# with AAD group lookups) reintroduces it when the first
+# `azuread_group` data source lands.
 #
 # `bootstrap/fleet` publishes the fleet-scope repo + fleet-meta
 # variables this stack needs (`MGMT_VNET_RESOURCE_ID` on the
@@ -38,10 +46,6 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.8"
     }
-    azuread = {
-      source  = "hashicorp/azuread"
-      version = "~> 3.8"
-    }
   }
 
   backend "azurerm" {
@@ -61,9 +65,4 @@ provider "azurerm" {
   subscription_id = local.cluster.subscription_id
   use_oidc        = true
   features {}
-}
-
-provider "azuread" {
-  tenant_id = local.fleet.tenant_id
-  use_oidc  = true
 }

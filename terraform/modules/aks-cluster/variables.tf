@@ -25,9 +25,17 @@
 #   - `network_profile.{network_plugin=azure, network_plugin_mode=overlay,
 #     network_dataplane=cilium, network_policy=cilium,
 #     load_balancer_sku=standard, outbound_type=userDefinedRouting}`.
-#     UDR forces node egress through the hub firewall via the node
-#     subnet's route table (authored in Stage 1); it is set at cluster
-#     creation and cannot be changed later.
+#     UDR requires a route table on the node subnet that points
+#     0.0.0.0/0 at the hub firewall's private IP. That route table +
+#     subnet association is **not yet authored** — see PLAN §3.4
+#     Implementation status (UDR for AKS node egress) + the
+#     `networking.egress_next_hop_ip` stub in per-region
+#     `_defaults.yaml`. Until that follow-up lands, `terraform plan`
+#     succeeds but `terraform apply` against a live tenant will be
+#     rejected by ARM for lacking a 0.0.0.0/0 route on the node
+#     subnet; this is by design so the two halves ship atomically.
+#     `outbound_type` itself is set at cluster creation and cannot be
+#     changed later.
 
 variable "cluster_name" {
   description = "AKS managed-cluster resource name (typically `cluster.name` from cluster.yaml)."

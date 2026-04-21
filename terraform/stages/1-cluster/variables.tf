@@ -8,8 +8,11 @@
 #      << cluster.yaml, then injects `.fleet` (from _fleet.yaml), the
 #      derived identity fields (`.cluster.{name,env,region,subscription_id}`)
 #      and the `.derived.*` block (DNS zone, KV name, ACR login server,
-#      networking subnet/pod CIDRs, etc.). All structure is documented in
-#      config-loader/load.sh's header comment.
+#      per-cluster subnet names + CIDRs, cluster-slot capacity, etc.).
+#      Pod CIDR is NOT in this block — it is a fleet-wide constant
+#      hard-coded in `modules/aks-cluster/main.tf` (see PLAN §3.4
+#      Implementation status 2026-04-21). All structure is documented
+#      in config-loader/load.sh's header comment.
 #
 #   2. Named variables below — the handful of pre-created Azure resource
 #      ids this stack must reference but cannot author itself. These are

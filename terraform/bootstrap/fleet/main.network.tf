@@ -49,16 +49,16 @@ resource "terraform_data" "network_preconditions" {
       error_message = "clusters/_fleet.yaml: networking.hub.resource_id is unset, still a `<...>` placeholder, or not a /subscriptions/... resource id. Replace it with the full /subscriptions/.../virtualNetworks/<name> id of the adopter-owned hub VNet. See docs/adoption.md §5.1 + docs/networking.md."
     }
     precondition {
-      condition     = local.networking_central.pdz_blob != null && local.networking_central.pdz_blob != "" && !startswith(local.networking_central.pdz_blob, "<") && endswith(local.networking_central.pdz_blob, "privatelink.blob.core.windows.net")
-      error_message = "clusters/_fleet.yaml: networking.private_dns_zones.blob is unset, still a `<...>` placeholder, or does not end in `privatelink.blob.core.windows.net`. Replace it with the resource id of the central BYO blob PDZ. See docs/adoption.md §5.1."
+      condition     = local.networking_central.pdz_blob != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.blob\\.core\\.windows\\.net$", local.networking_central.pdz_blob))
+      error_message = "clusters/_fleet.yaml: networking.private_dns_zones.blob must be a full ARM resource id ending in `/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net`. Replace it with the resource id of the central BYO blob PDZ. See docs/adoption.md §5.1."
     }
     precondition {
-      condition     = local.networking_central.pdz_vaultcore != null && local.networking_central.pdz_vaultcore != "" && !startswith(local.networking_central.pdz_vaultcore, "<") && endswith(local.networking_central.pdz_vaultcore, "privatelink.vaultcore.azure.net")
-      error_message = "clusters/_fleet.yaml: networking.private_dns_zones.vaultcore is unset, still a `<...>` placeholder, or does not end in `privatelink.vaultcore.azure.net`. See docs/adoption.md §5.1."
+      condition     = local.networking_central.pdz_vaultcore != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.vaultcore\\.azure\\.net$", local.networking_central.pdz_vaultcore))
+      error_message = "clusters/_fleet.yaml: networking.private_dns_zones.vaultcore must be a full ARM resource id ending in `/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net`. See docs/adoption.md §5.1."
     }
     precondition {
-      condition     = local.networking_central.pdz_azurecr != null && local.networking_central.pdz_azurecr != "" && !startswith(local.networking_central.pdz_azurecr, "<") && endswith(local.networking_central.pdz_azurecr, "privatelink.azurecr.io")
-      error_message = "clusters/_fleet.yaml: networking.private_dns_zones.azurecr is unset, still a `<...>` placeholder, or does not end in `privatelink.azurecr.io`. See docs/adoption.md §5.1."
+      condition     = local.networking_central.pdz_azurecr != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.azurecr\\.io$", local.networking_central.pdz_azurecr))
+      error_message = "clusters/_fleet.yaml: networking.private_dns_zones.azurecr must be a full ARM resource id ending in `/providers/Microsoft.Network/privateDnsZones/privatelink.azurecr.io`. See docs/adoption.md §5.1."
     }
     precondition {
       condition     = try(local.networking_derived.mgmt.address_space, null) != null
