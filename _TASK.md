@@ -376,23 +376,33 @@ Design additions landed with this phase:
 
 ## Phase G — Docs
 
-- [ ] `docs/networking.md` (new):
-  - Topology diagram (ASCII).
-  - CIDR allocation rules (restate of PLAN §3.4 table, in
-    operator-oriented language).
-  - Peering matrix (hub, mgmt, each env-region).
-  - Walkthrough: adding a new cluster (single PR, slot picking
-    guidance, what to do when slots are exhausted).
-  - Walkthrough: adding a second region to an env.
-  - Fallback notes for NSP / ASG if agent-pool ASG is unsupported.
-- [ ] `docs/naming.md` — Phase-A edits landed; double-check the
-      table matches PLAN §3.3 after all phases applied.
-- [ ] `docs/adoption.md` — update §3 / §5.1 field list to reflect
-      the schema flip (Phase B). Add a pointer to
-      `docs/networking.md`.
-- [ ] `docs/onboarding-cluster.md` — flesh out the current stub
-      into a concrete walkthrough covering `subnet_slot`, private
-      DNS, and PR → Stage 1+2 flow.
+- [x] `docs/networking.md` (new) — landed in Phase E. Covers topology
+      (mermaid + ASCII), two-pool CIDR allocation rules, peering
+      matrix, new-cluster walkthrough (links to onboarding-cluster.md),
+      add-a-region flow, CGNAT pod CIDR allocation, repo-variable
+      cross-stage wiring, CNI assumptions, ASG fallback notes.
+- [x] `docs/naming.md` — Phase-A edits landed; table checked against
+      PLAN §3.3 post-Phase-E (includes cluster API/nodes subnet CIDR
+      formulas, pod CIDR row, mgmt + env VNet names, RGs, ASG name,
+      peering names, env PE NSG). No further changes required for
+      this branch.
+- [x] `docs/adoption.md` — landed 2026-04-21:
+      §2 prompted-fields table now lists the 9 networking vars (hub
+      id, four PDZs, four address_spaces, pod_cidr_slot); §3 post-init
+      edits dropped every BYO `networking.{grafana_pe_*, tfstate.*,
+      runner.*, fleet_kv.*}` bullet (all removed in Phase B) and
+      replaced them with a short paragraph pointing at
+      `docs/networking.md` + `docs/onboarding-cluster.md`; §5.1
+      networking prereqs rewritten around the four central PDZs (the
+      adopter-owned mgmt VNet + its `snet-runners` / `snet-pe-shared`
+      are no longer prerequisites — `bootstrap/fleet` owns them).
+- [x] `docs/onboarding-cluster.md` — new walkthrough landed
+      2026-04-21: directory scaffold, `subnet_slot` rules
+      (required / range via capacity formula / unique per
+      `(env,region)` / immutable), picking a slot + capacity
+      exhaustion remediation, curated-typed `cluster.aks.*`
+      passthrough callout, derived private DNS (no BYO vnet id
+      list), PR → Stage 1 + 2 matrix apply, retirement flow.
 
 ## Phase H — Cleanup + STATUS finalization
 

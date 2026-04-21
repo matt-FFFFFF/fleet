@@ -494,14 +494,25 @@ branch. Remaining implementation (Phases D–H) tracked in `_TASK.md`.
 
 ## §11 Operator UX
 
-- [x] `docs/adoption.md` — adopter flow. Will need refresh when
-      §3.4 lands in code (BYO subnet fields drop; `networking.hub` +
-      address_space fields added).
-- [ ] `docs/networking.md` — **new** file per PLAN §3.4 (topology
-      diagram, CIDR rules, peering matrix, `subnet_slot` walkthrough).
-      Not yet written.
-- [ ] `docs/onboarding-cluster.md`, `onboarding-team.md`,
-      `upgrades.md`, `promotion.md` — stubs / not written.
+- [x] `docs/adoption.md` — adopter flow. Refreshed 2026-04-21 on
+      `feat/networking-topology`: prompted-fields table now lists the
+      9 networking vars; post-init edits no longer reference the
+      removed BYO `networking.{grafana_pe_*, tfstate.*, runner.*,
+      fleet_kv.*}` fields; §5.1 networking prereqs rewritten around
+      the four central PDZs (adopter-owned, referenced by id) — the
+      mgmt VNet + `snet-pe-shared` + `snet-runners` are no longer
+      adopter prerequisites (owned by `bootstrap/fleet`).
+- [x] `docs/networking.md` — new file per PLAN §3.4 (topology
+      ASCII + mermaid, two-pool CIDR math, `subnet_slot` contract,
+      peering matrix, pod CIDR CGNAT allocation, repo-variable
+      cross-stage wiring). Landed earlier in Phase E.
+- [x] `docs/onboarding-cluster.md` — concrete walkthrough written
+      2026-04-21 on `feat/networking-topology`: directory scaffold,
+      `subnet_slot` rules (range / uniqueness / immutability),
+      capacity + second-region guidance, `cluster.aks.*` curated
+      passthrough, PR → Stage 1 + 2 apply flow, retirement.
+- [ ] `onboarding-team.md`, `upgrades.md`, `promotion.md` — stubs /
+      not written.
 
 ## §12 Risks and mitigations
 
