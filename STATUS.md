@@ -627,8 +627,13 @@ branch. Remaining implementation (Phases D–H) tracked in `_TASK.md`.
       (Phase C): legacy `networking` output (BYO per-service subnet
       ids, all null after Phase B) replaced by `networking_central`
       exposing `hub_resource_id` + four `privatelink.*` PDZ ids
-      (blob, vaultcore, azurecr, grafana). Test suite kept at 8
-      runs; one now exercises `networking_central` passthrough.
+       (blob, vaultcore, azurecr, grafana). Test suite kept at 8
+       runs; one now exercises `networking_central` passthrough.
+- [x] Terraform floor raised to `~> 1.14` across all first-party
+      modules (roots + leaves) + doc refs; exact CI/dev version
+      pinned in `.terraform-version` (1.14.7) and read by all three
+      workflows via a `tf_version` step. Required for reliable `||`
+      short-circuit in `validation {}` blocks (PR #9 selftest bug).
 
 ## Next likely units of work
 

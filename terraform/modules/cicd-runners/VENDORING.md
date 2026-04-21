@@ -31,7 +31,7 @@ verbatim with the same extension rules applied at the appropriate level.
 Rewritten to the repo-wide convention (pessimistic-minor, per AGENTS.md
 §6):
 
-- Terraform `~> 1.11`
+- Terraform `~> 1.14`
 - `hashicorp/azurerm ~> 4.20`
 - `Azure/azapi ~> 2.9`
 - `hashicorp/random ~> 3.8`

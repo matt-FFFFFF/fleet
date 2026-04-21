@@ -103,7 +103,7 @@ module "repo" {
 
 The following requirements are needed by this module:
 
-- <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) (~> 1.11)
+- <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) (~> 1.14)
 
 - <a name="requirement_github"></a> [github](#requirement\_github) (~> 6.11)
 

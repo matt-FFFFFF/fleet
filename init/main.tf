@@ -14,7 +14,7 @@
 # removed post-apply.
 
 terraform {
-  required_version = "~> 1.11"
+  required_version = "~> 1.14"
   required_providers {
     local = {
       source  = "hashicorp/local"

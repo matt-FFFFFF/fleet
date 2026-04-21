@@ -50,8 +50,17 @@ full before proposing or writing any change.
    touch all three: `docs/naming.md`, `config-loader/load.sh`, and
    the HCL `local.derived` in the affected bootstrap/stage module.
 6. **Version constraints.** Pessimistic-minor everywhere
-   (`~> X.Y`). Terraform: `~> 1.11`. Providers pinned in
-   `providers.tf` per module; see existing files for the set.
+   (`~> X.Y`). Module `required_version` floor: `~> 1.14` (minimum
+   Terraform supported by the codebase; required for reliable
+   short-circuit evaluation of `||` in `validation {}` blocks). The
+   **exact** Terraform version used by CI and local dev is pinned in
+   `.terraform-version` at the repo root — all three workflows
+   (`template-selftest.yaml`, `tflint.yaml`, `validate.yaml`) read it
+   via a `tf_version` step. Bump `.terraform-version` to upgrade CI;
+   bump the `~> 1.14` floor only when raising the minimum (touch every
+   `required_version` in `terraform/**/providers.tf` + `terraform.tf`
+   + module READMEs). Providers pinned in `providers.tf` per module;
+   see existing files for the set.
 7. **Template machinery is self-destructing.** `init/`, `init-fleet.sh`,
    `.github/workflows/template-selftest.yaml`,
    `.github/workflows/status-check.yaml`, `.github/fixtures/` are deleted

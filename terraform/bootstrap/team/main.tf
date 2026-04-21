@@ -11,7 +11,7 @@
 # CODEOWNERS ARE provisioned by the current module call below.
 
 terraform {
-  required_version = "~> 1.11"
+  required_version = "~> 1.14"
 
   required_providers {
     github = {

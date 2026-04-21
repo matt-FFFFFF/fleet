@@ -30,10 +30,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Read Terraform version
+        id: tf_version
+        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.11.4
+          terraform_version: ${{ steps.tf_version.outputs.version }}
           terraform_wrapper: false
 
       # Render `clusters/_fleet.yaml` (normally produced by `init-fleet.sh`
