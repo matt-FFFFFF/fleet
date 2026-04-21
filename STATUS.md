@@ -12,6 +12,37 @@
 > Legend: `[x]` done · `[~]` in progress / scaffolded but unapplied
 > `[ ]` not started · `[-]` deferred.
 
+Last updated: 2026-04-21 · **PR #9 review hardening (rounds 9–11).**
+Implementation-correctness fixes only; no PLAN intent changes.
+Rounds 9–10: tightened PDZ + hub `lifecycle.precondition` checks in
+`bootstrap/{fleet,environment}/main.network.tf` from `endswith(...)`
+/ `startswith("/subscriptions/")` to full ARM-id `can(regex(...))`
+matches; dropped the unused `azuread` provider from
+`stages/1-cluster/providers.tf` (re-adds when the identity/RBAC
+surface lands); rewrote the `modules/aks-cluster/variables.tf` UDR
+comment and the `stages/1-cluster/variables.tf` provenance comment
+to reflect the pod-CIDR-dropped state; replaced the distinct-count
+non-overlap check in `init/variables.tf` with a pairwise CIDR
+overlap check (mixed-prefix containment now caught); added a
+`hub_resource_id` precondition in `bootstrap/environment`. Round 11:
+added `.terraform-version` to `on.pull_request.paths` /
+`on.push.paths` in `.github/workflows/{validate,tflint}.yaml`;
+corrected `docs/onboarding-cluster.md` to distinguish curated
+`cluster.aks.*` passthroughs from top-level `node_pools.{system,
+apps}` sizing; dropped the stale `networking.pod_cidr` reference in
+`docs/networking.md`; added strict-CIDR alignment validation
+(`cidrhost(cidr, 0) == split("/", cidr)[0]`) to all four
+`networking_*_address_space` variables in `init/` to match
+`config-loader/load.sh`'s Python `ipaddress.ip_network(...,
+strict=True)` check. Tests: `init/` 32/32 (added
+`reject_env_prod_partial_overlap_with_mgmt`,
+`reject_mgmt_address_space_host_bits_set`), `fleet-identity` 8/8.
+PLAN §3.4: the "Pod CIDR allocation (CGNAT 100.64.0.0/10)"
+subsection (prior "obsolete pending cleanup revision" note) is now
+replaced in-place by a *Pod CIDR (shared, fleet-wide)* subsection;
+the Implementation-status paragraph is updated accordingly. PLAN
+§3.3 derivation-table footnote pointer updated.
+
 Last updated: 2026-04-21 · **Pod CIDR uniqueness dropped** (round 8 of
 PR #9 Copilot review, `feat/networking-topology`). Every cluster now
 shares the fleet-wide pod CIDR `100.64.0.0/16` hard-coded in

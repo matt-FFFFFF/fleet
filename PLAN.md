@@ -521,7 +521,7 @@ the per-cluster tfvars.json before Terraform ever sees it:
 | `networking.snet_runners.cidr` | second `/26` of mgmt VNet's address_space (`snet-runners`, ACA-delegated)                     |
 | `networking.snet_aks_api.cidr` | i-th `/28` of the API pool (second `/24` of env VNet), where i = `networking.subnet_slot` |
 | `networking.snet_aks_nodes.cidr` | i-th `/25` of the nodes pool (3rd `/24` onward of env VNet), where i = `networking.subnet_slot` |
-| `networking.pod_cidr`     | `100.64.0.0/16` (fleet-wide constant, hard-coded in `modules/aks-cluster/main.tf`; see §3.4 Implementation status 2026-04-21) |
+| `networking.pod_cidr`     | `100.64.0.0/16` (fleet-wide constant, hard-coded in `modules/aks-cluster/main.tf`; see §3.4 *Pod CIDR (shared, fleet-wide)*) |
 | `networking.peering_name.env_to_mgmt` | `peer-<env>-<region>-to-mgmt`                                                         |
 | `networking.peering_name.mgmt_to_env` | `peer-mgmt-to-<env>-<region>`                                                         |
 | `networking.node_asg_name`      | `asg-nodes-<env>-<region>` (one ASG per env-region, shared by all clusters in that VNet)   |
@@ -576,27 +576,26 @@ cluster-local. Per-cluster service CIDRs (derived similarly to
 cross-cluster service meshes without NAT ever become a requirement.
 
 **Implementation status (pod CIDR uniqueness — dropped 2026-04-21).**
-Earlier drafts (see "Pod CIDR allocation" below, to be collapsed in
-the next PLAN revision) prescribed per-cluster pod `/16`s derived
-from a per-env-region `pod_cidr_slot` × per-cluster `subnet_slot`
-grid, with a fleet-wide uniqueness invariant and a hard cap of 16
-env-regions per fleet. The pod CIDR is now a fleet-wide constant
-(`100.64.0.0/16`, hard-coded in `modules/aks-cluster/main.tf`). Pod
-IPs are non-routable outside the node (Azure CNI Overlay encapsulates
+Earlier drafts of this section prescribed per-cluster pod `/16`s
+derived from a per-env-region `pod_cidr_slot` × per-cluster
+`subnet_slot` grid, with a fleet-wide uniqueness invariant and a
+hard cap of 16 env-regions per fleet. The pod CIDR is now a
+fleet-wide constant (`100.64.0.0/16`, hard-coded in
+`modules/aks-cluster/main.tf`); see the *Pod CIDR (shared,
+fleet-wide)* subsection below for the current contract. Pod IPs
+are non-routable outside the node (Azure CNI Overlay encapsulates
 pod-to-pod on the node; egress SNATs to the node IP), and every
 observability tool that surfaces pod IPs (Log Analytics, managed
 Prometheus, kube-state-metrics scrapes) carries `_ResourceId` /
 cluster name in the same row, so cross-cluster disambiguation was
-already solved upstream. Collapsing the allocation grid removes:
+already solved upstream. Collapsing the allocation grid removed:
 `pod_cidr_slot` from `_fleet.yaml` (init schema + prompts), the
 `/12`-envelope math in `modules/fleet-identity/main.tf` + tests, the
 pod-CIDR python block in `terraform/config-loader/load.sh`, the
 cross-env uniqueness validation in `init/`, and the 16-env-region
 cap. If ClusterMesh or any other cross-cluster pod routing is
 introduced later, `pod_cidr` becomes a per-cluster input again and
-the derivation returns. The "Pod CIDR allocation" subsection further
-down in this §3.4 is now **obsolete**; a cleanup commit will strike
-it in the next PLAN revision.
+the derivation returns.
 
 **Tiers.**
 
@@ -791,48 +790,33 @@ Design notes:
 | `<ENV>_<REGION>_VNET_RESOURCE_ID`                 | `bootstrap/environment`   | Stage 1 (per-cluster subnets parent; DNS zone link)              |
 | `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`             | `bootstrap/environment`   | Stage 1 (AKS node-pool ASG attachment, or NSG rule author)       |
 
-**Pod CIDR allocation (CGNAT 100.64.0.0/10).**
+**Pod CIDR (shared, fleet-wide).**
 
-Pod IPs come from a non-routable CGNAT space, completely disjoint from
-the VNet address plan. This keeps the (relatively cramped) VNet `/20`
-available for nodes / PEs / future subnets and means pod-to-pod traffic
-never needs a routing decision at the fabric layer — Azure CNI Overlay
-+ Cilium handles it in-node.
+Pod IPs come from a single fleet-wide CGNAT block, `100.64.0.0/16`,
+hard-coded in `modules/aks-cluster/main.tf`. Every cluster in the
+fleet uses the same pod CIDR. This is safe because Azure CNI
+**Overlay** + Cilium encapsulates pod-to-pod traffic on the node
+and SNATs egress to the node IP — pod IPs are never visible on the
+wire outside the node and never routed at the VNet fabric. Every
+observability surface that reports pod IPs (Log Analytics, managed
+Prometheus, kube-state-metrics) carries `_ResourceId` / cluster name
+in the same row, so cross-cluster disambiguation by pod IP is not
+required.
 
-Allocation is indexed by two orthogonal slots:
+The service CIDR is likewise fleet-wide: `100.127.0.0/16`, hard-coded
+in the same module with `dns_service_ip = 100.127.0.10`. It is
+disjoint from the shared pod `/16` by construction (top `/16` of the
+same `100.64.0.0/10` CGNAT block). See the
+*Implementation status (service CIDR reservation)* paragraph near
+the top of this section for rationale.
 
-- `pod_cidr_slot` — integer `[0, 15]`, declared **per env-region** in
-  `_fleet.yaml.networking.envs.<env>.regions.<region>.pod_cidr_slot`.
-  Unique across the entire fleet (not just one env). Immutable once
-  set; changing it renumbers every cluster's pod CIDR, which AKS does
-  not support in place.
-- `subnet_slot` — the per-cluster integer `[0, capacity-1]` already
-  declared in `cluster.yaml.networking.subnet_slot` (see above). Same
-  value indexes the cluster's subnets and its pod CIDR; operators
-  reason about "cluster 3" not "cluster 3 api / cluster 3 nodes /
-  cluster 3 pods."
-
-```
-pod_cidr = 100.[64 + pod_cidr_slot*16 + subnet_slot].0.0/16
-         └─────────┬─────────┘ └─────┬─────┘
-         env-region /12 envelope     cluster offset within envelope
-```
-
-Concretely, for `pod_cidr_slot = 1` (nonprod/eastus) and
-`subnet_slot = 0` (first cluster): `pod_cidr = 100.80.0.0/16` — 65 536
-pod IPs, enough for 262 nodes at the default `max_pods = 250`.
-
-The full `100.64.0.0/10` carries 16 env-region envelopes (a single
-`/12`) × 16 cluster slots per envelope × `/16` pods per cluster.
-Capacity is intentionally ample; operators hitting the 16-env-region
-cap add a second CGNAT pool by design change (PLAN update required).
-
-Derivation parity: `config-loader/load.sh` (python3 `ipaddress` block,
-emits `.derived.networking.pod_cidr`) and
-`modules/fleet-identity/main.tf`
-(`networking_derived.envs.<k>.pod_cidr_envelope`) compute this
-independently and must agree. `docs/naming.md` is the derivation
-contract.
+Re-introducing per-cluster pod CIDRs is a bounded change if
+ClusterMesh or any cross-cluster pod routing is ever adopted: restore
+the `pod_cidr` variable in `modules/aks-cluster`, re-derive it in
+`config-loader/load.sh` from a per-env-region slot, and thread it
+through Stage 1. The previous per-cluster derivation (`pod_cidr_slot`
+× `subnet_slot` grid over `100.64.0.0/10`) is documented in git
+history on `feat/networking-topology` at PR #9 round 7.
 
 **Stage 1 AKS module passthrough (`cluster.aks.*`).**
 
