@@ -45,6 +45,7 @@ output "networking_derived" {
           peering_mgmt_to_spoke_name,    # null when env == "mgmt"
           create_reverse_peering,
           mgmt_environment_for_vnet_peering,
+          egress_next_hop_ip,            # null unless adopter filled it
           # mgmt-only fleet-plane fields; null for non-mgmt:
           snet_pe_fleet_cidr, snet_runners_cidr,
           nsg_pe_fleet_name, nsg_runners_name

@@ -472,6 +472,18 @@ run "render_networking_shape" {
     error_message = "create_reverse_peering must be omitted from the template (default true applied downstream)."
   }
 
+  # egress_next_hop_ip is emitted as null on every env-region so that
+  # `yamldecode(...).networking.envs.<env>.regions.<region>` exposes the
+  # key to fleet-identity + config-loader. Adopters overwrite after init.
+  assert {
+    condition = alltrue([
+      yamldecode(local_file.fleet_yaml.content).networking.envs.mgmt.regions.eastus.egress_next_hop_ip == null,
+      yamldecode(local_file.fleet_yaml.content).networking.envs.nonprod.regions.eastus.egress_next_hop_ip == null,
+      yamldecode(local_file.fleet_yaml.content).networking.envs.prod.regions.eastus.egress_next_hop_ip == null,
+    ])
+    error_message = "networking.envs.<env>.regions.<region>.egress_next_hop_ip must be emitted as null on every env-region (PLAN §3.4; adopters fill it in post-init)."
+  }
+
   # Legacy fleet-plane mgmt VNet block is gone.
   assert {
     condition     = !can(yamldecode(local_file.fleet_yaml.content).networking.vnets)

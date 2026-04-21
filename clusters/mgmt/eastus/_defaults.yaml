@@ -3,19 +3,10 @@
 # Merged under every cluster file by terraform/config-loader/load.sh:
 #   fleet/_defaults.yaml << env/_defaults.yaml << region/_defaults.yaml << cluster.yaml
 #
-# Add region-wide mgmt/eastus tunables here. The main reason this
-# file exists is to carry the per-env-per-region default-route next
-# hop for AKS node egress (see PLAN §3.4 UDR note); everything else
-# should stay in the nearest layer that makes sense.
-#
-# `networking.egress_next_hop_ip` — private IP of the hub firewall /
-# NVA that terminates the 0.0.0.0/0 route installed on each cluster's
-# node subnet. Stage 1 (AKS) hard-codes `outbound_type =
-# userDefinedRouting`; the route-table resource that *applies* this
-# next-hop on the node subnet is a tracked follow-up (not authored
-# yet). Leaving this `null` is deliberate in the template repo —
-# adopters overwrite it with their real hub firewall IP the first
-# time a cluster in this region is created. Once the follow-up lands,
-# this key becomes required and Stage 1 will fail-fast if null.
-networking:
-  egress_next_hop_ip: null
+# Per-env-region networking config (address_space, egress_next_hop_ip,
+# create_reverse_peering, mgmt_environment_for_vnet_peering) lives in
+# `_fleet.yaml` under `networking.envs.mgmt.regions.eastus` — not here.
+# This file is a placeholder for future region-wide mgmt/eastus
+# tunables that do NOT belong in _fleet.yaml (e.g. region-specific
+# cluster defaults). Empty until the first such tunable appears.
+{}

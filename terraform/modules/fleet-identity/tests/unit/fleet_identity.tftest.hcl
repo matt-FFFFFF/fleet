@@ -458,6 +458,11 @@ run "networking_derived_populates_topology_at_slash20" {
     condition     = output.networking_derived.envs["nonprod/eastus"].create_reverse_peering == true
     error_message = "create_reverse_peering default must pass through as true."
   }
+
+  assert {
+    condition     = output.networking_derived.envs["nonprod/eastus"].egress_next_hop_ip == null
+    error_message = "egress_next_hop_ip must default to null when absent from fleet_doc."
+  }
 }
 
 # ---- networking_derived: create_reverse_peering = false honored ------------
@@ -497,6 +502,7 @@ run "networking_derived_honors_create_reverse_peering_false" {
               eastus = {
                 address_space          = ["10.70.0.0/20"]
                 create_reverse_peering = false
+                egress_next_hop_ip     = "10.0.0.4"
               }
             }
           }
@@ -508,6 +514,11 @@ run "networking_derived_honors_create_reverse_peering_false" {
   assert {
     condition     = output.networking_derived.envs["prod/eastus"].create_reverse_peering == false
     error_message = "create_reverse_peering = false must pass through for downstream gating of reverse-half authoring."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["prod/eastus"].egress_next_hop_ip == "10.0.0.4"
+    error_message = "egress_next_hop_ip must pass through verbatim; bootstrap/environment gates route-entry creation on non-null."
   }
 
   # Name is still derived (Stage -1 uses create_reverse_peering to

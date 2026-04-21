@@ -175,6 +175,16 @@ fi
 # `address_space` is a YAML list of CIDR strings (possibly empty until
 # adopter fills it in). CIDR math uses the first entry.
 
+# Adopter-supplied UDR next-hop IP for this env-region. Pulled from
+# `_fleet.yaml`.networking.envs.<env>.regions.<region>.egress_next_hop_ip
+# (PLAN §3.4). Null is the template-repo default; Stage 1 fails fast
+# on null for regions that host clusters. Previously this field lived
+# in clusters/<env>/<region>/_defaults.yaml; it now sits with the rest
+# of the per-env-region networking config.
+egress_next_hop_ip="$(printf '%s' "$fleet_json" | jq -r --arg env "$env" --arg region "$region" '
+  .networking.envs[$env].regions[$region].egress_next_hop_ip // empty
+')"
+
 subnet_slot="$(printf '%s' "$merged_json" | jq -r '.networking.subnet_slot // empty')"
 [[ -n "$subnet_slot" ]] || die "cluster.yaml at $cluster_path is missing required field networking.subnet_slot (see PLAN §3.4)"
 case "$subnet_slot" in
@@ -391,6 +401,7 @@ jq -n \
   --arg snet_runners  "$snet_runners_name" \
   --arg nsg_pe_fleet  "$nsg_pe_fleet_name" \
   --arg nsg_runners   "$nsg_runners_name" \
+  --arg egress_hop    "$egress_next_hop_ip" \
   --argjson slot   "$subnet_slot" \
   '
   # Empty-string → null helper.
@@ -425,7 +436,8 @@ jq -n \
          peering_mgmt_to_spoke_name:    ($p_m2s             | orNull),
          snet_pe_fleet_name:            ($snet_pe_fleet     | orNull),
          snet_runners_name:             ($snet_runners      | orNull),
-         nsg_pe_fleet_name:             ($nsg_pe_fleet      | orNull),
-         nsg_runners_name:              ($nsg_runners       | orNull)
+         nsg_pe_fleet_name:             ($nsg_pe_fleet     | orNull),
+         nsg_runners_name:              ($nsg_runners      | orNull),
+         egress_next_hop_ip:            ($egress_hop       | orNull)
        } + $cidrs)
      }'

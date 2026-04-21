@@ -105,6 +105,19 @@ networking:                                            # Repo-owned VNets + BYO 
   #                             by Stage 1, keyed off `networking.subnet_slot`
   #                             in each cluster.yaml (/20 → 16 slots;
   #                             /21 → 12; /22 → 4). See PLAN §3.4.
+  #   egress_next_hop_ip        Private IP of the hub firewall / NVA that
+  #                             terminates the 0.0.0.0/0 UDR on the
+  #                             cluster-workload subnets in this
+  #                             env-region. `bootstrap/environment`
+  #                             authors `rt-aks-<env>-<region>` on every
+  #                             region unconditionally; the
+  #                             `0.0.0.0/0` route entry is only created
+  #                             when this is non-null. Stage 1 fails
+  #                             fast at cluster apply if null for a
+  #                             region that hosts clusters. Adopters
+  #                             leave `null` in the template repo and
+  #                             fill in before the first cluster apply
+  #                             in each region.
   #   create_reverse_peering    Optional, default true. Set false when
   #                             the hub is owned by a team that forbids
   #                             spoke-initiated reverse peerings.
@@ -124,6 +137,9 @@ networking:                                            # Repo-owned VNets + BYO 
       regions:
         ${primary_region}:
           address_space: ["${cfg.address_space}"]
+          # Private IP of the hub firewall / NVA; fill in before first
+          # cluster apply in this region. See docs/adoption.md.
+          egress_next_hop_ip: null
 %{ if env == "mgmt" ~}
           # Which env's hub this mgmt VNet peers into. Must name an env
           # declared under `networking.hubs` with the same region.

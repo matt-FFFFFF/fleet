@@ -127,6 +127,7 @@ locals {
         address_space                     = try(tolist(region_block.address_space), null)
         cidr                              = try(tolist(region_block.address_space)[0], null)
         location                          = try(region_block.location, region_name)
+        egress_next_hop_ip                = try(region_block.egress_next_hop_ip, null)
         create_reverse_peering            = try(region_block.create_reverse_peering, true)
         mgmt_environment_for_vnet_peering = try(region_block.mgmt_environment_for_vnet_peering, null)
       }
@@ -197,6 +198,14 @@ locals {
         # Per-env-region peering toggles (passthroughs).
         create_reverse_peering            = r.create_reverse_peering
         mgmt_environment_for_vnet_peering = r.mgmt_environment_for_vnet_peering
+
+        # Adopter-supplied next-hop IP for the `0.0.0.0/0` UDR on
+        # cluster-workload subnets. `bootstrap/environment` authors
+        # `rt-aks-<env>-<region>` on every env-region unconditionally;
+        # the route entry is only created when this is non-null.
+        # Stage 1 preconditions on non-null at cluster-apply time for
+        # regions that host clusters. Null is the template-repo default.
+        egress_next_hop_ip = r.egress_next_hop_ip
 
         # Mgmt-only fleet-plane zone (PLAN §3.4 L691-706). Upper /(N+1)
         # of A; within it, snet-runners = first /23, snet-pe-fleet =

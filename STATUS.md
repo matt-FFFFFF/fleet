@@ -61,7 +61,12 @@
       runs pass, including `render_open_map_extra_env` (declares a
       `dev` env and asserts uniform fan-out into
       `hubs`/`networking.envs`/`envs`) + 14 `reject_environments_*`
-      runs covering every validation rule.
+      runs covering every validation rule. Schema addendum (unit 5):
+      template now emits
+      `networking.envs.<env>.regions.<region>.egress_next_hop_ip: null`
+      for every env-region (moved out of
+      `clusters/<env>/<region>/_defaults.yaml`); adopters edit
+      `_fleet.yaml` post-init.
 - [x] `clusters/_defaults.yaml` + env `_defaults.yaml`.
 - [x] `clusters/_template/cluster.yaml` onboarding scaffold with
       `networking.subnet_slot` required field.
@@ -88,9 +93,13 @@
     the Python CIDR helper (fleet zone = upper /(N+1); runners =
     first /23; pe-fleet = 8th /26 of the fleet zone) — Python
     raises a structured error if mgmt address_space is < /20.
-    Manual smoke test vs the example clusters passes
-    (`aks-mgmt-01` and `aks-nonprod-01`). No unit-test harness for
-    load.sh yet; gap tracked as deferred.
+     Manual smoke test vs the example clusters passes
+     (`aks-mgmt-01` and `aks-nonprod-01`). No unit-test harness for
+     load.sh yet; gap tracked as deferred. Schema addendum (unit 5):
+     `egress_next_hop_ip` now read from
+     `networking.envs.<env>.regions.<region>.egress_next_hop_ip` in
+     `_fleet.yaml` (was previously sourced from the region-level
+     `_defaults.yaml`); emitted in `derived.networking` passthrough.
   - `modules/fleet-identity/` — **done** (unit 1): rewritten to PLAN
     §3.1/§3.3/§3.4 shape. `envs.mgmt.location` replaces
     `fleet.primary_region` fallback. `networking_central.hubs` is a
@@ -145,55 +154,45 @@
   - [ ] GH Apps (`fleet-meta`, `stage0-publisher`, `fleet-runners`) —
         documented as TODO in `main.github.tf`; manifest-flow helper
         not written. Not affected by drift.
-- [!] `bootstrap/environment/` — **rework required**. Concrete drift:
-  - `main.tf` L30-32 reads `local.fleet_doc.environments[var.env]` →
-    `envs[var.env]`.
-  - `main.tf` L36 defaults location from `local.fleet.primary_region`
-    → must default from `local.envs.mgmt.location` (for env=mgmt) or
-    from the env-region map for other envs.
-  - `variables.tf` L15-29 validation yamldecodes `.environments` →
-    `.envs`.
-  - `variables.tf` L54-70 `variable "mgmt_vnet_resource_id"` (scalar
-    ARM id, docstring referencing `MGMT_VNET_RESOURCE_ID`) → REMOVE
-    entirely. Replace with a per-region map input (e.g.
-    `mgmt_vnet_resource_ids = { <region> = <id> }`) sourced from
-    `MGMT_<REGION>_VNET_RESOURCE_ID` GH env vars.
-  - `main.network.tf` has NO `var.env == "mgmt"` branch. Must add:
-    when `env == "mgmt"`, skip VNet creation (VNets pre-exist from
-    `bootstrap/fleet`) and carve cluster-workload subnets as
-    `azapi_resource` children on the referenced VNet id using the
-    Network Contributor grant pre-placed by `bootstrap/fleet`.
-  - `main.network.tf` L166-174 `subnets = { pe-env = {...} }` is
-    missing api pool, nodes pool, and route table. PLAN §4.1 L1326-1334
-    requires `snet-aks-api` (api pool `/24`), `snet-aks-nodes`
-    (nodes pool `/21`), and `rt-aks-<env>-<region>` with `0.0.0.0/0`
-    → `networking.egress_next_hop_ip` UDR, associated with BOTH the
-    api and nodes subnets. Currently the file's comment L17-19 says
-    these are "NOT created here" — directly contradicts PLAN.
-  - `main.network.tf` L177-178 reads scalar
-    `local.networking_central.hub_resource_id` → per-env-region hub
-    map.
-  - `main.peering.tf` L27 iterates `local.vnet_keys_by_region`
-    unconditionally → must guard `var.env != "mgmt"` (mgmt doesn't
-    peer to itself).
-  - `main.peering.tf` L32 `remote_virtual_network_id = var.mgmt_vnet_resource_id`
-    (scalar) → pick per-region mgmt VNet id via
-    `mgmt_environment_for_vnet_peering` + region lookup.
-  - `main.peering.tf` L41-46 hardcodes `create_reverse_peering = true`
-    and unconditionally populates reverse-peering fields → must read
-    `networking.envs.<env>.regions.<region>.create_reverse_peering`
-    (default true) and null reverse fields when false.
-  - `main.network.tf` L227-250 `node_asg` for env=mgmt resolves
-    `local.env_rg_id` to `rg-net-mgmt` (wrong, must be
-    `rg-net-mgmt-<region>`).
-  - `main.github.tf` L130-168 publishes per-region
-    `<ENV>_<REGION>_VNET_RESOURCE_ID` +
-    `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID` correctly in shape, but
-    for env=mgmt the underlying map sources from a module that
-    won't run → path is structurally broken until the env=mgmt
-    branch above lands.
-  - `outputs.tf` L31-42 per-region outputs rely on module outputs;
-    same structural dependency as above.
+- [~] `bootstrap/environment/` — **rework done** (unit 5): aligned
+      with PLAN §3.4 uniform env-region model. `variables.tf` renamed
+      `.environments` → `.envs` in the fleet-yaml guard; scalar
+      `var.mgmt_vnet_resource_id` removed and replaced with
+      `var.mgmt_vnet_resource_ids` (map(string) keyed by mgmt region,
+      fed from the JSON-encoded `MGMT_VNET_RESOURCE_IDS` GH env var
+      published by `bootstrap/fleet`). `main.tf` collapses `envs` rename
+      and derives `local.location` from `envs.mgmt.location` when
+      env=mgmt, else first declared region under
+      `networking.envs.<env>.regions`. `main.network.tf` rewritten
+      into two branches: for `env != "mgmt"` the sub-vending module
+      authors `rg-net-<env>-<region>` + `vnet-<fleet>-<env>-<region>`
+      (one per region, `mesh_peering_enabled=true`) with only hub
+      peering + NSG in-module (subnets empty so the env=mgmt branch
+      stays uniform); for `env == "mgmt"` the pre-existing mgmt VNets
+      (`var.mgmt_vnet_resource_ids[region]`) are used as parents
+      directly and the env-PE NSG is created here. Uniform
+      cluster-workload carves applied to both branches as azapi
+      children: `snet-pe-env` (/26), `rt-aks-<env>-<region>` route
+      table shell (per-region; `0.0.0.0/0` route entry conditional on
+      `networking.envs.<env>.regions.<region>.egress_next_hop_ip`
+      being non-null), `asg-nodes-<env>-<region>` ASG, and the
+      443-from-node-ASG NSG rule. `main.peering.tf` rewritten to skip
+      env=mgmt entirely (`for_each = local.is_mgmt ? {} : ...`);
+      resolves the peer mgmt region via same-region-else-first
+      (mirrors fleet-identity's peering-name derivation);
+      `remote_virtual_network_id` per-region; honours
+      `local.env_regions[k].create_reverse_peering` for both
+      `create_reverse_peering` and `sync_remote_address_space_enabled`.
+      `main.github.tf` + `outputs.tf` unchanged — the existing
+      per-region maps (`env_vnet_id_by_region`, `node_asg`,
+      `env_snet_pe_env_id_by_region`) keep their shapes under both
+      branches. Schema-level additions: `egress_next_hop_ip` moved
+      out of `clusters/<env>/<region>/_defaults.yaml` into
+      `networking.envs.<env>.regions.<region>.egress_next_hop_ip` so
+      the whole per-env-region networking surface lives in one place
+      (see §3.1 / §3.3 below); PLAN §3.4 prose updated in lockstep.
+      `terraform validate` + `fmt -check` + 45 unit tests
+      (8 fleet-identity, 37 init) pass.
 - [~] `bootstrap/team/` — refactored onto the vendored module;
       awaits `team-bootstrap.yaml` CI flow. Not affected by networking
       drift.
@@ -333,12 +332,16 @@
 
 - [~] **Phase 1 (Skeleton)** — in progress:
   - [x] Repo scaffold per §2.
-  - [!] `_fleet.yaml` (generated) + `_defaults.yaml` — rendering
-        driven by `init/` which drifts from PLAN; see §3.1 above.
+  - [~] `_fleet.yaml` (generated) + `_defaults.yaml` — renderer
+        PLAN-compliant after unit 2; end-to-end adoption flow still
+        blocked on downstream consumers (`bootstrap/environment`,
+        stages 0/1). See §3.1.
   - [~] `bootstrap/fleet` code; not applied; PLAN-compliant after
         unit 4 (mgmt VNet shells + fleet-plane subnets per-region).
-  - [!] `bootstrap/environment` code; not applied; **rework required**
-        per §4 Stage -1 above.
+  - [~] `bootstrap/environment` code; not applied; PLAN-compliant
+        after unit 5 (env=mgmt vs non-mgmt branches, uniform
+        cluster-workload carves, per-region peering,
+        `mgmt_vnet_resource_ids` map).
   - [!] `stages/0-fleet` body; not applied; **rework required** on
         ACR PE subnet name + source.
   - [!] `stages/1-cluster` — **rework required** on mgmt VNet
@@ -475,15 +478,34 @@ self-contained enough to land in its own PR.
    document the JSON-map variable shape. `terraform validate` +
    `terraform fmt -check` + all 45 unit tests (8 fleet-identity,
    37 init) pass.
-5. **`bootstrap/environment` network** — add env=mgmt branch that
-   references pre-existing mgmt VNet via per-region input and
-   carves subnets as `azapi_resource` children; add api pool +
-   nodes pool subnets and `rt-aks-<env>-<region>` route table with
-   `0.0.0.0/0` UDR associated to both subnets; rewrite
-   `main.peering.tf` to guard `var.env != "mgmt"` and honour
-   per-env-region `create_reverse_peering`; replace scalar
-   `var.mgmt_vnet_resource_id` with per-region map; fix `main.tf`
-   `envs.<env>` rename and location default.
+ 5. **`bootstrap/environment` network** — ✅ **Done.** `variables.tf`
+    renamed `.environments` → `.envs` in fleet-yaml guard; scalar
+    `var.mgmt_vnet_resource_id` replaced with per-region
+    `var.mgmt_vnet_resource_ids` (map(string), non-empty, full
+    ARM-id regex). `main.tf` `envs` rename + `local.location`
+    defaulting to `envs.mgmt.location` for env=mgmt else first
+    region under `networking.envs.<env>.regions`. `main.network.tf`
+    rewritten into env=mgmt vs env≠mgmt branches: sub-vending
+    (non-mgmt) authors `rg-net-<env>-<region>` + VNet shell + hub
+    peering + NSG with `subnets = {}`; env=mgmt references
+    `var.mgmt_vnet_resource_ids[region]` and creates env-PE NSG in
+    `rg-net-mgmt-<region>`. Uniform cluster-workload carves
+    (`snet-pe-env`, `rt-aks-<env>-<region>` with conditional
+    `0.0.0.0/0` route, `asg-nodes-<env>-<region>`, 443-from-ASG
+    NSG rule) applied as azapi children under both branches.
+    `main.peering.tf` rewritten to guard env=mgmt
+    (`for_each = local.is_mgmt ? {} : ...`); per-region peer VNet
+    id resolved same-region-else-first; honours per-region
+    `create_reverse_peering` for both the flag and
+    `sync_remote_address_space_enabled`. Schema-level addition:
+    `egress_next_hop_ip` moved from
+    `clusters/<env>/<region>/_defaults.yaml` into
+    `networking.envs.<env>.regions.<region>.egress_next_hop_ip` so
+    the whole per-env-region networking surface lives in
+    `_fleet.yaml`; `init/templates/_fleet.yaml.tftpl` emits `null`,
+    `modules/fleet-identity/` + `config-loader/load.sh` pass it
+    through. PLAN §3.4 prose updated in lockstep. `terraform
+    validate` + `fmt -check` + all 45 unit tests pass.
 6. **Stage 1 rework** — replace `var.mgmt_vnet_resource_id` with
    per-region resolution; add mgmt-cluster DNS-link collapse; add
    `var.route_table_resource_id` input and set `routeTableId` on

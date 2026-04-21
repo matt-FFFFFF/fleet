@@ -585,16 +585,18 @@ structure and Azure-resource names.
 **UDR for AKS egress.** `modules/aks-cluster` sets
 `network_profile.outbound_type = userDefinedRouting`. The hub-firewall
 next-hop IP that both AKS api-server and node traffic route
-`0.0.0.0/0` at is carried as `networking.egress_next_hop_ip` in each
-env's region-scope `_defaults.yaml`
-(`clusters/<env>/<region>/_defaults.yaml`); adopters fill this in
-with their hub firewall / NVA private IP before creating a cluster in
-that region. The route table is authored by `bootstrap/environment`
-on every env-region VNet (mgmt included) and associated with **both**
-the nodes subnet and the api-server delegated subnet — AKS
-api-server VNet integration egresses through the same next-hop as
-nodes. Stage 1 fails fast when `egress_next_hop_ip` is null for a
-region that hosts clusters.
+`0.0.0.0/0` at is carried as `egress_next_hop_ip` on each env-region
+entry in `_fleet.yaml`
+(`networking.envs.<env>.regions.<region>.egress_next_hop_ip`);
+adopters fill this in with their hub firewall / NVA private IP before
+creating a cluster in that region. `bootstrap/environment` always
+authors the `rt-aks-<env>-<region>` route table shell on every
+env-region VNet (mgmt included); the `0.0.0.0/0` route entry is only
+created when `egress_next_hop_ip` is non-null. The route table is
+associated with **both** the nodes subnet and the api-server delegated
+subnet — AKS api-server VNet integration egresses through the same
+next-hop as nodes. Stage 1 fails fast when `egress_next_hop_ip` is
+null for a region that hosts clusters.
 
 **Service CIDR reservation.** `modules/aks-cluster` hard-codes
 `network_profile.service_cidr = 100.127.0.0/16` with
@@ -1334,11 +1336,15 @@ Creates:
       (nodes) per §3.4; Stage 1 carves per-cluster `/28`/`/25`
       subnets by `subnet_slot`.
     - **Route table** `rt-aks-<env>-<region>` with a `0.0.0.0/0`
-      route to `networking.egress_next_hop_ip`, associated with
-      both the api-server delegated subnets and the nodes subnets
-      for every cluster in the region (Stage 1 creates the per-slot
-      associations; this stage creates the route table + the route
-      entry).
+      route to
+      `networking.envs.<env>.regions.<region>.egress_next_hop_ip`
+      when that field is non-null. The route table shell is created
+      unconditionally (so Stage 1 can associate it on both the api
+      and nodes subnets); the route entry is only authored when the
+      adopter has supplied the next-hop IP. Both subnets have
+      `routeTableId` set from this table (Stage 1 creates the
+      per-slot associations; this stage creates the route table + the
+      route entry).
 - **Spoke↔mgmt peerings** — for every non-mgmt env-region, one call
   to `Azure/avm-res-network-virtualnetwork/azurerm//modules/peering`
   with `create_reverse_peering =
