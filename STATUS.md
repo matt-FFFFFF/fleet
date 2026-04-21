@@ -209,9 +209,15 @@
   - [x] Kargo mgmt UAMI (`uami-kargo-mgmt`) + `AcrPull` on fleet ACR.
   - [x] Redirect URIs derived from cluster inventory.
   - [x] Outputs exported per PLAN §4 Stage 0 table.
-  - [!] Fleet ACR private endpoint rewire to derived subnet — was
-        tracked as `snet-pe-shared`; rename to `snet-pe-fleet` per
-        PLAN and source from per-region mgmt subnet map.
+  - [x] Fleet ACR private from first apply via `snet-pe-fleet` PE
+        (unit 7): `publicNetworkAccess = Disabled`; `azapi_resource.acr_pe`
+        + `privateDnsZoneGroup` land in the mgmt VNet's `snet-pe-fleet`
+        co-located with `acr.location` (same-region-else-first). New
+        `var.mgmt_pe_fleet_subnet_ids` populated in CI from
+        `fromjson(vars.MGMT_PE_FLEET_SUBNET_IDS)`, published on the
+        `fleet-stage0` env by `bootstrap/fleet/main.github.tf`. PDZ id
+        read from `networking.private_dns_zones.azurecr` with shape
+        precondition. Mirrors the state SA / fleet KV PE pattern.
 
 ### Stage 1 — `terraform/stages/1-cluster`
 
@@ -556,8 +562,22 @@ self-contained enough to land in its own PR.
    header comments rewritten on every touched file. `terraform
    validate` + `fmt -recursive` pass on `stages/1-cluster` and
    `bootstrap/environment`.
-7. **Stage 0 ACR PE** — rewire to derived `snet-pe-fleet` in the
-   correct mgmt region.
+7. **Stage 0 ACR PE** — ✅ **Done.** Fleet ACR flipped to
+   `publicNetworkAccess = Disabled` from the first apply;
+   `azapi_resource.acr_pe` + `privateDnsZoneGroup` land in the mgmt
+   VNet's `snet-pe-fleet` co-located with `acr.location` (same-region-
+   else-first fallback). New `var.mgmt_pe_fleet_subnet_ids` (non-empty
+   map with full-ARM-subnet-id shape validation) populated in CI from
+   `fromjson(vars.MGMT_PE_FLEET_SUBNET_IDS)`; that repo variable is
+   now published on the `fleet-stage0` env by
+   `bootstrap/fleet/main.github.tf` (was `fleet-meta`-only). PDZ id
+   sourced from `networking.private_dns_zones.azurecr` via a new
+   `local.pdz_azurecr` read, with shape precondition on the PE.
+   Mirrors the state SA / fleet KV PE selector pattern in
+   `bootstrap/fleet`. `terraform validate` green on all four stacks;
+   end-to-end smoke (`init-fleet.sh --non-interactive` + `validate` on
+   `bootstrap/{fleet,environment}` + `stages/{0-fleet,1-cluster}`)
+   passes clean.
 8. **Docs** — rewrite `docs/naming.md`, `docs/networking.md`,
    `docs/adoption.md`, `docs/onboarding-cluster.md` per §11
    drift list.
