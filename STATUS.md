@@ -12,7 +12,24 @@
 > Legend: `[x]` done · `[~]` in progress / scaffolded but unapplied
 > `[ ]` not started · `[-]` deferred.
 
-Last updated: 2026-04-21 · **PR #9 review hardening (rounds 9–11).**
+Last updated: 2026-04-21 · **PR #9 mgmt-tier collapse (in flight).**
+Scope shift during PR #9 round-12 triage: the pre-collapse design kept
+two separate mgmt VNets (fleet-tier `networking.vnets.mgmt` for CI
+plane + env-tier `networking.envs.mgmt.regions.<region>` for the
+mgmt K8s cluster), which cost N extra mgmt↔env peerings and a
+dedicated `bootstrap/environment` invocation for `env=mgmt`. The
+single collapsed mgmt VNet now hosts both the CI plane (PE subnet +
+runner subnet) and the mgmt-tier AKS clusters (api `/28` pool +
+nodes `/25` pool + per-region node ASG). `networking.envs.mgmt` is
+removed from `_fleet.yaml`. `bootstrap/environment` gains a
+**BYO-vnet mode** (driven by optional `vnet_resource_id` +
+`pe_subnet_id` inputs) so it can still be invoked for `env=mgmt`
+to create the observability stack (AMW/DCE/Grafana PE/AG) without
+re-creating the VNet. Mgmt is single-region in v1 (fleet
+`primary_region`). See PLAN §3.4 *Implementation status (mgmt-tier
+collapse — 2026-04-21)* for the full rationale.
+
+Prior status: **PR #9 review hardening (rounds 9–11).**
 Implementation-correctness fixes only; no PLAN intent changes.
 Rounds 9–10: tightened PDZ + hub `lifecycle.precondition` checks in
 `bootstrap/{fleet,environment}/main.network.tf` from `endswith(...)`

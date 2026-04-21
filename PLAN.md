@@ -352,10 +352,13 @@ networking:
     azurecr: /subscriptions/<sub-hub>/.../privatelink.azurecr.io
     grafana: /subscriptions/<sub-hub>/.../privatelink.grafana.azure.com
   # Mgmt-tier VNet owned by `bootstrap/fleet` via the
-  # `Azure/avm-ptn-alz-sub-vending/azure` module (N=1). Houses the
-  # shared-PE subnet (tfstate SA, fleet KV, fleet ACR) and the
-  # ACA-delegated runner subnet. Subnet CIDRs are derived per
-  # docs/naming.md from the address_space below.
+  # `Azure/avm-ptn-alz-sub-vending/azure` module (N=1). Houses BOTH
+  # the CI-plane PEs (tfstate SA, fleet KV, fleet ACR) + ACA-delegated
+  # runner subnet AND the mgmt-tier AKS cluster subnets (api /28 pool
+  # + nodes /25 pool, same two-pool design as env VNets — see §3.4).
+  # Single-region in v1 (mgmt clusters live in the fleet's
+  # `primary_region`). Subnet CIDRs are derived per docs/naming.md
+  # from the address_space below.
   vnets:
     mgmt:
       location: eastus
@@ -363,9 +366,10 @@ networking:
   # Env-tier VNets owned by `bootstrap/environment` via the same
   # sub-vending module (mesh_peering_enabled=true intra-env,
   # hub_peering to `networking.hub.resource_id` per VNet). One VNet
-  # per env-per-region. Mgmt↔env peerings are authored separately in
+  # per env-per-region. Mgmt↔env peerings are authored in
   # `bootstrap/environment` via the peering AVM module (both halves
-  # in env state; see §3.4).
+  # in env state; see §3.4). No `envs.mgmt` key — mgmt clusters live
+  # in the mgmt-tier VNet above, not in an env-tier VNet.
   envs:
     nonprod:
       regions:
@@ -517,14 +521,14 @@ the per-cluster tfvars.json before Terraform ever sees it:
 | `cluster.domain`          | `<dns.zone_fqdn>` (used for `argocd.<domain>`, `kargo.<domain>`)                                   |
 | `networking.vnet_name`    | `vnet-<fleet.name>-mgmt` (mgmt) / `vnet-<fleet.name>-<env>-<region>` (env)                         |
 | `networking.net_rg_name`  | `rg-net-mgmt` (mgmt) / `rg-net-<env>` (env)                                                        |
-| `networking.snet_pe.cidr` | first `/26` of the VNet's address_space (mgmt → `snet-pe-shared`; env → `snet-pe-env`)             |
-| `networking.snet_runners.cidr` | second `/26` of mgmt VNet's address_space (`snet-runners`, ACA-delegated)                     |
-| `networking.snet_aks_api.cidr` | i-th `/28` of the API pool (second `/24` of env VNet), where i = `networking.subnet_slot` |
-| `networking.snet_aks_nodes.cidr` | i-th `/25` of the nodes pool (3rd `/24` onward of env VNet), where i = `networking.subnet_slot` |
+| `networking.snet_pe.cidr` | first `/26` of the cluster's parent VNet's address_space (mgmt → `snet-pe-shared`; env → `snet-pe-env`) |
+| `networking.snet_runners.cidr` | second `/26` of mgmt VNet's address_space (`snet-runners`, ACA-delegated; mgmt VNet only)     |
+| `networking.snet_aks_api.cidr` | i-th `/28` of the API pool (second `/24` of the cluster's parent VNet), where i = `networking.subnet_slot`. Parent VNet is the mgmt VNet for `cluster.env == mgmt`, else the env-region VNet |
+| `networking.snet_aks_nodes.cidr` | i-th `/25` of the nodes pool (3rd `/24` onward of the cluster's parent VNet), where i = `networking.subnet_slot`. Parent VNet selection as above |
 | `networking.pod_cidr`     | `100.64.0.0/16` (fleet-wide constant, hard-coded in `modules/aks-cluster/main.tf`; see §3.4 *Pod CIDR (shared, fleet-wide)*) |
-| `networking.peering_name.env_to_mgmt` | `peer-<env>-<region>-to-mgmt`                                                         |
-| `networking.peering_name.mgmt_to_env` | `peer-mgmt-to-<env>-<region>`                                                         |
-| `networking.node_asg_name`      | `asg-nodes-<env>-<region>` (one ASG per env-region, shared by all clusters in that VNet)   |
+| `networking.peering_name.env_to_mgmt` | `peer-<env>-<region>-to-mgmt` (authored from env state for `env ∈ {nonprod, prod}`)           |
+| `networking.peering_name.mgmt_to_env` | `peer-mgmt-to-<env>-<region>` (authored from env state via `create_reverse_peering = true`)   |
+| `networking.node_asg_name`      | `asg-nodes-mgmt-<region>` (mgmt VNet, owned by `bootstrap/fleet`) / `asg-nodes-<env>-<region>` (env VNet, owned by `bootstrap/environment`). One ASG per VNet, shared by all clusters in it |
 
 Operators cannot override derived values except for `dns.zone_rg`.
 This keeps naming consistent and prevents drift between directory
@@ -534,11 +538,46 @@ structure and Azure-resource names.
 
 > **Scope.** This section is the source of truth for VNet ownership,
 > peering, subnet layout, and the `subnet_slot` contract. Implementation
-> lives in `bootstrap/fleet` (mgmt VNet), `bootstrap/environment` (env
-> VNets + both halves of mgmt↔env peering + per-env-region node ASG),
-> and Stage 1 (per-cluster subnets + AKS ASG attachment). Derivation
+> lives in `bootstrap/fleet` (mgmt VNet + mgmt-tier cluster subnet
+> pools + mgmt-region node ASG), `bootstrap/environment` (env VNets +
+> both halves of mgmt↔env peering + per-env-region node ASG), and
+> Stage 1 (per-cluster subnets + AKS ASG attachment). Derivation
 > parity is enforced across `docs/naming.md`, `config-loader/load.sh`,
 > and `modules/fleet-identity/`.
+
+**Implementation status (mgmt-tier collapse — 2026-04-21).** Earlier
+drafts of this section kept two separate mgmt VNets: a *fleet-tier*
+mgmt VNet under `networking.vnets.mgmt` (hosting tfstate SA / fleet
+KV / fleet ACR private endpoints + the ACA-delegated runner pool)
+and an *env-tier* mgmt VNet under `networking.envs.mgmt.regions.
+<region>` (hosting the mgmt-tier Kubernetes cluster). Maintaining
+both required N extra mgmt↔env peerings (one per env-region to the
+fleet-tier VNet on top of the N mgmt↔env peerings already authored
+from env state) and a dedicated `bootstrap/environment` invocation
+for `env=mgmt`. The split was collapsed: the single mgmt VNet under
+`networking.vnets.mgmt` now hosts BOTH the CI plane (PE subnet +
+runner subnet) AND the mgmt-tier AKS clusters (api `/28` pool +
+nodes `/25` pool + per-region node ASG) using the same two-pool
+design as env VNets. `networking.envs.mgmt` is removed from the
+`_fleet.yaml` schema; mgmt clusters (`clusters/mgmt/<region>/...`)
+derive their subnet parent from the mgmt VNet via config-loader
+branching on `cluster.env`. `bootstrap/environment` is still
+invoked for `env=mgmt` but in a **BYO-vnet mode**: when
+`vnet_resource_id` + `pe_subnet_id` are supplied (both published by
+`bootstrap/fleet` as `MGMT_VNET_RESOURCE_ID` /
+`MGMT_<REGION>_PE_SUBNET_ID`), the module skips VNet / node ASG /
+peering / NSG authoring and only creates the mgmt env's
+observability stack (AMW / DCE / Grafana PE / Action Group). For
+`env ∈ {nonprod, prod}`, `vnet_resource_id` is null and the module
+creates the env VNet as before. The remaining mgmt↔env peerings
+(N, one per env-region) stay in env state with
+`create_reverse_peering = true`; they now terminate on the single
+collapsed mgmt VNet and continue to carry Kargo control-plane
+traffic + observability scrape paths. Mgmt remains single-region
+in v1 (clusters must live in the fleet's `primary_region`);
+multi-region mgmt is a bounded PLAN follow-up that swaps
+`networking.vnets.mgmt.{location,address_space}` for a
+`regions: { <region>: { address_space } }` map.
 
 **Implementation status (UDR for AKS node egress).** `modules/aks-
 cluster` hard-codes `network_profile.outbound_type =
@@ -602,12 +641,21 @@ the derivation returns.
 | Tier     | VNet                                  | Owner                   | Peerings                                                                 |
 | -------- | ------------------------------------- | ----------------------- | ------------------------------------------------------------------------ |
 | Hub      | adopter-owned, BYO                    | adopter (outside repo)  | every mgmt and env VNet hubs to it (classic hub-and-spoke)               |
-| Mgmt     | `vnet-<fleet.name>-mgmt` (1, regional) | `bootstrap/fleet`      | ↔ hub (via sub-vending); ↔ each env VNet (from env side, see below)      |
-| Env      | `vnet-<fleet.name>-<env>-<region>`    | `bootstrap/environment` | ↔ hub (via sub-vending); full mesh intra-env (sub-vending); ↔ mgmt       |
+| Mgmt     | `vnet-<fleet.name>-mgmt` (1, regional — `primary_region`) | `bootstrap/fleet` | ↔ hub (via sub-vending); ↔ each env VNet (from env side, see below). Hosts CI plane (tfstate/KV/runners) AND mgmt-tier AKS clusters. |
+| Env      | `vnet-<fleet.name>-<env>-<region>` (one per env-region, `env ∈ {nonprod, prod}`) | `bootstrap/environment` | ↔ hub (via sub-vending); full mesh intra-env (sub-vending); ↔ mgmt       |
 
-- One VNet per env-per-region. Azure VNets are regional; a second
-  region is onboarded by adding `networking.envs.<env>.regions.<region>`
-  in `_fleet.yaml` and re-running `env-bootstrap.yaml` for that env.
+- One VNet per env-per-region for `env ∈ {nonprod, prod}`. Azure
+  VNets are regional; a second region is onboarded by adding
+  `networking.envs.<env>.regions.<region>` in `_fleet.yaml` and
+  re-running `env-bootstrap.yaml` for that env.
+- Mgmt tier is **single-VNet** in v1 (no `envs.mgmt` key); mgmt-tier
+  AKS clusters all live in `networking.vnets.mgmt` in
+  `primary_region`. `bootstrap/environment` is still invoked for
+  `env=mgmt` but in **BYO-vnet mode** (skips VNet / node ASG /
+  peering / NSG authoring; creates only the mgmt observability
+  stack). Networking for the mgmt VNet (sub-vending, subnet pools,
+  node ASG, NSGs) is owned by `bootstrap/fleet`; the env→mgmt half
+  of each mgmt↔env peering is still authored from env state.
 - Prod↔nonprod are intentionally **not** peered. The sub-vending
   `mesh_peering_enabled` flag is scoped to a single invocation, so
   `bootstrap/environment` is called once per env — prod and nonprod
@@ -628,7 +676,8 @@ the derivation returns.
 
 **CIDR layout per VNet — two-pool design (`/20` envelope).**
 
-Each cluster needs two subnets of very different sizes:
+Every cluster VNet (mgmt and env) uses the same two-pool layout.
+Each cluster in the VNet needs two subnets of very different sizes:
 
 - `snet-aks-api-<name>` — **exactly `/28`** (required by AKS API-server
   VNet integration; subnet is delegated to
@@ -644,24 +693,30 @@ which wasted 112 addresses on the api side (a `/28` delegated subnet
 cannot hold anything else). The repo uses a two-pool layout instead:
 
 ```
+# Env VNet (env ∈ {nonprod, prod}):
 10.x0.0.0/20      VNet address_space
 │
 ├── 10.x0.0.0/24     reserved zone (first /24)
-│   ├── 10.x0.0.0/26    snet-pe-{shared|env}  (PE subnet)
-│   └── 10.x0.0.64/26   snet-runners          (mgmt VNet only; ACA-delegated)
+│   └── 10.x0.0.0/26    snet-pe-env  (PE subnet for env-tier Grafana PE)
 │
 ├── 10.x0.1.0/24     API pool → 16 × /28
-│   ├── 10.x0.1.0/28    snet-aks-api-<cluster 0>
-│   ├── 10.x0.1.16/28   snet-aks-api-<cluster 1>
-│   ├── ...
-│   └── 10.x0.1.240/28  snet-aks-api-<cluster 15>
+│   └── ...             snet-aks-api-<cluster 0..15>
 │
 └── 10.x0.2.0/21     NODES pool → 2 × /25 per /24 in the pool
-    ├── 10.x0.2.0/25    snet-aks-nodes-<cluster 0>
-    ├── 10.x0.2.128/25  snet-aks-nodes-<cluster 1>
-    ├── 10.x0.3.0/25    snet-aks-nodes-<cluster 2>
-    ├── 10.x0.3.128/25  snet-aks-nodes-<cluster 3>
-    └── ...             (13 × /24 = 26 /25 slots available)
+    └── ...             snet-aks-nodes-<cluster 0..>
+
+# Mgmt VNet (single VNet, collapses CI plane + mgmt AKS clusters):
+10.x0.0.0/20      VNet address_space
+│
+├── 10.x0.0.0/24     reserved zone (first /24)
+│   ├── 10.x0.0.0/26    snet-pe-shared   (tfstate SA, fleet KV, fleet ACR PEs)
+│   └── 10.x0.0.64/26   snet-runners     (ACA-delegated runner pool)
+│
+├── 10.x0.1.0/24     API pool → 16 × /28
+│   └── ...             snet-aks-api-<cluster 0..15>
+│
+└── 10.x0.2.0/21     NODES pool → 2 × /25 per /24 in the pool
+    └── ...             snet-aks-nodes-<cluster 0..>
 ```
 
 Capacity per env-region VNet `/N`:
@@ -767,28 +822,43 @@ Design notes:
 
 **Application Security Groups for AKS nodes.**
 
-- One ASG per env-region (`asg-nodes-<env>-<region>`) owned by
-  `bootstrap/environment`. Acts as the symbolic source group for
-  rules on `nsg-pe-env-<env>-<region>` (e.g., allow 443 from nodes
-  to PEs in the env).
-- Stage 1 attaches each AKS cluster's node pool to the env-region
+- One ASG per cluster VNet, owned by whoever owns the VNet:
+  - `asg-nodes-mgmt-<region>` on the mgmt VNet, owned by
+    `bootstrap/fleet` (mgmt-tier clusters).
+  - `asg-nodes-<env>-<region>` on each env VNet, owned by
+    `bootstrap/environment` (nonprod/prod clusters).
+- Acts as the symbolic source group for rules on the VNet's PE-subnet
+  NSG (e.g., allow 443 from nodes to PEs in the VNet).
+- Stage 1 attaches each AKS cluster's node pool to its VNet's node
   ASG via the AKS `networkProfile.applicationSecurityGroups` input
   on the AVM module (subject to the pinned AKS API version
   exposing that field on agent pools — **confirm at implementation
   time**).
 - **Fallback** if the pinned AKS API does not support agent-pool
-  ASG attachment: Stage 1 writes per-cluster NSG rules into
-  `nsg-pe-env-<env>-<region>` directly. `bootstrap/environment`
+  ASG attachment: Stage 1 writes per-cluster NSG rules into the
+  VNet's `nsg-pe-*` directly. `bootstrap/{fleet,environment}`
   pre-grants the `fleet-<env>` UAMI scoped `Network Contributor`
-  on that NSG so the cross-stage write succeeds.
+  on the relevant NSG so the cross-stage write succeeds.
 
 **Repo variables published (extends §4 Stage 0 / §4 `bootstrap/environment`).**
 
 | Variable                                          | Published by              | Consumed by                                                      |
 | ------------------------------------------------- | ------------------------- | ---------------------------------------------------------------- |
-| `MGMT_VNET_RESOURCE_ID`                           | Stage 0 (fleet scope)     | Stage 1 (private DNS zone VNet link); env observability wiring   |
-| `<ENV>_<REGION>_VNET_RESOURCE_ID`                 | `bootstrap/environment`   | Stage 1 (per-cluster subnets parent; DNS zone link)              |
-| `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`             | `bootstrap/environment`   | Stage 1 (AKS node-pool ASG attachment, or NSG rule author)       |
+| `MGMT_VNET_RESOURCE_ID`                           | Stage 0 (fleet scope)     | Stage 1 for mgmt clusters (subnet parent, DNS zone link); env observability wiring; env VNet reverse peering target |
+| `MGMT_<REGION>_NODE_ASG_RESOURCE_ID`              | Stage 0 (fleet scope)     | Stage 1 for mgmt clusters (AKS node-pool ASG attachment, or NSG rule author) |
+| `MGMT_<REGION>_PE_SUBNET_ID`                      | Stage 0 (fleet scope)     | (reserved for future use — currently consumed inside `bootstrap/fleet` for tfstate/KV/ACR PEs) |
+| `<ENV>_<REGION>_VNET_RESOURCE_ID`                 | `bootstrap/environment`   | Stage 1 for nonprod/prod clusters (subnet parent; DNS zone link) |
+| `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`             | `bootstrap/environment`   | Stage 1 for nonprod/prod clusters (AKS node-pool ASG attachment, or NSG rule author) |
+
+Stage 1 reads a **single unified** `vnet_resource_id` and
+`node_asg_resource_id` per cluster — the config-loader selects the
+mgmt-tier pair (`MGMT_*`) when `cluster.env == "mgmt"` and the
+env-tier pair (`<ENV>_<REGION>_*`) otherwise. See §3.3 for the
+parent-VNet selection rule.
+
+`<REGION>` in the mgmt-tier variable names is the fleet's
+`primary_region` (mgmt is single-region in v1); the explicit region
+qualifier future-proofs multi-region mgmt without a rename.
 
 **Pod CIDR (shared, fleet-wide).**
 
