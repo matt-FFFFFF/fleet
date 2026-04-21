@@ -196,19 +196,17 @@ variable "environments" {
                           env=mgmt the VNet additionally hosts
                           bootstrap/fleet's snet-pe-fleet (/26) and
                           snet-runners (/23) at the HIGH end.
-      hub_resource_id     (non-mgmt only) ARM resource id of the
-                          adopter-owned hub VNet this env peers to.
-                          Rendered into
-                          `networking.hubs.<env>.regions.<primary_region>.resource_id`.
-                          MUST be null/omitted on the mgmt env — mgmt
-                          does not have its own hub entry; it peers
-                          cross-env via mgmt_peering_target_env.
-      mgmt_peering_target_env
-                          (mgmt only, optional, default `prod`) name
-                          of the non-mgmt env whose hub the mgmt VNet
-                          peers into. MUST name an existing non-mgmt
-                          env in this map. Rendered into
-                          `networking.envs.mgmt.regions.<primary_region>.mgmt_environment_for_vnet_peering`.
+      hub_network_resource_id
+                          (nullable on every env, including mgmt) ARM
+                          resource id of the adopter-owned hub VNet
+                          this env-region peers to. Rendered into
+                          `networking.envs.<env>.regions.<primary_region>.hub_network_resource_id`.
+                          Null ⇒ opt out of hub peering for this env-
+                          region (adopter-managed routing); the tftpl
+                          emits YAML `null`. Mgmt↔env peering is
+                          implicit: bootstrap/environment iterates
+                          `networking.envs.mgmt.regions` same-region-
+                          else-first (no selector variable needed).
 
     Pairwise non-overlap is enforced across every address_space below.
     Every entry's address_space is rendered as a YAML list (single
@@ -218,24 +216,23 @@ variable "environments" {
   type = map(object({
     subscription_id         = string
     address_space           = string
-    hub_resource_id         = optional(string)
-    mgmt_peering_target_env = optional(string, "prod")
+    hub_network_resource_id = optional(string)
   }))
   default = {
     mgmt = {
       subscription_id         = "__PROMPT__"
       address_space           = "10.50.0.0/20"
-      mgmt_peering_target_env = "prod"
+      hub_network_resource_id = "__PROMPT__"
     }
     nonprod = {
-      subscription_id = "__PROMPT__"
-      address_space   = "10.70.0.0/20"
-      hub_resource_id = "__PROMPT__"
+      subscription_id         = "__PROMPT__"
+      address_space           = "10.70.0.0/20"
+      hub_network_resource_id = "__PROMPT__"
     }
     prod = {
-      subscription_id = "__PROMPT__"
-      address_space   = "10.80.0.0/20"
-      hub_resource_id = "__PROMPT__"
+      subscription_id         = "__PROMPT__"
+      address_space           = "10.80.0.0/20"
+      hub_network_resource_id = "__PROMPT__"
     }
   }
 
@@ -312,40 +309,15 @@ variable "environments" {
     error_message = "All environments.<env>.address_space values must be pairwise disjoint (no exact match and no partial overlap across mixed prefix lengths)."
   }
 
-  # Hub resource id: required on non-mgmt envs; must be absent/null
-  # on mgmt (mgmt has no hub entry; it peers via
-  # mgmt_peering_target_env pointing at a non-mgmt env's hub).
-  validation {
-    condition = alltrue([
-      for name, cfg in var.environments :
-      name == "mgmt" ? (cfg.hub_resource_id == null) : (cfg.hub_resource_id != null)
-    ])
-    error_message = "environments.<env>.hub_resource_id must be set on every non-mgmt env (each env owns its own hub reference) and must be null/omitted on the mgmt env (mgmt peers via mgmt_peering_target_env, not its own hub entry)."
-  }
-
-  # Hub resource id shape — only validated when set.
+  # Hub resource id shape — only validated when set (nullable on every
+  # env, including mgmt; null = opt out of hub peering for that env-
+  # region, adopter-managed routing).
   validation {
     condition = alltrue([
       for cfg in values(var.environments) :
-      cfg.hub_resource_id == null ||
-      can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", cfg.hub_resource_id))
+      cfg.hub_network_resource_id == null ||
+      can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", cfg.hub_network_resource_id))
     ])
-    error_message = "environments.<env>.hub_resource_id must be a full /subscriptions/.../providers/Microsoft.Network/virtualNetworks/<name> resource id when set."
-  }
-
-  # mgmt_peering_target_env: on mgmt only, and must name another env
-  # in the map (and not `mgmt` itself). Ignored on non-mgmt (the
-  # object schema still exposes the default "prod" there; we just
-  # don't render it and don't enforce its referent).
-  validation {
-    condition = (
-      !contains(keys(var.environments), "mgmt") ||
-      var.environments.mgmt.mgmt_peering_target_env == null ||
-      (
-        var.environments.mgmt.mgmt_peering_target_env != "mgmt" &&
-        contains(keys(var.environments), var.environments.mgmt.mgmt_peering_target_env)
-      )
-    )
-    error_message = "environments.mgmt.mgmt_peering_target_env must name a non-mgmt env that exists in the environments map."
+    error_message = "environments.<env>.hub_network_resource_id must be a full /subscriptions/.../providers/Microsoft.Network/virtualNetworks/<name> resource id when set (null opts out of hub peering for that env-region)."
   }
 }

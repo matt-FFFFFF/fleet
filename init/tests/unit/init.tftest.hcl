@@ -37,17 +37,17 @@ variables {
     mgmt = {
       subscription_id         = "33333333-3333-3333-3333-333333333333"
       address_space           = "10.50.0.0/20"
-      mgmt_peering_target_env = "prod"
+      hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-mgmt-eastus"
     }
     nonprod = {
-      subscription_id = "44444444-4444-4444-4444-444444444444"
-      address_space   = "10.70.0.0/20"
-      hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-nonprod-eastus"
+      subscription_id         = "44444444-4444-4444-4444-444444444444"
+      address_space           = "10.70.0.0/20"
+      hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-nonprod-eastus"
     }
     prod = {
-      subscription_id = "55555555-5555-5555-5555-555555555555"
-      address_space   = "10.80.0.0/20"
-      hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
+      subscription_id         = "55555555-5555-5555-5555-555555555555"
+      address_space           = "10.80.0.0/20"
+      hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
     }
   }
 }
@@ -148,8 +148,8 @@ run "render_happy_path_fleet_yaml" {
 }
 
 # Open-map extension: adopter declares an extra `dev` env. The renderer
-# must emit dev under both networking.hubs and networking.envs / envs
-# without hard-coding env names.
+# must emit dev under `envs:` and `networking.envs:` (including the
+# per-env-region hub_network_resource_id) without hard-coding env names.
 run "render_open_map_extra_env" {
   command = apply
 
@@ -158,22 +158,22 @@ run "render_open_map_extra_env" {
       mgmt = {
         subscription_id         = "33333333-3333-3333-3333-333333333333"
         address_space           = "10.50.0.0/20"
-        mgmt_peering_target_env = "prod"
+        hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-mgmt-eastus"
       }
       dev = {
-        subscription_id = "99999999-9999-9999-9999-999999999999"
-        address_space   = "10.60.0.0/20"
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev-eastus"
+        subscription_id         = "99999999-9999-9999-9999-999999999999"
+        address_space           = "10.60.0.0/20"
+        hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev-eastus"
       }
       nonprod = {
-        subscription_id = "44444444-4444-4444-4444-444444444444"
-        address_space   = "10.70.0.0/20"
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-nonprod-eastus"
+        subscription_id         = "44444444-4444-4444-4444-444444444444"
+        address_space           = "10.70.0.0/20"
+        hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-nonprod-eastus"
       }
       prod = {
-        subscription_id = "55555555-5555-5555-5555-555555555555"
-        address_space   = "10.80.0.0/20"
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
+        subscription_id         = "55555555-5555-5555-5555-555555555555"
+        address_space           = "10.80.0.0/20"
+        hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
       }
     }
   }
@@ -182,18 +182,15 @@ run "render_open_map_extra_env" {
     condition = alltrue([
       yamldecode(local_file.fleet_yaml.content).envs.dev.subscription_id == "99999999-9999-9999-9999-999999999999",
       yamldecode(local_file.fleet_yaml.content).networking.envs.dev.regions.eastus.address_space == ["10.60.0.0/20"],
-      yamldecode(local_file.fleet_yaml.content).networking.hubs.dev.regions.eastus.resource_id == "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev-eastus",
+      yamldecode(local_file.fleet_yaml.content).networking.envs.dev.regions.eastus.hub_network_resource_id == "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-dev-eastus",
     ])
-    error_message = "Extra env entries must fan out into envs.<env>, networking.envs.<env>, and networking.hubs.<env> uniformly."
+    error_message = "Extra env entries must fan out into envs.<env> and networking.envs.<env>.regions.<region> (incl. hub_network_resource_id) uniformly."
   }
 
-  # dev is not mgmt — must not carry location or mgmt_environment_for_vnet_peering.
+  # dev is not mgmt — must not carry location.
   assert {
-    condition = alltrue([
-      !can(yamldecode(local_file.fleet_yaml.content).envs.dev.location),
-      !can(yamldecode(local_file.fleet_yaml.content).networking.envs.dev.regions.eastus.mgmt_environment_for_vnet_peering),
-    ])
-    error_message = "Non-mgmt envs must not carry location or mgmt_environment_for_vnet_peering."
+    condition     = !can(yamldecode(local_file.fleet_yaml.content).envs.dev.location)
+    error_message = "Non-mgmt envs must not carry location (mgmt-only key)."
   }
 }
 
@@ -403,26 +400,28 @@ run "reject_codeowners_owner_leading_slash" {
 run "render_networking_shape" {
   command = apply
 
-  # Each non-mgmt env gets its own hub entry, keyed by env name.
+  # Every env-region (including mgmt) carries hub_network_resource_id
+  # folded into networking.envs.<env>.regions.<region>.
   assert {
     condition = alltrue([
-      yamldecode(local_file.fleet_yaml.content).networking.hubs.nonprod.regions.eastus.resource_id == "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-nonprod-eastus",
-      yamldecode(local_file.fleet_yaml.content).networking.hubs.prod.regions.eastus.resource_id == "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus",
+      yamldecode(local_file.fleet_yaml.content).networking.envs.mgmt.regions.eastus.hub_network_resource_id == "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-mgmt-eastus",
+      yamldecode(local_file.fleet_yaml.content).networking.envs.nonprod.regions.eastus.hub_network_resource_id == "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-nonprod-eastus",
+      yamldecode(local_file.fleet_yaml.content).networking.envs.prod.regions.eastus.hub_network_resource_id == "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus",
     ])
-    error_message = "networking.hubs.<env>.regions.<primary_region>.resource_id must round-trip var.environments[<env>].hub_resource_id for every non-mgmt env."
+    error_message = "networking.envs.<env>.regions.<primary_region>.hub_network_resource_id must round-trip var.environments[<env>].hub_network_resource_id for every env (incl. mgmt)."
   }
 
-  # mgmt must NOT have its own hub entry — it peers to prod's hub via
-  # mgmt_environment_for_vnet_peering.
+  # Legacy top-level networking.hubs map must be gone (folded into the
+  # per-env-region key above).
   assert {
-    condition     = !can(yamldecode(local_file.fleet_yaml.content).networking.hubs.mgmt)
-    error_message = "networking.hubs.mgmt must NOT be rendered; mgmt peers via mgmt_environment_for_vnet_peering."
+    condition     = !can(yamldecode(local_file.fleet_yaml.content).networking.hubs)
+    error_message = "Legacy `networking.hubs` map must NOT be rendered (folded into networking.envs.<env>.regions.<region>.hub_network_resource_id)."
   }
 
-  # Legacy flat `networking.hub` scalar must be gone.
+  # Legacy flat `networking.hub` scalar must also be gone.
   assert {
     condition     = !can(yamldecode(local_file.fleet_yaml.content).networking.hub.resource_id)
-    error_message = "Legacy `networking.hub.resource_id` scalar must NOT be rendered (replaced by nested hubs.<env>.regions.<region> in PLAN §3.1)."
+    error_message = "Legacy `networking.hub.resource_id` scalar must NOT be rendered."
   }
 
   assert {
@@ -447,19 +446,16 @@ run "render_networking_shape" {
     error_message = "networking.envs.<env>.regions.<primary_region>.address_space must round-trip var.environments[<env>].address_space as a single-element LIST (PLAN §3.1)."
   }
 
-  # mgmt env-region declares its peering target env.
-  assert {
-    condition     = yamldecode(local_file.fleet_yaml.content).networking.envs.mgmt.regions.eastus.mgmt_environment_for_vnet_peering == "prod"
-    error_message = "networking.envs.mgmt.regions.<primary_region>.mgmt_environment_for_vnet_peering must be rendered from var.environments.mgmt.mgmt_peering_target_env (default `prod`)."
-  }
-
-  # Non-mgmt env-regions must NOT carry mgmt_environment_for_vnet_peering.
+  # mgmt_environment_for_vnet_peering must NOT appear on any env-region
+  # (dropped in favour of implicit mgmt↔env peering via
+  # bootstrap/environment iterating networking.envs.mgmt.regions).
   assert {
     condition = alltrue([
+      !can(yamldecode(local_file.fleet_yaml.content).networking.envs.mgmt.regions.eastus.mgmt_environment_for_vnet_peering),
       !can(yamldecode(local_file.fleet_yaml.content).networking.envs.nonprod.regions.eastus.mgmt_environment_for_vnet_peering),
       !can(yamldecode(local_file.fleet_yaml.content).networking.envs.prod.regions.eastus.mgmt_environment_for_vnet_peering),
     ])
-    error_message = "mgmt_environment_for_vnet_peering must only appear on mgmt env-regions."
+    error_message = "mgmt_environment_for_vnet_peering must NOT be rendered (dropped; mgmt↔env peering is implicit from the mgmt key)."
   }
 
   # create_reverse_peering is not emitted; bootstrap/environment defaults it.
@@ -501,6 +497,37 @@ run "render_networking_shape" {
   }
 }
 
+# hub_network_resource_id is nullable on every env (including mgmt).
+# Null opts out of hub peering for that env-region (adopter-managed
+# routing); the tftpl emits YAML `null` which yamldecode returns as
+# Terraform null.
+run "render_hub_network_resource_id_nullable" {
+  command = apply
+
+  variables {
+    environments = {
+      mgmt = {
+        subscription_id         = "33333333-3333-3333-3333-333333333333"
+        address_space           = "10.50.0.0/20"
+        hub_network_resource_id = null
+      }
+      prod = {
+        subscription_id         = "55555555-5555-5555-5555-555555555555"
+        address_space           = "10.80.0.0/20"
+        hub_network_resource_id = null
+      }
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      yamldecode(local_file.fleet_yaml.content).networking.envs.mgmt.regions.eastus.hub_network_resource_id == null,
+      yamldecode(local_file.fleet_yaml.content).networking.envs.prod.regions.eastus.hub_network_resource_id == null,
+    ])
+    error_message = "Null hub_network_resource_id must render as YAML null on every env-region (including mgmt)."
+  }
+}
+
 # ---- networking validation rejections --------------------------------------
 
 run "reject_pdz_blob_wrong_zone_name" {
@@ -526,14 +553,14 @@ run "reject_environments_missing_mgmt" {
   variables {
     environments = {
       nonprod = {
-        subscription_id = "44444444-4444-4444-4444-444444444444"
-        address_space   = "10.70.0.0/20"
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-nonprod-eastus"
+        subscription_id         = "44444444-4444-4444-4444-444444444444"
+        address_space           = "10.70.0.0/20"
+        hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-nonprod-eastus"
       }
       prod = {
-        subscription_id = "55555555-5555-5555-5555-555555555555"
-        address_space   = "10.80.0.0/20"
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
+        subscription_id         = "55555555-5555-5555-5555-555555555555"
+        address_space           = "10.80.0.0/20"
+        hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
       }
     }
   }
@@ -549,9 +576,9 @@ run "reject_environments_invalid_env_name" {
         address_space   = "10.50.0.0/20"
       }
       "Prod" = {
-        subscription_id = "55555555-5555-5555-5555-555555555555"
-        address_space   = "10.80.0.0/20"
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
+        subscription_id         = "55555555-5555-5555-5555-555555555555"
+        address_space           = "10.80.0.0/20"
+        hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
       }
     }
   }
@@ -567,9 +594,9 @@ run "reject_environments_subscription_id_not_guid" {
         address_space   = "10.50.0.0/20"
       }
       prod = {
-        subscription_id = "not-a-guid"
-        address_space   = "10.80.0.0/20"
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
+        subscription_id         = "not-a-guid"
+        address_space           = "10.80.0.0/20"
+        hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
       }
     }
   }
@@ -585,9 +612,9 @@ run "reject_environments_address_space_not_cidr" {
         address_space   = "not-a-cidr"
       }
       prod = {
-        subscription_id = "55555555-5555-5555-5555-555555555555"
-        address_space   = "10.80.0.0/20"
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
+        subscription_id         = "55555555-5555-5555-5555-555555555555"
+        address_space           = "10.80.0.0/20"
+        hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
       }
     }
   }
@@ -603,9 +630,9 @@ run "reject_environments_address_space_too_narrow" {
         address_space   = "10.50.0.0/24"
       }
       prod = {
-        subscription_id = "55555555-5555-5555-5555-555555555555"
-        address_space   = "10.80.0.0/20"
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
+        subscription_id         = "55555555-5555-5555-5555-555555555555"
+        address_space           = "10.80.0.0/20"
+        hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
       }
     }
   }
@@ -621,9 +648,9 @@ run "reject_environments_address_space_not_rfc1918" {
         address_space   = "8.8.0.0/20"
       }
       prod = {
-        subscription_id = "55555555-5555-5555-5555-555555555555"
-        address_space   = "10.80.0.0/20"
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
+        subscription_id         = "55555555-5555-5555-5555-555555555555"
+        address_space           = "10.80.0.0/20"
+        hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
       }
     }
   }
@@ -639,9 +666,9 @@ run "reject_environments_address_space_host_bits_set" {
         address_space   = "10.50.0.1/20"
       }
       prod = {
-        subscription_id = "55555555-5555-5555-5555-555555555555"
-        address_space   = "10.80.0.0/20"
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
+        subscription_id         = "55555555-5555-5555-5555-555555555555"
+        address_space           = "10.80.0.0/20"
+        hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
       }
     }
   }
@@ -657,9 +684,9 @@ run "reject_environments_address_space_exact_overlap" {
         address_space   = "10.50.0.0/20"
       }
       prod = {
-        subscription_id = "55555555-5555-5555-5555-555555555555"
-        address_space   = "10.50.0.0/20" # exact match with mgmt
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
+        subscription_id         = "55555555-5555-5555-5555-555555555555"
+        address_space           = "10.50.0.0/20" # exact match with mgmt
+        hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
       }
     }
   }
@@ -675,46 +702,9 @@ run "reject_environments_address_space_partial_overlap" {
         address_space   = "10.50.0.0/20"
       }
       prod = {
-        subscription_id = "55555555-5555-5555-5555-555555555555"
-        address_space   = "10.50.0.0/21" # /21 subset of mgmt's /20
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
-      }
-    }
-  }
-  expect_failures = [var.environments]
-}
-
-run "reject_environments_mgmt_has_hub_resource_id" {
-  command = plan
-  variables {
-    environments = {
-      mgmt = {
-        subscription_id = "33333333-3333-3333-3333-333333333333"
-        address_space   = "10.50.0.0/20"
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-mgmt"
-      }
-      prod = {
-        subscription_id = "55555555-5555-5555-5555-555555555555"
-        address_space   = "10.80.0.0/20"
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
-      }
-    }
-  }
-  expect_failures = [var.environments]
-}
-
-run "reject_environments_nonmgmt_missing_hub_resource_id" {
-  command = plan
-  variables {
-    environments = {
-      mgmt = {
-        subscription_id = "33333333-3333-3333-3333-333333333333"
-        address_space   = "10.50.0.0/20"
-      }
-      prod = {
-        subscription_id = "55555555-5555-5555-5555-555555555555"
-        address_space   = "10.80.0.0/20"
-        # hub_resource_id missing
+        subscription_id         = "55555555-5555-5555-5555-555555555555"
+        address_space           = "10.50.0.0/21" # /21 subset of mgmt's /20
+        hub_network_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
       }
     }
   }
@@ -730,47 +720,9 @@ run "reject_environments_hub_not_full_arm_id" {
         address_space   = "10.50.0.0/20"
       }
       prod = {
-        subscription_id = "55555555-5555-5555-5555-555555555555"
-        address_space   = "10.80.0.0/20"
-        hub_resource_id = "vnet-hub-prod-eastus"
-      }
-    }
-  }
-  expect_failures = [var.environments]
-}
-
-run "reject_environments_mgmt_peering_target_missing_env" {
-  command = plan
-  variables {
-    environments = {
-      mgmt = {
-        subscription_id         = "33333333-3333-3333-3333-333333333333"
-        address_space           = "10.50.0.0/20"
-        mgmt_peering_target_env = "staging" # no such env in the map
-      }
-      prod = {
-        subscription_id = "55555555-5555-5555-5555-555555555555"
-        address_space   = "10.80.0.0/20"
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
-      }
-    }
-  }
-  expect_failures = [var.environments]
-}
-
-run "reject_environments_mgmt_peering_target_is_mgmt" {
-  command = plan
-  variables {
-    environments = {
-      mgmt = {
-        subscription_id         = "33333333-3333-3333-3333-333333333333"
-        address_space           = "10.50.0.0/20"
-        mgmt_peering_target_env = "mgmt"
-      }
-      prod = {
-        subscription_id = "55555555-5555-5555-5555-555555555555"
-        address_space   = "10.80.0.0/20"
-        hub_resource_id = "/subscriptions/66666666-6666-6666-6666-666666666666/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
+        subscription_id         = "55555555-5555-5555-5555-555555555555"
+        address_space           = "10.80.0.0/20"
+        hub_network_resource_id = "vnet-hub-prod-eastus"
       }
     }
   }

@@ -508,7 +508,7 @@ self-contained enough to land in its own PR.
     validate` + `fmt -check` + all 45 unit tests pass.
  5b. **Schema simplification: fold `networking.hubs` into per-env-region
      `hub_network_resource_id`, drop `mgmt_environment_for_vnet_peering`** —
-     ✅ **Done (TF side) / [ ] init/ side.** Decision: the top-level
+     ✅ **Done.** Decision: the top-level
      `networking.hubs.<env>.regions.<region>.resource_id` map is
      redundant with the per-env-region key, and `mgmt_environment_for_vnet_peering`
      is redundant because mgmt↔env peering is implicit from the mgmt
@@ -524,17 +524,16 @@ self-contained enough to land in its own PR.
      `bootstrap/environment/main.network.tf` (per-region
      `hub_peering_enabled` conditional; env↔hub peering for env≠mgmt),
      plus a doc sweep in `variables.tf` / `outputs.tf` / `main.tf`
-     headers + cluster `_defaults.yaml` comments. `terraform validate`
-     green on both bootstrap stacks; 44 unit tests pass.
-     **Still TODO in init/ side (next commit):** `init/variables.tf`
-     (drop `mgmt_peering_target_env`, make `hub_resource_id` nullable
-     on every env incl. mgmt), `init/templates/_fleet.yaml.tftpl`
-     (remove `networking.hubs` block, emit `hub_network_resource_id`
-     per env-region; remove mgmt `mgmt_environment_for_vnet_peering`),
-     `init/tests/unit/init.tftest.hcl` updates, and
-     `.github/fixtures/adopter-test.tfvars` schema refresh. PLAN §3.4
-     also needs a rewrite pass to eliminate `networking.hubs` +
-     `mgmt_environment_for_vnet_peering` references and example YAML.
+     headers + cluster `_defaults.yaml` comments. `init/variables.tf`
+     (dropped `mgmt_peering_target_env`, renamed `hub_resource_id` →
+     `hub_network_resource_id` nullable on every env incl. mgmt),
+     `init/templates/_fleet.yaml.tftpl` (removed `networking.hubs`
+     block, emits `hub_network_resource_id` per env-region with YAML
+     null support), `init/tests/unit/init.tftest.hcl` (34/34 pass),
+     `.github/fixtures/adopter-test.tfvars` refreshed. Also hardened
+     `init-fleet.sh` dirty-tree guard to include untracked files via
+     `git status --porcelain`. PLAN §3.4 rewrite pass deferred to
+     follow-up commit.
 6. **Stage 1 rework** — replace `var.mgmt_vnet_resource_id` with
    per-region resolution; add mgmt-cluster DNS-link collapse; add
    `var.route_table_resource_id` input and set `routeTableId` on

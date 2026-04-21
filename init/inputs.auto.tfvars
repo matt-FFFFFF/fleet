@@ -63,12 +63,14 @@ networking_pdz_grafana   = "__PROMPT__" # BYO privatelink.grafana.azure.com zone
 #   address_space             VNet CIDR in `primary_region`. RFC1918, /20
 #                             or wider, strictly aligned. Minimum /20.
 #                             Per-cluster subnets carved by Stage 1.
-#   hub_resource_id           (non-mgmt only) ARM id of the adopter hub
-#                             VNet this env peers to. MUST be null/omitted
-#                             on mgmt.
-#   mgmt_peering_target_env   (mgmt only, default "prod") name of the
-#                             non-mgmt env whose hub the mgmt VNet peers
-#                             into.
+#   hub_network_resource_id   (nullable on every env, incl. mgmt) ARM id
+#                             of the adopter hub VNet this env-region
+#                             peers to. Set to `null` to opt out of hub
+#                             peering for this env-region (adopter-
+#                             managed routing). Mgmt↔env peering is
+#                             implicit via bootstrap/environment
+#                             iterating networking.envs.mgmt.regions —
+#                             no selector variable needed.
 #
 # Minimum shape: one entry keyed `mgmt` plus at least one non-mgmt env.
 # Pod CIDR is the same /16 in every cluster (100.64.0.0/16, hard-coded in
@@ -79,16 +81,16 @@ environments = {
   mgmt = {
     subscription_id         = "__PROMPT__" # GUID — mgmt subscription
     address_space           = "10.50.0.0/20"
-    mgmt_peering_target_env = "prod"
+    hub_network_resource_id = "__PROMPT__" # /subscriptions/.../virtualNetworks/<vnet-hub-mgmt>, or null to opt out
   }
   nonprod = {
-    subscription_id = "__PROMPT__" # GUID — nonprod subscription
-    address_space   = "10.70.0.0/20"
-    hub_resource_id = "__PROMPT__" # /subscriptions/.../virtualNetworks/<vnet-hub-nonprod>
+    subscription_id         = "__PROMPT__" # GUID — nonprod subscription
+    address_space           = "10.70.0.0/20"
+    hub_network_resource_id = "__PROMPT__" # /subscriptions/.../virtualNetworks/<vnet-hub-nonprod>, or null to opt out
   }
   prod = {
-    subscription_id = "__PROMPT__" # GUID — prod subscription
-    address_space   = "10.80.0.0/20"
-    hub_resource_id = "__PROMPT__" # /subscriptions/.../virtualNetworks/<vnet-hub-prod>
+    subscription_id         = "__PROMPT__" # GUID — prod subscription
+    address_space           = "10.80.0.0/20"
+    hub_network_resource_id = "__PROMPT__" # /subscriptions/.../virtualNetworks/<vnet-hub-prod>, or null to opt out
   }
 }

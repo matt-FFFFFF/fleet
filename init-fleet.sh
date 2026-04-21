@@ -79,8 +79,16 @@ if [[ -f "$marker" && $FORCE -eq 0 ]]; then
 fi
 
 if [[ $FORCE -eq 0 ]] && git rev-parse --git-dir >/dev/null 2>&1; then
-  if ! git diff-index --quiet HEAD -- 2>/dev/null; then
-    die "worktree is dirty; commit or stash first, or pass --force."
+  # `git diff-index --quiet HEAD --` catches modifications + staged changes
+  # to tracked files, but NOT untracked files. Since self-cleanup below
+  # rm -rf's init/ (and deletes init-fleet.sh, the selftest workflow, and
+  # .github/fixtures/), any uncommitted edit in those paths would be
+  # destroyed silently. `git status --porcelain` catches both modified
+  # tracked files AND untracked files — its output is empty iff the
+  # worktree is truly clean.
+  if ! git diff-index --quiet HEAD -- 2>/dev/null \
+     || [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+    die "worktree is dirty (modified or untracked files); commit or stash first, or pass --force. Note: --force will still run self-cleanup, which rm -rf's init/ + init-fleet.sh — uncommitted edits in those paths will be lost."
   fi
 fi
 

@@ -60,22 +60,7 @@ state:
   containers:
     fleet: tfstate-fleet                               # Stage 0 + bootstrap/{environment,team}
 
-networking:                                            # Repo-owned VNets + BYO hubs & central PDZs (PLAN §3.4)
-  # Adopter-owned hub VNets (not managed by this repo). One hub per
-  # (env, region); every env VNet hub-peers to the hub for its own
-  # (env, region). Mgmt env-regions hub-peer cross-env to the hub of
-  # the env named in `networking.envs.mgmt.regions.<region>.mgmt_environment_for_vnet_peering`.
-  # mgmt itself has no entry here — it consumes another env's hub.
-  hubs:
-%{ for env, cfg in environments ~}
-%{ if env != "mgmt" ~}
-    ${env}:
-      regions:
-        ${primary_region}:
-          # TODO: full resource id of the ${env} hub VNet in ${primary_region}.
-          resource_id: ${cfg.hub_resource_id}
-%{ endif ~}
-%{ endfor ~}
+networking:                                            # Repo-owned VNets + BYO hub refs & central PDZs (PLAN §3.4)
   # Central private DNS zones for PE A-record registration. All BYO —
   # never created by this repo, only referenced by resource id. Every
   # PE (tfstate SA, fleet KV, fleet ACR, env Grafana) registers into
@@ -118,13 +103,18 @@ networking:                                            # Repo-owned VNets + BYO 
   #                             leave `null` in the template repo and
   #                             fill in before the first cluster apply
   #                             in each region.
+  #   hub_network_resource_id   ARM resource id of the adopter hub VNet
+  #                             this env-region hub-peers to. Nullable
+  #                             on every env (including mgmt); null
+  #                             opts out of hub peering (adopter-
+  #                             managed routing). Mgmt↔env peering is
+  #                             implicit: bootstrap/environment
+  #                             iterates `networking.envs.mgmt.regions`
+  #                             same-region-else-first, so no selector
+  #                             variable is needed.
   #   create_reverse_peering    Optional, default true. Set false when
   #                             the hub is owned by a team that forbids
   #                             spoke-initiated reverse peerings.
-  #   mgmt_environment_for_vnet_peering   (mgmt env-regions only)
-  #                             Required on every mgmt region; names the
-  #                             env under `networking.hubs` whose hub
-  #                             this mgmt VNet peers into.
   #
   # Pod CIDR: all clusters share 100.64.0.0/16 (hard-coded in
   # modules/aks-cluster). Non-routable under CNI Overlay + Cilium;
@@ -140,11 +130,8 @@ networking:                                            # Repo-owned VNets + BYO 
           # Private IP of the hub firewall / NVA; fill in before first
           # cluster apply in this region. See docs/adoption.md.
           egress_next_hop_ip: null
-%{ if env == "mgmt" ~}
-          # Which env's hub this mgmt VNet peers into. Must name an env
-          # declared under `networking.hubs` with the same region.
-          mgmt_environment_for_vnet_peering: ${cfg.mgmt_peering_target_env}
-%{ endif ~}
+          # TODO: full ARM resource id of the ${env} hub VNet in ${primary_region}, or null to opt out of hub peering.
+          hub_network_resource_id: ${cfg.hub_network_resource_id == null ? "null" : format("\"%s\"", cfg.hub_network_resource_id)}
 %{ endfor ~}
 
 github_app:
