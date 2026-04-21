@@ -46,19 +46,20 @@ Prompted fields:
 | `github_org`                                  | GitHub org/user owning the fleet repo.                                                    |
 | `github_repo`                                 | Fleet repo name (default `platform-fleet`).                                               |
 | `team_template_repo`                          | Team template repo name (default `team-repo-template`).                                   |
-| `primary_region`                              | Default Azure region (default `eastus`).                                                  |
-| `sub_shared`                                  | Subscription GUID for shared (ACR, state, fleet KV).                                      |
-| `sub_mgmt`                                    | Subscription GUID for mgmt env.                                                           |
-| `sub_nonprod`                                 | Subscription GUID for nonprod env.                                                        |
-| `sub_prod`                                    | Subscription GUID for prod env.                                                           |
+| `primary_region`                              | Default Azure region (default `eastus`). Used as the single region for the initial per-env VNets; adopters add more regions by editing `clusters/_fleet.yaml` post-init. |
 | `dns_fleet_root`                              | Parent private DNS zone (e.g. `int.acme.example`).                                        |
-| `networking_hub_resource_id`                  | ARM id of the BYO hub VNet (peering target; never created by this repo).                  |
 | `networking_pdz_blob`                         | BYO `privatelink.blob.core.windows.net` private DNS zone id.                              |
 | `networking_pdz_vaultcore`                    | BYO `privatelink.vaultcore.azure.net` private DNS zone id.                                |
 | `networking_pdz_azurecr`                      | BYO `privatelink.azurecr.io` private DNS zone id.                                         |
 | `networking_pdz_grafana`                      | BYO `privatelink.grafana.azure.com` private DNS zone id.                                  |
-| `networking_mgmt_address_space`               | Mgmt VNet CIDR, min `/20`, RFC1918. Carved by `bootstrap/fleet`.                          |
-| `networking_env_<env>_<region>_address_space` | One per env-region (mgmt, nonprod, prod in primary_region). Min `/20`, RFC1918, disjoint. |
+| `environments` (map)                          | Per-env identity + networking inputs. Map key is the env name (`mgmt`, `nonprod`, `prod`, … — `mgmt` is required). Each entry carries: `subscription_id` (GUID), `address_space` (CIDR, min `/20`, RFC1918, strictly aligned, pairwise disjoint across envs), and optional `hub_network_resource_id` (full ARM VNet id; null ⇒ that env-region opts out of hub peering). Rendered into `envs.<env>.subscription_id` and `networking.envs.<env>.regions.<primary_region>.{address_space, hub_network_resource_id}`. Fleet-shared resources (ACR, tfstate SA, fleet KV) land in the **`mgmt`** subscription — no separate `sub_shared` prompt. |
+
+The `environments` map is entered interactively one env at a time
+(each prompt asks for that env's three fields in sequence). Adopters
+who want env names beyond the default `{mgmt, nonprod, prod}` —
+`dev`, `stage`, `qa`, `preprod`, etc. — edit
+`init/inputs.auto.tfvars` before running `init-fleet.sh` to add map
+entries.
 
 Pod IPs use a shared fleet-wide `/16` in CGNAT (`100.64.0.0/16`) hard-
 coded in `modules/aks-cluster`, so there is no per-region pod-CIDR slot
@@ -67,7 +68,8 @@ to pick; see `docs/networking.md` § "Pod CIDR (shared)" for rationale.
 Pairwise-distinct and CIDR-syntax validators run at `terraform apply`
 time inside `init/`; malformed inputs are rejected before anything
 lands in `_fleet.yaml`. See `docs/networking.md` for the two-pool
-subnet layout carved out of each address space.
+subnet layout carved out of each address space (and, on mgmt
+env-regions, the additional fleet-plane zone in the upper `/(N+1)`).
 
 Non-interactive alternative (for CI / testing):
 
@@ -101,15 +103,19 @@ first Terraform apply — the file documents each with a `TODO` or
   reach to the vault (jump host, VPN, Bastion, or the fleet runners
   themselves once online).
 
-Networking (everything under `networking.*` in `_fleet.yaml`) was
-prompted in §2 and is already fully populated — the hub VNet id, the
-four central private DNS zones (blob / vaultcore / azurecr / grafana),
-and the four repo-owned VNet address spaces. Pod IPs use a shared
-fleet-wide `/16` (`100.64.0.0/16`) hard-coded in `modules/aks-cluster`,
-so there is no per-region pod-CIDR slot to set. There is **no** per-
-service BYO subnet id to fill in: `bootstrap/fleet` and
-`bootstrap/environment` carve every PE / runner / AKS subnet themselves
-from those address spaces. See `docs/networking.md` for the two-pool
+Networking (everything under `networking.*` and the per-env
+`envs.<env>.subscription_id` in `_fleet.yaml`) was prompted in §2
+and is already fully populated — the four central private DNS zones
+(blob / vaultcore / azurecr / grafana), every env's subscription id,
+and every env's per-region `address_space` + optional
+`hub_network_resource_id`. Pod IPs use a shared fleet-wide `/16`
+(`100.64.0.0/16`) hard-coded in `modules/aks-cluster`, so there is no
+per-region pod-CIDR slot to set. There is **no** per-service BYO
+subnet id to fill in: `bootstrap/fleet` carves the mgmt-only
+fleet-plane subnets (`snet-pe-fleet`, `snet-runners`), and
+`bootstrap/environment` carves the env-plane subnets (`snet-pe-env`,
+api pool, nodes pool) on every env-region — mgmt included — from
+those address spaces. See `docs/networking.md` for the two-pool
 layout and `docs/onboarding-cluster.md` for the single-PR new-cluster
 flow (picking `subnet_slot`).
 
@@ -231,16 +237,22 @@ GitHub items must be arranged out-of-band by the adopter org.
 
 **Networking (Stage -1 runner pool + private tfstate SA)**
 
-- Hub VNet (adopter-owned; `networking.hub.resource_id` in
-  `_fleet.yaml`) already exists. `bootstrap/fleet` peers the mgmt
-  VNet to it; `bootstrap/environment` peers each env-region VNet.
-  `bootstrap/fleet` does **not** create a VNet from scratch in an
-  adopter-owned subnet — it creates its own (`vnet-<fleet>-mgmt` in
-  `rg-net-mgmt`) from `networking.vnets.mgmt.address_space` and
-  carves `snet-pe-shared` + `snet-runners` out of it as the two
-  reserved `/26`s of the first `/24`. The runner subnet is delegated
-  to `Microsoft.App/environments` and egresses via the hub firewall
-  (UDR ownership is adopter-side on the hub).
+- Hub VNet (adopter-owned) — one reference per env-region via
+  `networking.envs.<env>.regions.<region>.hub_network_resource_id`.
+  Each entry is nullable: null opts that env-region out of hub
+  peering (adopter-managed routing). When set, `bootstrap/fleet`
+  peers the mgmt VNet for that region to the hub, and
+  `bootstrap/environment` peers each non-mgmt env VNet for that
+  region. Neither stage creates the hub itself.
+  `bootstrap/fleet` authors the mgmt VNet shell
+  (`vnet-<fleet>-mgmt-<region>` in `rg-net-mgmt-<region>`) from
+  `networking.envs.mgmt.regions.<region>.address_space` and carves
+  `snet-pe-fleet` (`/26`) + `snet-runners` (`/23`) out of the upper
+  `/(N+1)` of that address space. The runner subnet is delegated to
+  `Microsoft.App/environments` and egresses via the hub firewall
+  when `egress_next_hop_ip` is set on that region (UDR ownership is
+  in-repo as the per-env-region route table `rt-aks-<env>-<region>`;
+  see `docs/networking.md` § "Route table / UDR egress").
 - Central `privatelink.blob.core.windows.net` private DNS zone
   (typically in the hub connectivity subscription; shared with every
   other storage account in the tenant). Referenced by id in

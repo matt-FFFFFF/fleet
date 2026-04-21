@@ -118,8 +118,9 @@
     `mgmt_environment_for_vnet_peering` uniform. Unit tests rewritten
     to cover new shape (8 runs pass).
   - Naming parity sub-item (`docs/naming.md` vs bootstrap HCL locals)
-    stays `[ ]`; unit 3 + unit 1 unblocked it, but `docs/naming.md`
-    still carries pre-143d18b wording (tracked under §11).
+    advanced in unit 8: `docs/naming.md` now matches post-rework
+    derivations. Automated diff CI between `load.sh` and bootstrap
+    HCL locals still `[ ]` (tracked as Rework-program item 12).
 - [!] §3.4 Networking topology — spec rewritten in PLAN (commit
       143d18b) to uniform env-region model. No implementation
       landed yet; all work tracked under the §4 Stage -1 rows and
@@ -307,31 +308,43 @@
 
 ## §11 Operator UX
 
-- [!] `docs/adoption.md` — rework required: L49 `primary_region`
-      default, L61 single-region mgmt assumption, L234
-      `networking.hub.resource_id` scalar, L239 mgmt VNet owned by
-      `bootstrap/fleet` + `networking.vnets.mgmt.address_space`,
-      L240 `snet-pe-shared` → `snet-pe-fleet`.
-- [!] `docs/networking.md` — rework required: L29 mgmt row (single
-      VNet, owned by `bootstrap/fleet`), L35/L39 `networking.hub`
-      scalar in Mermaid, L38-41 + L61-64 Mermaid diagrams assume
-      single mgmt VNet, L82-84 `bootstrap/fleet` owns mgmt VNet,
-      L121 `snet-pe-shared` token in CIDR diagram, L215-231 capacity
-      tables don't reflect mgmt-has-fleet-plane-zone split,
-      L290-295 peering ownership table, L306
-      `publish MGMT_VNET_RESOURCE_ID` (stale var), L313 missing
-      `MGMT_<REGION>_{PE_FLEET_SUBNET_ID,RUNNERS_SUBNET_ID}`,
-      L336-337 DNS-link pair wording, L367-372 repo variables table.
-      Route-table/UDR section missing entirely.
-- [!] `docs/onboarding-cluster.md` — rework required: L126-131 +
-      L162-163 reference fleet-scope `MGMT_VNET_RESOURCE_ID` and
-      always-two-link phrasing (mgmt-cluster collapse missing).
-- [!] `docs/naming.md` — rework required: L21 `fleet.primary_region`,
-      L22 `environments.<env>` → `envs.<env>`, L27
-      `networking.vnets.mgmt`, L72 `vnet-<fleet>-mgmt` (region-less),
-      L74 `rg-net-mgmt` (region-less), L76-77 `snet-pe-shared` +
-      `networking.vnets.mgmt.address_space`, L85 `nsg-pe-shared`,
-      missing `snet-pe-env` on mgmt.
+- [x] `docs/adoption.md` — reworked: prompts table collapses four
+      `sub_*` + two address-space rows + `networking_hub_resource_id`
+      into a single `environments` map row; §3 post-init narrative +
+      §5.1 prereqs reflect per-env-region `hub_network_resource_id`
+      and per-mgmt-region VNet ownership.
+- [x] `docs/networking.md` — reworked: Tiers table + topology
+      Mermaid show per-mgmt-region VNets and nullable per-env-region
+      hub refs; CIDR diagram + Mermaid show env-plane (first `/24`) /
+      API pool (second) / nodes pool + mgmt-only fleet-plane zone in
+      upper `/(N+1)` with `snet-runners` `/23` + `snet-pe-fleet`
+      `/26`; derivation block includes the fleet-plane formulas;
+      peering ownership table/sequence + peering-names table updated
+      for per-mgmt-region selector (`same-region-else-first`) and
+      env-owned both halves; DNS-link section documents id-equality
+      collapse for mgmt clusters; repo-variables table carries the
+      JSON-map `MGMT_*` set + per-(env,region) scalars incl.
+      `ROUTE_TABLE_RESOURCE_ID`; new "Route table / UDR egress"
+      section documents the unconditional shell + optional
+      `0.0.0.0/0` route.
+- [x] `docs/onboarding-cluster.md` — reworked: DNS-link paragraph
+      names the per-cluster `peer_mgmt_region` resolution via
+      `fromJSON(vars.MGMT_VNET_RESOURCE_IDS)` and documents the
+      mgmt-cluster id-equality collapse; Stage 1 bullets reference
+      `ROUTE_TABLE_RESOURCE_ID` on the per-cluster subnets and
+      single-link collapse for mgmt clusters.
+- [x] `docs/naming.md` — reworked: inputs section spells out
+      `envs.<env>.subscription_id` (top-level) vs
+      `networking.envs.<env>.regions.<region>.{address_space,
+      hub_network_resource_id, egress_next_hop_ip}`; derived-names
+      table uses uniform `vnet-<fleet>-<env>-<region>` /
+      `rg-net-<env>-<region>`, adds `rt-aks-<env>-<region>` and
+      `asg-nodes-<env>-<region>`, splits env-plane (`snet-pe-env`,
+      `nsg-pe-env-<env>-<region>`) from mgmt-only fleet-plane
+      (`snet-pe-fleet`, `snet-runners`, `nsg-pe-fleet-<region>`,
+      `nsg-runners-<region>`) with correct CIDR formulas (runners
+      `/23`, pe-fleet `/26` at index 8 of upper `/(N+1)`), and
+      peering-names include the mgmt-region suffix.
 - [ ] `onboarding-team.md`, `upgrades.md`, `promotion.md`.
 
 ## §12 Risks and mitigations
@@ -393,7 +406,7 @@
       `_fleet.yaml` with runner IDs; self-deletes. Stage 0 wiring of
       the tfvars overlay remains TODO.
 - [x] §16.5 GitHub template mechanics; `import` block for fleet repo.
-- [!] §16.6 `docs/naming.md` — rework required; see §11.
+- [x] §16.6 `docs/naming.md` — reworked in unit 8; see §11.
   - [ ] CI diff between `load.sh` and bootstrap HCL locals — deferred.
 - [x] §16.7 Safety rails (banner, dirty-tree refusal, TF validation).
 - [x] §16.8 Template self-test workflow. Selftest fixture will need
@@ -583,9 +596,26 @@ self-contained enough to land in its own PR.
    end-to-end smoke (`init-fleet.sh --non-interactive` + `validate` on
    `bootstrap/{fleet,environment}` + `stages/{0-fleet,1-cluster}`)
    passes clean.
-8. **Docs** — rewrite `docs/naming.md`, `docs/networking.md`,
-   `docs/adoption.md`, `docs/onboarding-cluster.md` per §11
-   drift list.
+8. **Docs** — ✅ **Done.** Reworked all four §11 drift targets in
+   lockstep with units 1–7 + 5b: `docs/naming.md` (inputs section +
+   derived-names table; uniform VNet/RG/NSG names, split env-plane
+   vs mgmt-only fleet-plane subnets, correct CIDR formulas, peering
+   names with mgmt-region suffix), `docs/networking.md` (Tiers +
+   topology Mermaid for per-mgmt-region VNets and nullable
+   per-env-region hub refs; CIDR diagram + Mermaid + derivation
+   block for env-plane + API pool + nodes pool + mgmt-only
+   fleet-plane zone; peering ownership table/sequence +
+   peering-names table; DNS-link id-equality collapse; repo
+   variables table with JSON-map `MGMT_*` set +
+   `ROUTE_TABLE_RESOURCE_ID`; new "Route table / UDR egress"
+   section), `docs/adoption.md` (prompts table collapsed into
+   single `environments` map row; §3 post-init narrative + §5.1
+   prereqs for per-env-region `hub_network_resource_id` and
+   per-mgmt-region VNet ownership), `docs/onboarding-cluster.md`
+   (DNS-link paragraph names `peer_mgmt_region` resolution via
+   `fromJSON(vars.MGMT_VNET_RESOURCE_IDS)` and mgmt-cluster
+   id-equality collapse; Stage 1 bullets reference
+   `ROUTE_TABLE_RESOURCE_ID` on per-cluster subnets).
 9. **Identity/RBAC Stage 1 follow-up** (pre-existing `[ ]`; gated
    by unit 6).
 10. **Live apply** of `bootstrap/fleet` + `stages/0-fleet` against a

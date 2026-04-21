@@ -124,11 +124,17 @@ Beyond `subnet_slot`, fill in:
 Private DNS is **derived**. The cluster's zone is
 `<name>.<region>.<env>.<dns.fleet_root>`, created by Stage 1 via
 `terraform/modules/cluster-dns/` with `virtualNetworkLink`s to the
-env VNet **and** the mgmt VNet. The legacy
-`networking.dns_linked_vnet_ids` field in `cluster.yaml` is gone —
-both VNet ids are sourced from repo variables (`MGMT_VNET_RESOURCE_ID`
-and `<ENV>_<REGION>_VNET_RESOURCE_ID`) published by the owning
-bootstrap stages.
+env VNet **and** the mgmt VNet for the cluster's *peer mgmt region*
+(resolved same-region-else-first from the mgmt regions declared in
+`_fleet.yaml`). The legacy `networking.dns_linked_vnet_ids` field in
+`cluster.yaml` is gone — both VNet ids are sourced from repo
+variables: `<ENV>_<REGION>_VNET_RESOURCE_ID` (per-(env,region) scalar
+published by `bootstrap/environment`) and
+`fromJSON(vars.MGMT_VNET_RESOURCE_IDS)[<peer_mgmt_region>]` (JSON
+map published by `bootstrap/fleet` on the `fleet-meta` GitHub
+Environment). For **mgmt clusters** the env-region VNet *is* the
+mgmt VNet, so both ids are identical and the module collapses to a
+single link (detected by id equality, not by `cluster.env`).
 
 ## 4. Open the PR
 
@@ -156,11 +162,18 @@ STATUS §10):
 1. **Stage 1** (`terraform/stages/1-cluster`):
    - `azapi_resource.snet_aks_api` + `snet_aks_nodes` as children
      of the env VNet (parent id from `<ENV>_<REGION>_VNET_RESOURCE_ID`).
+     Both subnets set `properties.routeTable.id` to
+     `<ENV>_<REGION>_ROUTE_TABLE_RESOURCE_ID` so egress goes through
+     the hub firewall (or no-op if `egress_next_hop_ip` is null).
    - AVM AKS module (`Azure/avm-res-containerservice-managedcluster/azurerm ~> 0.5`)
      with curated-typed `cluster.aks.*` inputs, node pool attached
      to the env-region ASG (`<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`).
-   - Per-cluster private DNS zone + two `virtualNetworkLink`s
-     (`env`, `mgmt`).
+   - Per-cluster private DNS zone with `virtualNetworkLink`s: one
+     to the env-region VNet and one to the mgmt VNet for the peer
+     mgmt region (resolved via
+     `fromJSON(vars.MGMT_VNET_RESOURCE_IDS)[<peer_mgmt_region>]`).
+     For mgmt clusters these collapse to a single link by
+     id-equality.
 2. **Stage 2** (`terraform/stages/2-bootstrap`):
    - ArgoCD / Kargo bootstrap.
 
