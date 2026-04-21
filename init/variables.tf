@@ -232,6 +232,10 @@ variable "networking_mgmt_address_space" {
     condition     = can(regex("^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)", var.networking_mgmt_address_space))
     error_message = "networking_mgmt_address_space must be RFC1918 (10.0.0.0/8, 172.16.0.0/12, or 192.168.0.0/16)."
   }
+  validation {
+    condition     = !can(cidrnetmask(var.networking_mgmt_address_space)) || cidrhost(var.networking_mgmt_address_space, 0) == split("/", var.networking_mgmt_address_space)[0]
+    error_message = "networking_mgmt_address_space must be strictly aligned on its prefix (no host bits set; e.g. `10.50.0.0/20`, not `10.50.0.1/20`). `config-loader/load.sh` derives subnet CIDRs with Python `ipaddress.ip_network(..., strict=True)` which rejects misaligned inputs."
+  }
 }
 
 variable "networking_env_mgmt_eastus_address_space" {
@@ -248,6 +252,10 @@ variable "networking_env_mgmt_eastus_address_space" {
   validation {
     condition     = can(regex("^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)", var.networking_env_mgmt_eastus_address_space))
     error_message = "networking_env_mgmt_eastus_address_space must be RFC1918."
+  }
+  validation {
+    condition     = !can(cidrnetmask(var.networking_env_mgmt_eastus_address_space)) || cidrhost(var.networking_env_mgmt_eastus_address_space, 0) == split("/", var.networking_env_mgmt_eastus_address_space)[0]
+    error_message = "networking_env_mgmt_eastus_address_space must be strictly aligned on its prefix (no host bits set). `config-loader/load.sh` uses Python `ipaddress.ip_network(..., strict=True)`."
   }
 }
 
@@ -266,6 +274,10 @@ variable "networking_env_nonprod_eastus_address_space" {
     condition     = can(regex("^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)", var.networking_env_nonprod_eastus_address_space))
     error_message = "networking_env_nonprod_eastus_address_space must be RFC1918."
   }
+  validation {
+    condition     = !can(cidrnetmask(var.networking_env_nonprod_eastus_address_space)) || cidrhost(var.networking_env_nonprod_eastus_address_space, 0) == split("/", var.networking_env_nonprod_eastus_address_space)[0]
+    error_message = "networking_env_nonprod_eastus_address_space must be strictly aligned on its prefix (no host bits set). `config-loader/load.sh` uses Python `ipaddress.ip_network(..., strict=True)`."
+  }
 }
 
 variable "networking_env_prod_eastus_address_space" {
@@ -282,6 +294,10 @@ variable "networking_env_prod_eastus_address_space" {
   validation {
     condition     = can(regex("^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)", var.networking_env_prod_eastus_address_space))
     error_message = "networking_env_prod_eastus_address_space must be RFC1918."
+  }
+  validation {
+    condition     = !can(cidrnetmask(var.networking_env_prod_eastus_address_space)) || cidrhost(var.networking_env_prod_eastus_address_space, 0) == split("/", var.networking_env_prod_eastus_address_space)[0]
+    error_message = "networking_env_prod_eastus_address_space must be strictly aligned on its prefix (no host bits set). `config-loader/load.sh` uses Python `ipaddress.ip_network(..., strict=True)`."
   }
   # Non-overlap across all four repo-owned VNets. Pairwise CIDR
   # overlap check: for CIDR-aligned blocks, A and B overlap iff the

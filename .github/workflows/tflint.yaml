@@ -17,12 +17,14 @@ on:
       - 'init/**'
       - '.tflint.hcl'
       - '.github/workflows/tflint.yaml'
+      - '.terraform-version'
   push:
     branches: [main]
     paths:
       - 'terraform/**'
       - 'init/**'
       - '.tflint.hcl'
+      - '.terraform-version'
 
 jobs:
   tflint:

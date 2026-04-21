@@ -102,13 +102,21 @@ Beyond `subnet_slot`, fill in:
 - `cluster.resource_group` — typically `rg-<name>`; this RG is
   created by Stage 1 and owns the AKS cluster.
 - `cluster.aks.<key>` — any of the curated typed passthroughs
-  exposed by `modules/aks-cluster/variables.tf` (today:
-  `kubernetes_version`, `sku_tier`, `auto_scaler_profile`,
-  `auto_upgrade_profile`, `maintenance_window`, `system_pool`,
-  `apps_pool`). **Adding a new knob = adding a variable to
+  exposed by `modules/aks-cluster/variables.tf` as `cluster.aks.*`
+  fields (today: `kubernetes_version`, `sku_tier`,
+  `auto_scaler_profile`, `auto_upgrade_profile`,
+  `maintenance_window`). **Adding a new knob = adding a variable to
   `modules/aks-cluster/variables.tf`** and opening that PR first;
   there is no freeform passthrough map. See PLAN §3.4 "Stage 1 AKS
   module passthrough".
+- `node_pools.system` / `node_pools.apps` — node-pool sizing lives
+  at the **top level** of `cluster.yaml` (not under `cluster.aks`).
+  Stage 1 wires `var.doc.node_pools.{system,apps}` into the AKS
+  module's `system_pool` / `apps_pool` inputs (see
+  `terraform/stages/1-cluster/main.aks.tf`). Typical use: override
+  `vm_size`, `min_count` / `max_count`, `availability_zones`. The
+  `clusters/_defaults.yaml` baseline already sets sensible
+  defaults; per-cluster entries deep-merge on top.
 - RBAC group references, workload UAMIs, etc. — see
   `clusters/_template/cluster.yaml` for the full list of optional
   overrides.

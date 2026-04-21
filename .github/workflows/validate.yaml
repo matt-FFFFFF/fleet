@@ -21,11 +21,13 @@ on:
       - '.github/scripts/validate-subnet-slots.sh'
       - '.github/workflows/validate.yaml'
       - '.github/fixtures/adopter-test.tfvars'
+      - '.terraform-version'
   push:
     branches: [main]
     paths:
       - 'clusters/**'
       - '.github/scripts/validate-subnet-slots.sh'
+      - '.terraform-version'
 
 jobs:
   subnet-slots:

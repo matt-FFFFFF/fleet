@@ -101,9 +101,13 @@ Each cluster needs two subnets of very different sizes:
   integration requires `/28`, delegated to
   `Microsoft.ContainerService/managedClusters`, empty, unshared.
 - `snet-aks-nodes-<cluster>` — `/25`. Sized for Azure CNI **Overlay**
-  with Cilium, where pod IPs come from `networking.pod_cidr` (a
-  separate non-routable space per cluster) and never consume node
-  subnet addresses. `/25` = 128 addrs covers nodes + ILBs.
+  with Cilium, where pod IPs come from a fleet-wide shared CGNAT
+  pod CIDR (`100.64.0.0/16`, hard-coded in `modules/aks-cluster`) —
+  **not** from the node subnet, so this `/25` only has to cover
+  nodes + ILBs. Pod IPs never leak onto the VNet because overlay
+  performs SNAT at the node; safe to share the same space across
+  every cluster in the fleet. `/25` = 128 addrs covers both
+  comfortably. See *Shared pod CIDR (CGNAT)* below.
 
 A naive `/24`-per-cluster symmetric split into two `/25`s wastes 112
 addresses on the api side (the `/28` is delegated; nothing else can

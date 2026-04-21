@@ -460,3 +460,14 @@ run "reject_env_prod_partial_overlap_with_mgmt" {
   }
   expect_failures = [var.networking_env_prod_eastus_address_space]
 }
+
+run "reject_mgmt_address_space_host_bits_set" {
+  command = plan
+  variables {
+    # Host bits set → strict-alignment validation must fire. Matches
+    # `config-loader/load.sh`'s Python `ipaddress.ip_network(...,
+    # strict=True)` check so the same input is rejected in both places.
+    networking_mgmt_address_space = "10.50.0.1/20"
+  }
+  expect_failures = [var.networking_mgmt_address_space]
+}
