@@ -179,9 +179,9 @@ module "apps_pool" {
 # Authored via the sibling `modules/maintenanceconfiguration` AVM
 # submodule; `parent_id` points at the cluster and an explicit
 # `depends_on` defers submission until the cluster is ready. Named
-# `default` so it binds to the `aksManagedAutoUpgradeSchedule`
-# configuration AKS consumes for control-plane + node-image auto
-# upgrades (governed by `auto_upgrade_profile` above).
+# `aksManagedAutoUpgradeSchedule` — the magic name AKS expects for
+# the control-plane + node-image auto-upgrade schedule (governed by
+# `auto_upgrade_profile` above).
 
 module "maintenance" {
   source  = "Azure/avm-res-containerservice-managedcluster/azurerm//modules/maintenanceconfiguration"

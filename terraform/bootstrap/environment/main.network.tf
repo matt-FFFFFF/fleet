@@ -263,17 +263,20 @@ resource "azapi_resource" "nsg_pe_env_rule_443" {
 
   body = {
     properties = {
-      priority                             = 100
-      direction                            = "Inbound"
-      access                               = "Allow"
-      protocol                             = "Tcp"
-      sourcePortRange                      = "*"
-      destinationPortRange                 = "443"
-      sourceApplicationSecurityGroups      = [{ id = azapi_resource.node_asg[each.key].id }]
-      destinationAddressPrefix             = local.env_regions[local.vnet_keys_by_region[each.key]].snet_pe_env_cidr
-      destinationApplicationSecurityGroups = []
-      sourceAddressPrefix                  = ""
-      description                          = "AKS node pools (via asg-nodes-${var.env}-${each.key}) reach env PE subnet over 443. PLAN §3.4."
+      priority                        = 100
+      direction                       = "Inbound"
+      access                          = "Allow"
+      protocol                        = "Tcp"
+      sourcePortRange                 = "*"
+      destinationPortRange            = "443"
+      sourceApplicationSecurityGroups = [{ id = azapi_resource.node_asg[each.key].id }]
+      destinationAddressPrefix        = local.env_regions[local.vnet_keys_by_region[each.key]].snet_pe_env_cidr
+      # `sourceAddressPrefix` and `destinationApplicationSecurityGroups`
+      # are intentionally omitted — ARM rejects NSG rules that set both
+      # an address-prefix field and its ASG counterpart. Source is ASG-
+      # bound (`sourceApplicationSecurityGroups` above); destination is
+      # a CIDR (`destinationAddressPrefix` above).
+      description = "AKS node pools (via asg-nodes-${var.env}-${each.key}) reach env PE subnet over 443. PLAN §3.4."
     }
   }
 

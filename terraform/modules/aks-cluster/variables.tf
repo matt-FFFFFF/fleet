@@ -122,8 +122,10 @@ variable "maintenance_window" {
   description = <<-EOT
     Scheduled maintenance window for the managed cluster. Instantiated
     via `Azure/avm-res-containerservice-managedcluster/azurerm//modules/maintenanceconfiguration`
-    when non-null (a single `aksManagedAutoUpgradeSchedule` configuration
-    named `default` is authored under the cluster). Null skips creation.
+    when non-null (a single maintenance configuration named
+    `aksManagedAutoUpgradeSchedule` — the magic name AKS expects for
+    the control-plane + node-image auto-upgrade schedule — is authored
+    under the cluster). Null skips creation.
 
     Shape mirrors the AVM submodule's typed input exactly — see the
     submodule README for field semantics. From `kubernetes.maintenance`

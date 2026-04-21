@@ -24,8 +24,6 @@ resource "azapi_resource" "zone" {
     properties = {}
   }
 
-  response_export_values = ["id"]
-
   tags = var.tags
 }
 
@@ -37,7 +35,7 @@ resource "azapi_resource" "vnet_link" {
 
   type      = "Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01"
   name      = "link-${each.key}"
-  parent_id = azapi_resource.zone.output.id
+  parent_id = azapi_resource.zone.id
   location  = "global"
 
   body = {

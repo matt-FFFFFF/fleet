@@ -54,10 +54,11 @@ require() {
 }
 
 # capacity_for_prefix <N>  →  min(16, 2 * (2^(24-N) - 2))
-# N must be in [16, 24]. Anything narrower than /24 has capacity 0 (no
-# room for even one /25 nodes subnet + /28 api subnet); anything wider
-# than /16 is well beyond any realistic fleet VNet and is clamped to
-# 16 by the min().
+# Returns 0 for any N outside [16, 22]: /23 and /24 land inside the
+# [16,24] sanity guard but yield capacity=0 under the two-pool formula
+# (no room for reserved /24 + api /24 + at least one nodes /24);
+# anything wider than /16 is well beyond any realistic fleet VNet and
+# would be clamped to 16 by the min() if it got past the guard.
 capacity_for_prefix() {
   local n="$1"
   if [[ ! "$n" =~ ^[0-9]+$ ]] || (( n < 16 || n > 24 )); then
@@ -147,7 +148,7 @@ for path in "${cluster_files[@]}"; do
   fi
   capacity="$(capacity_for_prefix "$prefix")"
   if (( capacity == 0 )); then
-    err "$path: env-region $env/$region address_space $address_space has zero cluster capacity (/N must be in [16,24])"
+    err "$path: env-region $env/$region address_space $address_space has zero cluster capacity (/$prefix yields capacity=0 under the two-pool formula min(16, 2*(2^(24-N)-2)); env-region VNets must be /22 or wider — /22=4, /21=12, /20=16)"
     continue
   fi
   if (( slot >= capacity )); then
