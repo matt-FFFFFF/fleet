@@ -12,6 +12,13 @@
 crash.log
 crash.*.log
 
+# `clusters/_fleet.yaml` is a template-repo scratch file — rendered by
+# `init/` on first adopter run, then edited in place. In adopter repos
+# it is the single source of truth and IS committed; `init-fleet.sh`
+# strips this line during self-cleanup so adopter repos commit it. In
+# the *template* repo it must never be committed.
+/clusters/_fleet.yaml
+
 # Generated tfvars (see terraform/config-loader/load.sh and .github/workflows/tf-apply.yaml)
 # Stage 1 per-cluster merged config is generated at CI time and never committed.
 **/terraform.tfvars.json

@@ -222,10 +222,12 @@ rm -rf "$repo_root/.github/fixtures"
 # iteration of the template, is no longer needed.
 rm -f "$repo_root/clusters/_fleet.yaml.template"
 
-# Un-ignore Terraform lock files. The template gitignores them to avoid
-# churn from local/CI `terraform init` runs in the template repo, but
-# adopter repos should commit lock files for reproducibility (HashiCorp's
-# recommendation). Drop the line if present.
+# Un-ignore Terraform lock files and `clusters/_fleet.yaml`. The
+# template gitignores lock files to avoid churn from local/CI
+# `terraform init` runs, and gitignores `_fleet.yaml` because it is a
+# rendered byproduct in the template (never committed upstream).
+# Adopter repos commit both for reproducibility / single-source-of-
+# truth. Drop the lines if present.
 if [ -f "$repo_root/.gitignore" ]; then
   # Portable temp file creation (GNU + BSD/macOS mktemp).
   if ! tmp=$(mktemp 2>/dev/null); then
@@ -234,7 +236,7 @@ if [ -f "$repo_root/.gitignore" ]; then
   # grep exits 0 (matches found) or 1 (no matches) — both mean the
   # output in $tmp is valid; only exit >=2 signals a real error that
   # must not clobber the original .gitignore.
-  if grep -v '^\*\*/\.terraform\.lock\.hcl$' "$repo_root/.gitignore" > "$tmp"; then
+  if grep -Ev '^(\*\*/\.terraform\.lock\.hcl|/clusters/_fleet\.yaml)$' "$repo_root/.gitignore" > "$tmp"; then
     mv "$tmp" "$repo_root/.gitignore"
   else
     grep_status=$?
