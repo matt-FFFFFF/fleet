@@ -81,39 +81,18 @@
     - L150-152 parses `address_space` as scalar; PLAN §3.1 shows it
       as a YAML list — confirm intent and fix parsing accordingly
       (Python `ipaddress.ip_network` at L167 will crash on a list).
-  - `modules/fleet-identity/`:
-    - `variables.tf` L12, L19 docstrings still advertise
-      `fleet.primary_region` → rewrite for `envs.mgmt.location`.
-    - `main.tf` L42, L111 fall back to `local.fleet.primary_region`
-      → switch to `local.envs.mgmt.location` (or env-region-specific
-      lookup).
-    - `main.tf` L55 reads `networking.hub.resource_id` scalar →
-      rebuild `networking_central` output as a nested map over
-      `<env>.<region>`.
-    - `main.tf` L86-87 reads `networking.vnets.mgmt` → remove;
-      derive mgmt from `networking.envs.mgmt.regions.<region>`.
-    - `main.tf` L107-128 derives a singleton `networking_derived.mgmt`
-      object with `vnet_name = "vnet-<fleet>-mgmt"` and
-      `rg_name = "rg-net-mgmt"` (no region) → must become a map keyed
-      by region, parallel to non-mgmt envs.
-    - `main.tf` L120 `snet_pe_shared_cidr`, `outputs.tf` L22 →
-      rename to `snet_pe_fleet_cidr`.
-    - Mgmt branch only carves `snet_pe_shared_cidr` + `snet_runners_cidr`;
-      missing uniform cluster-workload fields (`snet_pe_env_cidr`,
-      api pool, nodes pool, node ASG, NSG name, peering names,
-      `cluster_slot_capacity`) which PLAN §3.3/§3.4 now require on
-      mgmt VNets too.
-    - `main.tf` L94-104 `env_regions` flatten doesn't read
-      `create_reverse_peering` or `mgmt_environment_for_vnet_peering`
-      → extend.
-    - `main.tf` L131-154 peering-name derivation hard-codes
-      `peer-<env>-<region>-to-mgmt` / reverse; must honour
-      `mgmt_environment_for_vnet_peering` and gate the reverse half
-      on `create_reverse_peering`.
-    - CIDR math: fleet-plane subnets currently carved from the FIRST
-      two /26s of the /20; PLAN §3.4 L683/L695/L705 places the
-      fleet-plane zone at the HIGH end (second /21 within /20). Must
-      relocate.
+  - `modules/fleet-identity/` — **done** (unit 1): rewritten to PLAN
+    §3.1/§3.3/§3.4 shape. `envs.mgmt.location` replaces
+    `fleet.primary_region` fallback. `networking_central.hubs` is a
+    flat `<env>/<region>` map. `networking_derived` is a single
+    uniform `envs` map keyed `<env>/<region>` covering every env incl.
+    mgmt; `snet_pe_fleet_cidr` + `snet_runners_cidr` present only on
+    mgmt entries (fleet zone at HIGH end of /20); `snet_pe_env_cidr`,
+    `cluster_slot_capacity`, `node_asg_name`, `nsg_pe_env_name`,
+    `route_table_name`, peering names (incl. mgmt-region in
+    `-to-mgmt-<region>`), `create_reverse_peering`,
+    `mgmt_environment_for_vnet_peering` uniform. Unit tests rewritten
+    to cover new shape (8 runs pass).
   - Naming parity sub-item (`docs/naming.md` vs bootstrap HCL locals)
     was already `[ ]`; stays `[ ]` but is now blocked on the above
     rework.
@@ -440,10 +419,15 @@
       `VENDORING.md` for upstream diff.
 - [x] `terraform/modules/cicd-runners/` vendored fork. See
       `VENDORING.md` for upstream diff.
-- [!] `terraform/modules/fleet-identity/` pure-function derivation
-      module — **rework required** per §3.3 above (singleton mgmt,
-      scalar hub, `snet-pe-shared`, `primary_region` fallback, no
-      per-env-region peering toggles).
+- [~] `terraform/modules/fleet-identity/` pure-function derivation
+      module — unit 1 of the rework landed: schema contract now
+      matches PLAN §3.1/§3.3/§3.4 (uniform per-(env,region) map,
+      mgmt-as-env-region, HIGH-end fleet zone, `snet_pe_fleet_cidr`
+      rename, peering-name mgmt-region suffix, toggle passthroughs).
+      Unit tests rewritten (8 pass). Consumers in `bootstrap/fleet`,
+      `bootstrap/environment`, `stages/1-cluster` still reference the
+      old output shape — those units (4-6 in the rework program) will
+      rewire them.
 - [x] `allow_public_state_during_bootstrap` first-apply-only variable
       on `bootstrap/fleet` (tfstate SA public toggle).
 - [x] Terraform floor `~> 1.14` across all first-party modules + CI;
@@ -456,18 +440,14 @@
 Ordered units of work to clear every `[!]` above. Each unit is
 self-contained enough to land in its own PR.
 
-1. **Schema base — `modules/fleet-identity/`**. Rewrite the parsed-yaml
-   contract: consume `envs.<env>` (not `environments.<env>`),
-   `networking.hubs.<env>.regions.<region>.resource_id`,
-   `networking.envs.mgmt.regions.<region>` uniformly, drop
-   `networking.vnets.mgmt`, replace `fleet.primary_region` fallback
-   with `envs.mgmt.location`. Re-derive `networking_derived` as a
-   uniform map over `(env, region)` including mgmt; add
-   `create_reverse_peering` + `mgmt_environment_for_vnet_peering`
-   passthrough; rename `snet_pe_shared_cidr` → `snet_pe_fleet_cidr`;
-   relocate fleet-plane zone to HIGH end of mgmt /20. Update
-   `init/tests/unit/` and `modules/fleet-identity/tests/unit/` to
-   cover new shape.
+1. **Schema base — `modules/fleet-identity/`**. ✅ **Done.** Rewrote
+   parsed-yaml contract for `envs.<env>`, `networking.hubs`, uniform
+   per-(env,region) map incl. mgmt, HIGH-end fleet zone, renamed
+   `snet_pe_shared_cidr` → `snet_pe_fleet_cidr`, peering names
+   include mgmt-region, passthroughs for `create_reverse_peering` +
+   `mgmt_environment_for_vnet_peering`. Unit tests rewritten (8
+   pass). `init/tests/unit/` still carries old fixtures — will be
+   updated in unit 2 with the renderer.
 2. **Renderer — `init/`**. Update `init/templates/_fleet.yaml.tftpl`,
    `init/variables.tf`, `init/render.tf` to emit the new schema.
    Convert hard-coded-region variables into an open map input.

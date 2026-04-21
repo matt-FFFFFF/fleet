@@ -8,6 +8,16 @@
 locals {
   fleet = var.fleet_doc.fleet
 
+  # Convenience: the `envs.<env>` map from _fleet.yaml. Used below to
+  # source the mgmt location (mgmt's scalar `location` is the canonical
+  # source for fleet-wide resources that aren't bound to a cluster
+  # env-region — fleet RGs, fleet-meta UAMI, tenant-scope role
+  # assignments, fleet ACR). `fleet.primary_region` no longer exists
+  # per PLAN §3.1.
+  envs          = try(var.fleet_doc.envs, {})
+  mgmt_env      = try(local.envs.mgmt, null)
+  mgmt_location = try(local.mgmt_env.location, null)
+
   # Derived names. `coalesce(override, formula)` pattern lets an explicit
   # override win; when the override is empty/absent the formula result is
   # used. For KV and SA names, `substr(..., 0, 24)` truncates only the
@@ -39,24 +49,35 @@ locals {
       substr("kv-${local.fleet.name}-fleet", 0, 24),
     )
     fleet_kv_resource_group = try(var.fleet_doc.keyvault.resource_group, var.fleet_doc.acr.resource_group)
-    fleet_kv_location       = try(var.fleet_doc.keyvault.location, local.fleet.primary_region)
+    fleet_kv_location       = try(var.fleet_doc.keyvault.location, local.mgmt_location)
   }
 
-  # Central adopter-owned networking inputs — the hub VNet the repo peers
-  # to and the four central `privatelink.*` private DNS zones used for
-  # PE A-record registration. All BYO; referenced by resource id only.
-  # `try()`-guarded so older / partial `_fleet.yaml` docs stay parseable;
-  # downstream callsites assert non-null with `precondition` blocks.
+  # Central adopter-owned networking inputs — the per-env-region hub VNets
+  # the repo peers to and the four central `privatelink.*` private DNS
+  # zones used for PE A-record registration. All BYO; referenced by
+  # resource id only. `try()`-guarded so partial `_fleet.yaml` docs stay
+  # parseable; downstream callsites assert non-null with `precondition`
+  # blocks.
   #
-  # PLAN §3.4: this is the Phase-B schema. Pre-Phase-B BYO per-service
-  # subnet ids (`networking.{tfstate,fleet_kv,runner}.*`) are gone —
-  # those subnets are now owned by this repo via `networking_derived`.
+  # PLAN §3.1 shape:
+  #   networking.hubs.<env>.regions.<region>.resource_id
+  # The hubs map mirrors `networking.envs` (env → regions → region).
+  # `hubs` is a flat map keyed "<env>/<region>" for symmetry with
+  # `networking_derived.envs`.
+  hubs_raw = try(var.fleet_doc.networking.hubs, {})
+  hubs = merge([
+    for env_name, env_block in local.hubs_raw : {
+      for region_name, region_block in try(env_block.regions, {}) :
+      "${env_name}/${region_name}" => try(region_block.resource_id, null)
+    }
+  ]...)
+
   networking_central = {
-    hub_resource_id = try(var.fleet_doc.networking.hub.resource_id, null)
-    pdz_blob        = try(var.fleet_doc.networking.private_dns_zones.blob, null)
-    pdz_vaultcore   = try(var.fleet_doc.networking.private_dns_zones.vaultcore, null)
-    pdz_azurecr     = try(var.fleet_doc.networking.private_dns_zones.azurecr, null)
-    pdz_grafana     = try(var.fleet_doc.networking.private_dns_zones.grafana, null)
+    hubs          = local.hubs
+    pdz_blob      = try(var.fleet_doc.networking.private_dns_zones.blob, null)
+    pdz_vaultcore = try(var.fleet_doc.networking.private_dns_zones.vaultcore, null)
+    pdz_azurecr   = try(var.fleet_doc.networking.private_dns_zones.azurecr, null)
+    pdz_grafana   = try(var.fleet_doc.networking.private_dns_zones.grafana, null)
   }
 
   # -- Repo-owned VNet topology (PLAN §3.4) -----------------------------------
@@ -69,87 +90,127 @@ locals {
   # the contract (see docs/naming.md).
   #
   # Every field is `try()`-guarded against the networking block being
-  # absent or partial, so pre-Phase-B `_fleet.yaml` renders (which carry
-  # no `networking.vnets` / `networking.envs.<env>.regions`) yield
-  # `null`s without raising. Downstream callsites assert non-null before
-  # using.
+  # absent or partial, so partial `_fleet.yaml` renders yield `null`s
+  # without raising. Downstream callsites assert non-null before using.
   #
-  # CIDR math (two-pool layout). For a VNet `/N` with address_space A:
-  #   reserved zone = first /24 of A  (snet-pe-<shared|env>; mgmt also
-  #                                    hosts snet-runners in the 2nd /26)
-  #   api pool      = 2nd /24 of A    → 16 × /28
-  #   nodes pool    = 3rd /24 onward  → 2 × /25 per /24
-  #   cluster_slot_capacity = min(16, 2 * (2^(24-N) - 2))
-  # At /20 (the default) that's 16 slots (api-pool-bound). Widening the
-  # VNet does not raise capacity beyond 16 — the api pool is a fixed
-  # /24 with room for 16 /28s.
-  mgmt_vnet          = try(var.fleet_doc.networking.vnets.mgmt, null)
-  mgmt_address_space = try(local.mgmt_vnet.address_space, null)
+  # CIDR math (PLAN §3.4 L678-706). For a VNet `/N` with
+  # address_space A the layout is:
+  #
+  #   Non-mgmt env-region VNet:
+  #     reserved /24 (index 0)   → snet-pe-env   (first /26 of reserved)
+  #     api /24      (index 1)   → 16 × /28       (per cluster subnet_slot)
+  #     nodes pool   (index 2+)  → 2 × /25 per /24 (per cluster subnet_slot)
+  #
+  #   Mgmt env-region VNet (everything above PLUS):
+  #     fleet zone = upper /(N+1) of A (`cidrsubnet(A, 1, 1)`)
+  #       snet-runners  = first /23 of fleet zone     (ACA-delegated)
+  #       snet-pe-fleet = /26 at index 8 of fleet zone (CI-plane PEs)
+  #
+  # Cluster slot capacity (non-mgmt): min(16, 2 * (2^(24-N) - 2)).
+  # Mgmt is capped softly at ~2-4 at /20 (the fleet zone eats the upper
+  # /21, leaving only the lower /21 for cluster pools). Same formula
+  # applied; operators self-police the mgmt cluster count.
 
   env_regions_raw = try(var.fleet_doc.networking.envs, {})
 
-  # Flatten `envs.<env>.regions.<region>` into a map keyed "<env>/<region>".
-  # Map values stay `try()`-guarded so a partial region block doesn't crash
-  # the derivation.
+  # Flatten `envs.<env>.regions.<region>` into a map keyed
+  # "<env>/<region>". `address_space` is expected to be a YAML list of
+  # CIDR strings (PLAN §3.1); we pick the first entry for CIDR math.
+  # `location` defaults to the region name. Passes through the two
+  # per-env-region peering toggles so Stage -1 can consume them.
   env_regions = merge([
     for env_name, env_block in local.env_regions_raw : {
       for region_name, region_block in try(env_block.regions, {}) :
       "${env_name}/${region_name}" => {
-        env           = env_name
-        region        = region_name
-        address_space = try(region_block.address_space, null)
-        location      = try(region_block.location, region_name)
+        env                               = env_name
+        region                            = region_name
+        address_space                     = try(tolist(region_block.address_space), null)
+        cidr                              = try(tolist(region_block.address_space)[0], null)
+        location                          = try(region_block.location, region_name)
+        create_reverse_peering            = try(region_block.create_reverse_peering, true)
+        mgmt_environment_for_vnet_peering = try(region_block.mgmt_environment_for_vnet_peering, null)
       }
     }
   ]...)
 
-  networking_derived = {
-    mgmt = local.mgmt_vnet == null ? null : {
-      vnet_name     = "vnet-${local.fleet.name}-mgmt"
-      rg_name       = "rg-net-mgmt"
-      address_space = local.mgmt_address_space
-      location      = try(local.mgmt_vnet.location, local.fleet.primary_region)
-      # All CIDR math below is guarded by `can(cidrnetmask(...))` so a
-      # malformed address_space (missing `/N`, non-CIDR string) yields
-      # nulls rather than crashing plan-time. `init/`'s validation block
-      # already rejects bad CIDRs at the schema boundary, but this
-      # module is also consumed by bootstrap stages post-adoption where
-      # the YAML could drift; nulls flow to downstream preconditions
-      # which emit typed errors.
-      # First /26 of the VNet, regardless of VNet size.
-      snet_pe_shared_cidr = can(cidrnetmask(local.mgmt_address_space)) ? cidrsubnet(local.mgmt_address_space, 26 - tonumber(split("/", local.mgmt_address_space)[1]), 0) : null
-      # Second /26 of the VNet — ACA-delegated runner pool.
-      snet_runners_cidr = can(cidrnetmask(local.mgmt_address_space)) ? cidrsubnet(local.mgmt_address_space, 26 - tonumber(split("/", local.mgmt_address_space)[1]), 1) : null
-      # Cluster-slot capacity (for completeness; mgmt VNet currently
-      # hosts a single cluster per region but the math is symmetric).
-      # Two-pool layout: min(16, 2 * (2^(24-N) - 2)). Api-pool-bound
-      # at /20 and wider.
-      cluster_slot_capacity = can(cidrnetmask(local.mgmt_address_space)) ? min(16, 2 * (pow(2, 24 - tonumber(split("/", local.mgmt_address_space)[1])) - 2)) : null
-    }
+  # Flat map of mgmt env-regions — used by non-mgmt env-region peering
+  # derivation to resolve the peer mgmt VNet. In practice at most one
+  # mgmt region is expected per fleet-config, but the map is kept open.
+  mgmt_regions = {
+    for k, r in local.env_regions : r.region => r
+    if r.env == "mgmt"
+  }
 
+  # Uniform per-(env, region) derivation. Every entry carries the full
+  # set of cluster-workload fields (valid on every env including mgmt).
+  # Mgmt entries additionally carry fleet-plane fields
+  # (`snet_pe_fleet_cidr`, `snet_runners_cidr`). Non-mgmt entries set
+  # those two fields to null.
+  networking_derived = {
     envs = {
       for key, r in local.env_regions : key => {
         env           = r.env
         region        = r.region
         location      = r.location
         address_space = r.address_space
-        vnet_name     = "vnet-${local.fleet.name}-${r.env}-${r.region}"
-        rg_name       = "rg-net-${r.env}"
-        # First /26 of the env VNet — shared PE subnet for the env
-        # (Grafana PE, etc.). Guarded as above.
-        snet_pe_env_cidr = can(cidrnetmask(r.address_space)) ? cidrsubnet(r.address_space, 26 - tonumber(split("/", r.address_space)[1]), 0) : null
-        # Number of usable cluster slots in this env-region (two-pool
-        # layout): min(16, 2 * (2^(24-N) - 2)). Api-pool-bound at /20
-        # and wider.
-        cluster_slot_capacity = can(cidrnetmask(r.address_space)) ? min(16, 2 * (pow(2, 24 - tonumber(split("/", r.address_space)[1])) - 2)) : null
-        # Peering names (both halves — mgmt↔env peering lives in the
-        # env state via the peering AVM module with
-        # create_reverse_peering = true).
-        peering_env_to_mgmt_name = "peer-${r.env}-${r.region}-to-mgmt"
-        peering_mgmt_to_env_name = "peer-mgmt-to-${r.env}-${r.region}"
+        cidr          = r.cidr
+
+        # Repo-owned resource names (uniform across envs incl. mgmt).
+        vnet_name = "vnet-${local.fleet.name}-${r.env}-${r.region}"
+        rg_name   = "rg-net-${r.env}-${r.region}"
+
+        # Cluster-workload subnet zone: first /24 of A → first /26 is
+        # snet-pe-env. Guarded by `can(cidrnetmask(...))` so a malformed
+        # or absent CIDR yields null rather than crashing plan-time.
+        snet_pe_env_cidr = r.cidr == null ? null : (can(cidrnetmask(r.cidr)) ? cidrsubnet(cidrsubnet(r.cidr, 24 - tonumber(split("/", r.cidr)[1]), 0), 2, 0) : null)
+
+        # Cluster slot capacity (two-pool layout):
+        # min(16, 2 * (2^(24-N) - 2)). Api-pool-bound at /20+.
+        cluster_slot_capacity = r.cidr == null ? null : (can(cidrnetmask(r.cidr)) ? min(16, 2 * (pow(2, 24 - tonumber(split("/", r.cidr)[1])) - 2)) : null)
+
         # One ASG per env-region, shared by every cluster in the VNet.
         node_asg_name = "asg-nodes-${r.env}-${r.region}"
-        nsg_pe_name   = "nsg-pe-env-${r.env}-${r.region}"
+
+        # Env-PE NSG. Uniform naming across envs incl. mgmt.
+        nsg_pe_env_name = "nsg-pe-env-${r.env}-${r.region}"
+
+        # Route table associated with BOTH api and nodes subnets
+        # (PLAN §3.4 UDR for AKS egress, "api-server VNet integration
+        # egresses through the same next-hop as nodes").
+        route_table_name = "rt-aks-${r.env}-${r.region}"
+
+        # Peerings — per PLAN §3.3 new table, names include mgmt
+        # region ("-to-mgmt-<mgmt-region>"). Authored from env state
+        # (spoke side) for every non-mgmt env-region, with
+        # reverse-half gated on `create_reverse_peering`. For mgmt
+        # env-regions the fields are null (mgmt doesn't peer to
+        # itself from env state; mgmt↔hub is sub-vending's job).
+        peering_spoke_to_mgmt_name = r.env == "mgmt" ? null : (
+          length(keys(local.mgmt_regions)) == 0 ? null :
+          "peer-${r.env}-${r.region}-to-mgmt-${contains(keys(local.mgmt_regions), r.region) ? r.region : keys(local.mgmt_regions)[0]}"
+        )
+        peering_mgmt_to_spoke_name = r.env == "mgmt" ? null : (
+          length(keys(local.mgmt_regions)) == 0 ? null :
+          "peer-mgmt-${contains(keys(local.mgmt_regions), r.region) ? r.region : keys(local.mgmt_regions)[0]}-to-${r.env}-${r.region}"
+        )
+
+        # Per-env-region peering toggles (passthroughs).
+        create_reverse_peering            = r.create_reverse_peering
+        mgmt_environment_for_vnet_peering = r.mgmt_environment_for_vnet_peering
+
+        # Mgmt-only fleet-plane zone (PLAN §3.4 L691-706). Upper /(N+1)
+        # of A; within it, snet-runners = first /23, snet-pe-fleet =
+        # /26 at index 8 of the fleet zone. All null for non-mgmt.
+        snet_runners_cidr = r.env != "mgmt" || r.cidr == null ? null : (
+          can(cidrnetmask(r.cidr)) ? cidrsubnet(cidrsubnet(r.cidr, 1, 1), 22 - tonumber(split("/", r.cidr)[1]), 0) : null
+        )
+        snet_pe_fleet_cidr = r.env != "mgmt" || r.cidr == null ? null : (
+          can(cidrnetmask(r.cidr)) ? cidrsubnet(cidrsubnet(r.cidr, 1, 1), 25 - tonumber(split("/", r.cidr)[1]), 8) : null
+        )
+
+        # Fleet-plane NSG names (mgmt-only; null elsewhere).
+        nsg_pe_fleet_name = r.env == "mgmt" ? "nsg-pe-fleet-${r.region}" : null
+        nsg_runners_name  = r.env == "mgmt" ? "nsg-runners-${r.region}" : null
       }
     }
   }
