@@ -121,13 +121,16 @@
     advanced in unit 8: `docs/naming.md` now matches post-rework
     derivations. Automated diff CI between `load.sh` and bootstrap
     HCL locals still `[ ]` (tracked as Rework-program item 12).
-- [!] §3.4 Networking topology — spec rewritten in PLAN (commit
-      143d18b) to uniform env-region model. No implementation
-      landed yet; all work tracked under the §4 Stage -1 rows and
-      the Stage 1 DNS-link rework below.
+- [x] §3.4 Networking topology — spec rewritten in PLAN (commit
+      143d18b) to uniform env-region model; implementation landed in
+      units 4–7 of the Rework program (per-region mgmt VNets,
+      fleet-plane zone, env=mgmt vs env≠mgmt branching in
+      `bootstrap/environment`, DNS-link id-equality collapse + route
+      table association in `stages/1-cluster`, ACR PE into
+      `snet-pe-fleet` in `stages/0-fleet`). Docs swept in unit 8.
 - [x] Example clusters: `mgmt/eastus/aks-mgmt-01`,
-      `nonprod/eastus/aks-nonprod-01` (will need YAML migration to
-      new `envs:` shape once schema rework lands).
+      `nonprod/eastus/aks-nonprod-01` — validated against post-rework
+      schema during unit 3 smoke test.
 
 ## §4 Terraform stages
 
@@ -365,18 +368,24 @@
         after unit 5 (env=mgmt vs non-mgmt branches, uniform
         cluster-workload carves, per-region peering,
         `mgmt_vnet_resource_ids` map).
-  - [!] `stages/0-fleet` body; not applied; **rework required** on
-        ACR PE subnet name + source.
+  - [~] `stages/0-fleet` body; not applied; **rework done** (unit 7).
+        Fleet ACR PE lands in the mgmt VNet's `snet-pe-fleet`
+        (same-region-else-first); ACR flipped to
+        `publicNetworkAccess = Disabled`; `MGMT_PE_FLEET_SUBNET_IDS`
+        published on the `fleet-stage0` env.
   - [~] `stages/1-cluster` — **rework done** on mgmt VNet resolution
         (per-region via JSON-map index), DNS-link collapse for mgmt
         clusters, and route table association on both api and nodes
         subnets (unit 6). Identity/RBAC follow-up still pending.
-  - [ ] `config-loader/load.sh` naming-derivation parity — blocked
-        on §3.3 rework.
+  - [ ] `config-loader/load.sh` naming-derivation parity CI diff —
+        loader itself matches (unit 3); automated diff between
+        loader and bootstrap HCL locals still deferred
+        (Rework-program item 12).
   - [ ] CI workflows (`validate`, `tf-plan`, `tf-apply`,
         `env-bootstrap`).
   - [ ] **Exit criterion** (both clusters provision and pull from
-        fleet ACR) — not met; blocked on schema rework + route table.
+        fleet ACR) — not met; blocked on live apply
+        (Rework-program item 10) + CI workflows (item 11).
 - [ ] Phase 2 (ArgoCD bootstrap).
 - [ ] Phase 3 (Platform services pre-Kargo).
 - [ ] Phase 4 (Kargo install).
@@ -394,11 +403,16 @@
 
 ## §16 Template-repo adoption model
 
-- [!] §16.1 Single source of truth (`clusters/_fleet.yaml` generated)
-      — rendered by `init/` which drifts; rework lands with §3.1.
-- [!] §16.2 Bootstrap TF reads yaml — rework required; both stacks
-      still read `environments.<env>` / `networking.hub` /
-      `networking.vnets.mgmt`.
+- [x] §16.1 Single source of truth (`clusters/_fleet.yaml` generated)
+      — renderer + consumers realigned to post-rework schema across
+      units 1–7 + 5b (init template emits uniform
+      `networking.envs.<env>.regions.<region>.*` + `envs.<env>`
+      top-level; both bootstrap stacks read the new keys).
+- [x] §16.2 Bootstrap TF reads yaml — both stacks read the
+      post-rework schema (`envs` not `environments`, per-env-region
+      `hub_network_resource_id` not `networking.hub`, no
+      `networking.vnets.mgmt` block; mgmt VNet ids flow via
+      `var.mgmt_vnet_resource_ids` map).
 - [x] §16.3 `init-fleet.sh` wrapper over `init/` TF module.
 - [x] §16.4 `init-gh-apps.sh` — manifest flow for `fleet-meta` /
       `stage0-publisher` / `fleet-runners` Apps; writes
@@ -411,15 +425,16 @@
 - [x] §16.7 Safety rails (banner, dirty-tree refusal, TF validation).
 - [x] §16.8 Template self-test workflow. Selftest fixture will need
       updating to new schema in lockstep.
-- [!] §16.9 File additions/modifications — **rework required** to
-      land uniform env-region networking schema (`envs` rename,
-      `networking.hubs` map, `envs.mgmt.location`, per-env-region
-      `create_reverse_peering`, `mgmt_environment_for_vnet_peering`,
-      `snet-pe-fleet` rename, mgmt-as-env-region) in:
-      `init/templates/_fleet.yaml.tftpl`, `init/variables.tf`,
-      `init/render.tf`, `config-loader/load.sh`,
+- [x] §16.9 File additions/modifications — uniform env-region
+      networking schema landed across `init/templates/_fleet.yaml.tftpl`,
+      `init/variables.tf`, `init/render.tf`, `config-loader/load.sh`,
       `modules/fleet-identity/`, `bootstrap/fleet/`,
-      `bootstrap/environment/`, `stages/1-cluster/`, and docs.
+      `bootstrap/environment/`, `stages/1-cluster/`,
+      `stages/0-fleet/`, and docs (units 1–8 of Rework program).
+      Schema simplification in unit 5b folded the top-level
+      `networking.hubs` map into per-env-region
+      `hub_network_resource_id` and dropped
+      `mgmt_environment_for_vnet_peering`.
 - [x] §16.10.1–9 Execution order complete.
   - [-] §16.10.10 CI naming-diff — deferred to Phase 2 CI work.
 
@@ -429,21 +444,21 @@
 
 - [x] `.fleet-initialized` marker contract.
 - [x] `.github/fixtures/adopter-test.tfvars` selftest input —
-      will need regenerating post-schema-rework.
+      regenerated post-rework (unit 2; refreshed in unit 5b + the
+      `sub_shared` removal side-trip).
 - [x] `AGENTS.md` — agent onboarding preamble.
 - [x] `terraform/modules/github-repo/` vendored fork. See
       `VENDORING.md` for upstream diff.
 - [x] `terraform/modules/cicd-runners/` vendored fork. See
       `VENDORING.md` for upstream diff.
-- [~] `terraform/modules/fleet-identity/` pure-function derivation
-      module — unit 1 of the rework landed: schema contract now
-      matches PLAN §3.1/§3.3/§3.4 (uniform per-(env,region) map,
+- [x] `terraform/modules/fleet-identity/` pure-function derivation
+      module — rework landed in units 1 + 5b: schema contract matches
+      PLAN §3.1/§3.3/§3.4 (uniform per-(env,region) map,
       mgmt-as-env-region, HIGH-end fleet zone, `snet_pe_fleet_cidr`
-      rename, peering-name mgmt-region suffix, toggle passthroughs).
-      Unit tests rewritten (8 pass). Consumers in `bootstrap/fleet`,
-      `bootstrap/environment`, `stages/1-cluster` still reference the
-      old output shape — those units (4-6 in the rework program) will
-      rewire them.
+      rename, peering-name mgmt-region suffix, per-env-region
+      `hub_network_resource_id` passthrough). Consumers in
+      `bootstrap/fleet`, `bootstrap/environment`, `stages/1-cluster`
+      rewired in units 4–6. 8 unit tests pass.
 - [x] `allow_public_state_during_bootstrap` first-apply-only variable
       on `bootstrap/fleet` (tfstate SA public toggle).
 - [x] Terraform floor `~> 1.14` across all first-party modules + CI;
