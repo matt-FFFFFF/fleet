@@ -30,7 +30,7 @@ acr:
   # Default name derived: acr<fleet.name>shared. Override via `name_override`.
   name_override: ""
   resource_group: rg-fleet-shared
-  subscription_id: ${sub_shared}
+  subscription_id: ${environments["mgmt"].subscription_id}
   location: ${primary_region}
   sku: Premium
 
@@ -56,7 +56,7 @@ state:
   # Default name derived: st<fleet.name>tfstate. Override via `storage_account_name_override`.
   storage_account_name_override: ""
   resource_group: rg-fleet-tfstate
-  subscription_id: ${sub_shared}
+  subscription_id: ${environments["mgmt"].subscription_id}
   containers:
     fleet: tfstate-fleet                               # Stage 0 + bootstrap/{environment,team}
 

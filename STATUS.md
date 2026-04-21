@@ -51,7 +51,12 @@
       scalars: `sub_mgmt`, `sub_nonprod`, `sub_prod`,
       `networking_hub_resource_id`,
       `networking_env_{mgmt,nonprod,prod}_address_space`. Kept:
-      `sub_shared`, `primary_region`, `networking_pdz_*`. Adopter
+      `primary_region`, `networking_pdz_*`. `sub_shared` also
+      removed: `acr.subscription_id` + `state.subscription_id` are
+      rendered directly from `environments["mgmt"].subscription_id`,
+      since fleet-shared resources (ACR, tfstate SA, fleet KV) are
+      PE-wired into the mgmt VNet's `snet-pe-fleet` and must live in
+      the mgmt subscription. Adopter
       flow: top-level scalars carry `__PROMPT__` sentinels and are
       swept by `init-fleet.sh`; map-interior sentinels are
       intentionally ignored (prompt regex anchored at column 0) —

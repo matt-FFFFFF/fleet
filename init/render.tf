@@ -17,7 +17,6 @@ locals {
     github_repo        = var.github_repo
     team_template_repo = var.team_template_repo
     primary_region     = var.primary_region
-    sub_shared         = var.sub_shared
     dns_fleet_root     = var.dns_fleet_root
     # Networking (PLAN §3.1 / §3.4) — BYO central PDZs; per-env subscription
     # IDs, VNet address_space values, per-env hub resource IDs, and the

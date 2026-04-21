@@ -100,14 +100,6 @@ variable "primary_region" {
   }
 }
 
-variable "sub_shared" {
-  description = "Subscription GUID for shared resources (ACR, state, fleet KV)."
-  type        = string
-  validation {
-    condition     = can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.sub_shared))
-    error_message = "sub_shared must be a GUID."
-  }
-}
 
 variable "dns_fleet_root" {
   description = "DNS root zone under which per-cluster private zones are created (e.g. int.acme.example)."

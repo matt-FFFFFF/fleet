@@ -9,7 +9,6 @@ github_org         = "acme-co"
 github_repo        = "platform-fleet"
 team_template_repo = "team-repo-template"
 primary_region     = "eastus"
-sub_shared         = "22222222-2222-2222-2222-222222222222"
 dns_fleet_root     = "int.acme.example"
 
 # Networking (PLAN §3.1 / §3.4) — BYO central PDZs. Per-env identity and

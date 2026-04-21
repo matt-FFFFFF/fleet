@@ -2856,9 +2856,11 @@ Fields the adopter supplies (via interactive prompts; see §16.3):
   resources that are not bound to a cluster env-region (fleet RGs,
   fleet-meta UAMI, tenant-scope role assignments, fleet ACR).
 - `envs.mgmt.subscription_id`, `.nonprod.subscription_id`,
-  `.prod.subscription_id`, plus a separate `acr.subscription_id` /
-  `state.subscription_id` (both sourced from a single `sub_shared`
-  input).
+  `.prod.subscription_id`. `acr.subscription_id` and
+  `state.subscription_id` are derived from
+  `envs.mgmt.subscription_id` (not separately prompted): fleet-shared
+  resources (ACR, tfstate SA, fleet KV) are PE-wired into the mgmt
+  VNet's `snet-pe-fleet` and must live in the mgmt subscription.
 - `dns.fleet_root` — e.g. `int.acme.example`.
 
 Fields intentionally **not** prompted (filled post-init; tagged with

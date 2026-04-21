@@ -33,8 +33,6 @@ codeowners_owner   = ""           # CODEOWNERS owner: empty → @<github_org>; e
 
 primary_region = "eastus"
 
-sub_shared = "__PROMPT__" # subscription GUID — shared (ACR / tfstate / fleet KV)
-
 # ---- DNS --------------------------------------------------------------------
 
 dns_fleet_root = "__PROMPT__" # e.g. int.acme.example — parent of every per-cluster private zone

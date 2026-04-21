@@ -24,7 +24,6 @@ variables {
   github_repo        = "platform-fleet"
   team_template_repo = "team-repo-template"
   primary_region     = "eastus"
-  sub_shared         = "22222222-2222-2222-2222-222222222222"
   dns_fleet_root     = "int.acme.example"
   template_commit    = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 
@@ -126,13 +125,15 @@ run "render_happy_path_fleet_yaml" {
     error_message = "Top-level `environments:` must NOT be rendered (renamed to `envs:` in PLAN §3.1)."
   }
 
-  # acr.subscription_id + state.subscription_id both derive from sub_shared.
+  # acr.subscription_id + state.subscription_id both derive from
+  # envs.mgmt.subscription_id — fleet-shared resources are PE-wired
+  # into the mgmt VNet's snet-pe-fleet and must live in the mgmt sub.
   assert {
     condition = alltrue([
-      yamldecode(local_file.fleet_yaml.content).acr.subscription_id == "22222222-2222-2222-2222-222222222222",
-      yamldecode(local_file.fleet_yaml.content).state.subscription_id == "22222222-2222-2222-2222-222222222222",
+      yamldecode(local_file.fleet_yaml.content).acr.subscription_id == "33333333-3333-3333-3333-333333333333",
+      yamldecode(local_file.fleet_yaml.content).state.subscription_id == "33333333-3333-3333-3333-333333333333",
     ])
-    error_message = "acr.subscription_id and state.subscription_id must both derive from var.sub_shared."
+    error_message = "acr.subscription_id and state.subscription_id must both derive from envs.mgmt.subscription_id."
   }
 
   # AAD display names interpolate fleet_name.
@@ -321,14 +322,6 @@ run "reject_tenant_id_non_guid" {
     tenant_id = "not-a-guid"
   }
   expect_failures = [var.tenant_id]
-}
-
-run "reject_sub_shared_non_guid" {
-  command = plan
-  variables {
-    sub_shared = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-  }
-  expect_failures = [var.sub_shared]
 }
 
 run "reject_github_org_leading_hyphen" {
