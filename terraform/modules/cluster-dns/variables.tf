@@ -19,8 +19,8 @@ variable "linked_vnet_ids" {
     (`link-<key>`) so adding a link is an additive diff. Stage 1 passes
     `{ env = <env-region VNet>, mgmt = <mgmt VNet> }` per PLAN §3.4.
   EOT
-  type     = map(string)
-  nullable = false
+  type        = map(string)
+  nullable    = false
   validation {
     condition     = length(var.linked_vnet_ids) > 0
     error_message = "At least one linked VNet is required; an unlinked private DNS zone is unreachable from any client."

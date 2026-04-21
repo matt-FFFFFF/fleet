@@ -12,38 +12,44 @@
 > Legend: `[x]` done · `[~]` in progress / scaffolded but unapplied
 > `[ ]` not started · `[-]` deferred.
 
-Last updated: 2026-04-20 · **Phase E (Stage 1 networking slice)**
-landed on `feat/networking-topology`. `terraform/stages/1-cluster/`
-root now authors the per-cluster `/28` api + `/25` nodes subnets as
-`azapi_resource` children of the env VNet, invokes a new
-`terraform/modules/aks-cluster/` wrapper around
+Last updated: 2026-04-21 · **Networking topology (PLAN §3.4) landed
+end-to-end** on `feat/networking-topology`. Phases A–H complete. The
+repo-owned VNet/subnet topology supersedes the previous BYO model
+in full: `bootstrap/fleet` owns the mgmt VNet (sub-vending `~> 0.2`,
+N=1) + the two reserved `/26`s (`snet-pe-shared`, `snet-runners`);
+`bootstrap/environment` owns env VNets, intra-env mesh, both halves
+of every mgmt↔env peering (peering AVM `~> 0.17` +
+`create_reverse_peering = true`), the per-env-region `snet-pe-env`,
+and the per-env-region `asg-nodes-<env>-<region>`. Stage 1 authors
+per-cluster `/28` api + `/25` nodes subnets as `azapi_resource`
+children of the env VNet, instantiates AKS via
 `Azure/avm-res-containerservice-managedcluster/azurerm ~> 0.5`
-(curated-typed `cluster.aks.*` passthrough; Entra-only auth + OIDC
-+ workload identity + private cluster + VNet integration + Azure CNI
-Overlay + Cilium hard-coded per PLAN §4), and creates the per-cluster
-private DNS zone via a new `terraform/modules/cluster-dns/` with
-`virtualNetworkLinks` to `[env, mgmt]`. Also this session:
-**per-cluster CGNAT pod CIDR** — new `pod_cidr_slot` (0..15, immutable,
-unique) per env-region block in `_fleet.yaml.networking.envs.*`
-reserves a `/12` at `100.[64 + slot*16].0.0/12`, and every cluster
-carves a `/16` at `100.[64 + pod_cidr_slot*16 + subnet_slot].0.0/16`.
-Wiring lands in `init/templates/_fleet.yaml.tftpl`, `init/variables.tf`
-+ `inputs.auto.tfvars`, `modules/fleet-identity/main.tf` + outputs,
-`config-loader/load.sh` (python3 validator), and is consumed by Stage
-1 as `network_profile.pod_cidr`. Docs: `docs/naming.md` grew a new
-"Cluster pod CIDR" row + "Pod CIDR allocation (CGNAT)" subsection;
-also **fixed a stale capacity table** (`/21`=12 was `10`, `/22`=4 was
-`2`; HCL + template were already correct). `azurerm + random` carveout
-(PLAN §2) documented in provider files — AVM AKS module authors the
-cluster via azapi but ships optional `azurerm_management_lock` /
-`azurerm_role_assignment` / `azurerm_monitor_diagnostic_setting`, and
-the RBAC follow-up will use the latter two. Verification: Stage 1 +
-both new modules `terraform validate` clean; `fleet-identity` 8/8 +
-`init/` 33/33 (was 30/30) tests green. Remaining Stage-1 surface
-(cluster KV, UAMIs, role assignments, managed Prometheus DCR/DCRA +
-rules, Kargo mgmt rotation) tracked in §4 Stage 1; Phase G (docs) +
-Phase H (cleanup) in `_TASK.md`. Phase F landed 2026-04-20 — see
-`§4 Stage 1 / validate.yaml` below.
+(curated-typed `cluster.aks.*` passthrough; adding a knob = adding a
+variable in `modules/aks-cluster/variables.tf`), and creates the
+per-cluster private DNS zone + `virtualNetworkLinks` to `[env, mgmt]`.
+Node pools attach to the env-region ASG via
+`network_profile.application_security_groups`. Pod CIDRs carve from
+CGNAT (`100.64.0.0/10`) keyed by per-env-region `pod_cidr_slot` × per
+cluster `subnet_slot`. `cluster.yaml.networking` is a single required
+`subnet_slot: <int>` — immutable, range-checked, unique per
+`(env, region)`; enforced by
+`.github/scripts/validate-subnet-slots.sh` in
+`.github/workflows/validate.yaml`. Docs: `docs/networking.md` (design
+reference) + `docs/onboarding-cluster.md` (operator walkthrough) +
+`docs/adoption.md` refresh + `docs/naming.md` rows. Phase H cleanup
+this commit: dropped legacy `networking.{private_cluster, pod_cidr,
+service_cidr}` from `clusters/_defaults.yaml` (dead-weight after
+Phase B); removed unused `local.platform` in `stages/1-cluster/main.tf`
+(tflint catch); `terraform fmt -recursive` touch-ups in
+`modules/cluster-dns/` + `stages/1-cluster/`. Verification:
+`terraform validate` clean on all 6 roots, `tflint --recursive` clean,
+selftest (`./init-fleet.sh --non-interactive --values-file .github/fixtures/adopter-test.tfvars`
+in throwaway clone) renders the Phase-B networking shape end-to-end,
+`fleet-identity` 8/8 + `init/` 33/33 tests green. `_TASK.md` deleted
+this commit. Remaining Stage-1 surface (cluster KV, UAMIs, role
+assignments, managed Prometheus DCR/DCRA + rules, Kargo mgmt OIDC
+rotation) deferred to a follow-up branch; tracked in §4 Stage 1.
+`tf-apply.yaml` workflow (STATUS §10) deferred likewise.
 
 Prior: Two-pool subnet layout (pre-Phase-E refactor) landed on
 `feat/networking-topology`. PLAN §3.4 rewrote the per-cluster CIDR

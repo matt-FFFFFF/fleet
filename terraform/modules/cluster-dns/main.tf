@@ -18,7 +18,7 @@ resource "azapi_resource" "zone" {
   parent_id = var.parent_id
   # Private DNS zones are global resources — location is always `global`
   # and the API rejects any other value.
-  location  = "global"
+  location = "global"
 
   body = {
     properties = {}

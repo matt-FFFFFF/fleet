@@ -36,18 +36,17 @@ locals {
   # readability. Silence-on-absence is the loader contract (see
   # config-loader/load.sh); non-null fields are asserted via
   # lifecycle.precondition on the resources that consume them.
-  cluster      = var.doc.cluster
-  fleet        = var.doc.fleet.fleet
-  derived      = var.doc.derived
-  net          = var.doc.derived.networking
-  kubernetes   = try(var.doc.kubernetes, {})
-  platform     = try(var.doc.platform, {})
+  cluster    = var.doc.cluster
+  fleet      = var.doc.fleet.fleet
+  derived    = var.doc.derived
+  net        = var.doc.derived.networking
+  kubernetes = try(var.doc.kubernetes, {})
   # Fleet-wide AKS policy (tenant_id, disable_local_accounts,
   # enable_azure_rbac) — hard-coded in modules/aks-cluster, but
   # surfaced here for the aad_profile block.
-  fleet_aks    = try(var.doc.fleet.aad.aks, {})
+  fleet_aks = try(var.doc.fleet.aad.aks, {})
   # Env-scope AKS config (admin_groups, rbac_cluster_admins, rbac_readers).
-  env_aks      = try(var.doc.fleet.environments[local.cluster.env].aks, {})
+  env_aks = try(var.doc.fleet.environments[local.cluster.env].aks, {})
   # Per-cluster AKS passthrough (curated typed) — see
   # modules/aks-cluster/variables.tf for the contract. Absent in most
   # cluster.yaml files; everything has a sensible default in the module.

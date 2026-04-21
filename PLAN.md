@@ -812,36 +812,39 @@ not worked-around.
 
 ## 4. Terraform stages
 
-> **Implementation status (2026-04-20) — networking topology.** The
-> repo-owned VNet/subnet topology described in §3.4 supersedes the
-> previous "BYO subnet id per cluster" model. `bootstrap/fleet` now
-> owns the mgmt VNet (via `Azure/avm-ptn-alz-sub-vending/azure`, N=1);
-> `bootstrap/environment` owns env VNets (sub-vending, intra-env mesh),
-> both halves of every mgmt↔env peering (via
+> **Implementation status (2026-04-21) — networking topology.**
+> Landed on branch `feat/networking-topology`; see commits
+> `5f73b9b..HEAD` (spec through cleanup). The repo-owned VNet/subnet
+> topology described in §3.4 supersedes the previous "BYO subnet id
+> per cluster" model. `bootstrap/fleet` owns the mgmt VNet (via
+> `Azure/avm-ptn-alz-sub-vending/azure`, N=1); `bootstrap/environment`
+> owns env VNets (sub-vending, intra-env mesh), both halves of every
+> mgmt↔env peering (via
 > `Azure/avm-res-network-virtualnetwork/azurerm//modules/peering` with
 > `create_reverse_peering = true`), and one `asg-nodes-<env>-<region>`
-> per env-region. **Stage 1 Phase E landed 2026-04-20:** per-cluster
-> `/28` api + `/25` nodes subnets authored as azapi children of the
-> env VNet, AKS cluster via
+> per env-region. Stage 1 authors per-cluster `/28` api + `/25` nodes
+> subnets as azapi children of the env VNet, instantiates the AKS
+> cluster via
 > `Azure/avm-res-containerservice-managedcluster/azurerm ~> 0.5`
 > (curated-typed `cluster.aks.*` passthrough — adding a knob = adding
 > a variable to `modules/aks-cluster/variables.tf`, no freeform
-> escape hatch), private DNS zone + `virtualNetworkLinks` to
-> `[env, mgmt]`. Node pools attach to the env-region ASG via
-> `network_profile.application_security_groups`. `cluster.yaml.networking`
-> lost `vnet_id`, `subnet_name`, and `dns_linked_vnet_ids` — replaced
-> by a single **required** `networking.subnet_slot: <int>`
-> operator-set at cluster creation and immutable thereafter
-> (PR-check enforced). **Remaining Stage-1 surface** (cluster KV,
-> UAMIs, role assignments, managed Prometheus DCR/DCRA + rules,
-> Kargo mgmt rotation) deferred to an identity/RBAC follow-up;
-> tracked in STATUS §4 Stage 1. **Phase F landed 2026-04-20** —
-> `.github/scripts/validate-subnet-slots.sh` + `.github/workflows/validate.yaml`
-> enforce `subnet_slot` presence, integer type, `[0, capacity-1]`
-> range (capacity formula mirrors `modules/fleet-identity/main.tf`),
-> per-`(env, region)` uniqueness, and PR-base immutability. Full
-> design in §3.4; docs + cleanup phases (G, H) still tracked in
-> `_TASK.md`.
+> escape hatch), and creates a per-cluster private DNS zone +
+> `virtualNetworkLinks` to `[env, mgmt]`. Node pools attach to the
+> env-region ASG via `network_profile.application_security_groups`.
+> `cluster.yaml.networking` lost `vnet_id`, `subnet_name`, and
+> `dns_linked_vnet_ids` — replaced by a single **required**
+> `networking.subnet_slot: <int>` operator-set at cluster creation
+> and immutable thereafter (PR-check enforced via
+> `.github/scripts/validate-subnet-slots.sh` + `.github/workflows/validate.yaml`:
+> presence, integer type, `[0, capacity-1]` range, per-`(env, region)`
+> uniqueness, PR-base immutability). Pod CIDRs carve from CGNAT
+> (`100.64.0.0/10`) keyed by a per-env-region `pod_cidr_slot` + the
+> per-cluster `subnet_slot`. Docs live in `docs/networking.md`
+> (design reference) and `docs/onboarding-cluster.md` (operator
+> walkthrough). **Remaining Stage-1 surface** (cluster KV, UAMIs,
+> role assignments, managed Prometheus DCR/DCRA + rules, Kargo mgmt
+> rotation) is deferred to a follow-up branch; tracked in STATUS §4
+> Stage 1.
 
 ### Stage -1 — Bootstrap (`terraform/bootstrap/`)
 

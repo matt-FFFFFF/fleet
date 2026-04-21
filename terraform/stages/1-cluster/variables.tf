@@ -50,8 +50,8 @@ variable "env_region_vnet_resource_id" {
     private DNS zone is also linked to it. Published as the
     `<ENV>_<REGION>_VNET_RESOURCE_ID` repo-environment variable.
   EOT
-  type     = string
-  nullable = false
+  type        = string
+  nullable    = false
 }
 
 variable "mgmt_vnet_resource_id" {
@@ -62,8 +62,8 @@ variable "mgmt_vnet_resource_id" {
     fleet-wide tooling, platform CI). Published as the fleet-scope
     `MGMT_VNET_RESOURCE_ID` repo variable (Stage 0 passthrough).
   EOT
-  type     = string
-  nullable = false
+  type        = string
+  nullable    = false
 }
 
 variable "node_asg_resource_id" {
@@ -74,6 +74,6 @@ variable "node_asg_resource_id" {
     module's `agent_pools.*.network_profile.application_security_groups`
     input (PLAN §3.4). Published as `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`.
   EOT
-  type     = string
-  nullable = false
+  type        = string
+  nullable    = false
 }

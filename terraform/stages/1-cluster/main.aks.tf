@@ -84,8 +84,8 @@ module "aks" {
 module "cluster_dns" {
   source = "../../modules/cluster-dns"
 
-  zone_fqdn      = local.derived.dns_zone_fqdn
-  parent_id      = "/subscriptions/${local.cluster.subscription_id}/resourceGroups/${local.derived.dns_zone_resource_group}"
+  zone_fqdn = local.derived.dns_zone_fqdn
+  parent_id = "/subscriptions/${local.cluster.subscription_id}/resourceGroups/${local.derived.dns_zone_resource_group}"
   linked_vnet_ids = {
     env  = var.env_region_vnet_resource_id
     mgmt = var.mgmt_vnet_resource_id
