@@ -45,8 +45,8 @@ resource "terraform_data" "network_preconditions" {
 
   lifecycle {
     precondition {
-      condition     = local.networking_central.hub_resource_id != null && local.networking_central.hub_resource_id != "" && !startswith(local.networking_central.hub_resource_id, "<") && startswith(local.networking_central.hub_resource_id, "/subscriptions/")
-      error_message = "clusters/_fleet.yaml: networking.hub.resource_id is unset, still a `<...>` placeholder, or not a /subscriptions/... resource id. Replace it with the full /subscriptions/.../virtualNetworks/<name> id of the adopter-owned hub VNet. See docs/adoption.md §5.1 + docs/networking.md."
+      condition     = local.networking_central.hub_resource_id != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", local.networking_central.hub_resource_id))
+      error_message = "clusters/_fleet.yaml: networking.hub.resource_id must be a full ARM resource id of shape `/subscriptions/<uuid>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<name>` (adopter-owned hub VNet). See docs/adoption.md §5.1 + docs/networking.md."
     }
     precondition {
       condition     = local.networking_central.pdz_blob != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.blob\\.core\\.windows\\.net$", local.networking_central.pdz_blob))

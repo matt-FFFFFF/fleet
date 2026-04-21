@@ -69,6 +69,10 @@ resource "terraform_data" "network_preconditions" {
       error_message = "clusters/_fleet.yaml: networking.envs.${var.env}.regions.<region>.address_space is required for every region. See docs/adoption.md §5.1 + PLAN §3.4."
     }
     precondition {
+      condition     = local.networking_central.hub_resource_id != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", local.networking_central.hub_resource_id))
+      error_message = "clusters/_fleet.yaml: networking.hub.resource_id must be a full ARM resource id of shape `/subscriptions/<uuid>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<name>` (adopter-owned hub VNet). Required for per-region hub peering. See docs/adoption.md §5.1 + docs/networking.md."
+    }
+    precondition {
       condition     = local.networking_central.pdz_grafana != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.grafana\\.azure\\.com$", local.networking_central.pdz_grafana))
       error_message = "clusters/_fleet.yaml: networking.private_dns_zones.grafana must be a full ARM resource id ending in `/providers/Microsoft.Network/privateDnsZones/privatelink.grafana.azure.com`. Replace it with the resource id of the central BYO Grafana PDZ. See docs/adoption.md §5.1."
     }

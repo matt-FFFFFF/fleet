@@ -283,26 +283,34 @@ variable "networking_env_prod_eastus_address_space" {
     condition     = can(regex("^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)", var.networking_env_prod_eastus_address_space))
     error_message = "networking_env_prod_eastus_address_space must be RFC1918."
   }
-  # Non-overlap across all four repo-owned VNets. Compare normalized
-  # network forms via cidrsubnet(_, 0, 0). Only catches exact-match
-  # duplication when all four are the same prefix length; partial
-  # overlap across mixed prefix lengths is flagged as a known gap in
-  # docs/networking.md (operator-side CIDR planning). Guarded with
-  # alltrue+can so this rule only fires once every input is a valid
-  # CIDR — otherwise the per-field CIDR-syntax rule above fires first.
+  # Non-overlap across all four repo-owned VNets. Pairwise CIDR
+  # overlap check: for CIDR-aligned blocks, A and B overlap iff the
+  # network address of each, re-masked at `min(prefix_A, prefix_B)`,
+  # is equal (i.e. one contains the other). Catches both exact
+  # duplication and partial overlap across mixed prefix lengths
+  # (e.g. 10.50.0.0/20 vs 10.50.0.0/21). Guarded with alltrue+can so
+  # this rule only fires once every input is a valid CIDR —
+  # otherwise the per-field CIDR-syntax rule above fires first.
   validation {
     condition = !alltrue([
       can(cidrnetmask(var.networking_mgmt_address_space)),
       can(cidrnetmask(var.networking_env_mgmt_eastus_address_space)),
       can(cidrnetmask(var.networking_env_nonprod_eastus_address_space)),
       can(cidrnetmask(var.networking_env_prod_eastus_address_space)),
-      ]) || length(distinct([
-        cidrsubnet(var.networking_mgmt_address_space, 0, 0),
-        cidrsubnet(var.networking_env_mgmt_eastus_address_space, 0, 0),
-        cidrsubnet(var.networking_env_nonprod_eastus_address_space, 0, 0),
-        cidrsubnet(var.networking_env_prod_eastus_address_space, 0, 0),
-    ])) == 4
-    error_message = "The four repo-owned VNet address spaces (mgmt + mgmt/nonprod/prod env in primary_region) must be distinct."
+      ]) || alltrue([
+      for pair in [
+        [var.networking_mgmt_address_space, var.networking_env_mgmt_eastus_address_space],
+        [var.networking_mgmt_address_space, var.networking_env_nonprod_eastus_address_space],
+        [var.networking_mgmt_address_space, var.networking_env_prod_eastus_address_space],
+        [var.networking_env_mgmt_eastus_address_space, var.networking_env_nonprod_eastus_address_space],
+        [var.networking_env_mgmt_eastus_address_space, var.networking_env_prod_eastus_address_space],
+        [var.networking_env_nonprod_eastus_address_space, var.networking_env_prod_eastus_address_space],
+      ] :
+      cidrsubnet("${split("/", pair[0])[0]}/${min(tonumber(split("/", pair[0])[1]), tonumber(split("/", pair[1])[1]))}", 0, 0)
+      !=
+      cidrsubnet("${split("/", pair[1])[0]}/${min(tonumber(split("/", pair[0])[1]), tonumber(split("/", pair[1])[1]))}", 0, 0)
+    ])
+    error_message = "The four repo-owned VNet address spaces (mgmt + mgmt/nonprod/prod env in primary_region) must be pairwise disjoint (no exact match and no partial overlap across mixed prefix lengths)."
   }
 }
 

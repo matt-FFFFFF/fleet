@@ -444,8 +444,19 @@ run "reject_mgmt_address_space_not_rfc1918" {
 run "reject_env_prod_overlap_with_mgmt" {
   command = plan
   variables {
-    # Identical to mgmt → distinct-count check must fire on prod var.
+    # Identical to mgmt → pairwise-overlap check must fire on prod var.
     networking_env_prod_eastus_address_space = "10.50.0.0/20"
+  }
+  expect_failures = [var.networking_env_prod_eastus_address_space]
+}
+
+run "reject_env_prod_partial_overlap_with_mgmt" {
+  command = plan
+  variables {
+    # /21 subset of mgmt's /20 (mixed prefix lengths) → pairwise
+    # overlap check must catch it, unlike the previous exact-match
+    # distinct() check.
+    networking_env_prod_eastus_address_space = "10.50.0.0/21"
   }
   expect_failures = [var.networking_env_prod_eastus_address_space]
 }
