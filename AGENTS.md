@@ -100,6 +100,18 @@ docs/
 - Hard-coding fleet name in TF (`local.fleet.name` / derived only).
 - Running `terraform apply` on `bootstrap/*` without the adopter
   explicitly requesting it; these affect live tenants.
+- Passing `--force` to `init-fleet.sh`. The flag bypasses the
+  dirty-tree guard, which is the last line of defense before
+  self-cleanup `rm -rf`'s `init/`, `init-fleet.sh`, the selftest
+  workflow, and `.github/fixtures/`. Any uncommitted or untracked
+  file in those paths is silently destroyed. If the guard fires,
+  the correct response is to clean the worktree first (commit,
+  stash, or `rm` the untracked noise — typically stray `.terraform/`
+  directories from ad-hoc `terraform init` runs), then re-run
+  without `--force`. `--force` is reserved for adopters re-running
+  init against an already-initialized repo (where `.fleet-initialized`
+  exists) and should never be used by agents during template
+  development.
 
 ## When unsure, ask
 
