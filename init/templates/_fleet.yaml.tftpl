@@ -4,7 +4,7 @@
 # root, subscriptions, observability settings, etc. It is the single source
 # of truth consumed by:
 #   - bootstrap/fleet         (yamldecode in locals)
-#   - bootstrap/environment   (yamldecode in locals, selects environments[var.env])
+#   - bootstrap/environment   (yamldecode in locals, selects envs[var.env])
 #   - config-loader/load.sh   (deep-merged into every cluster's tfvars)
 #
 # Fields that ship as `null` or `[]` with a `TODO` comment require
@@ -25,7 +25,6 @@ fleet:
   github_org: ${github_org}
   github_repo: ${github_repo}
   team_template_repo: ${team_template_repo}
-  primary_region: ${primary_region}
 
 acr:
   # Default name derived: acr<fleet.name>shared. Override via `name_override`.
@@ -44,8 +43,8 @@ keyvault:                                              # FLEET KV (one; bootstra
   # for the GitHub App PEM resolves at deploy time. Stage 0 consumes the
   # existing vault and seeds additional secrets. The vault is strictly
   # private — publicNetworkAccess=Disabled, defaultAction=Deny — with a
-  # private endpoint on the subnet below and DNS registered in the
-  # central privatelink.vaultcore.azure.net zone.
+  # private endpoint on the mgmt env-region VNet's snet-pe-fleet subnet
+  # and DNS registered in the central privatelink.vaultcore.azure.net zone.
   #
   # Stores fleet-wide secrets:
   #   fleet-runners-app-pem        (Stage -1; this pool's GH App PEM; seeded by init-gh-apps.sh)
@@ -61,17 +60,26 @@ state:
   containers:
     fleet: tfstate-fleet                               # Stage 0 + bootstrap/{environment,team}
 
-networking:                                            # Repo-owned VNets + BYO hub & central PDZs (PLAN §3.4)
-  # Adopter-owned hub VNet (not managed by this repo). Every env VNet
-  # peers to it (classic hub-and-spoke). Referenced by resource id.
-  hub:
-    # TODO: full resource id of the adopter hub VNet.
-    # e.g. /subscriptions/<sub-hub>/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-<region>
-    resource_id: ${networking_hub_resource_id}
+networking:                                            # Repo-owned VNets + BYO hubs & central PDZs (PLAN §3.4)
+  # Adopter-owned hub VNets (not managed by this repo). One hub per
+  # (env, region); every env VNet hub-peers to the hub for its own
+  # (env, region). Mgmt env-regions hub-peer cross-env to the hub of
+  # the env named in `networking.envs.mgmt.regions.<region>.mgmt_environment_for_vnet_peering`.
+  # mgmt itself has no entry here — it consumes another env's hub.
+  hubs:
+%{ for env, cfg in environments ~}
+%{ if env != "mgmt" ~}
+    ${env}:
+      regions:
+        ${primary_region}:
+          # TODO: full resource id of the ${env} hub VNet in ${primary_region}.
+          resource_id: ${cfg.hub_resource_id}
+%{ endif ~}
+%{ endfor ~}
   # Central private DNS zones for PE A-record registration. All BYO —
-  # never created by this repo, only referenced by resource id. The
-  # mgmt-tier tfstate / fleet-KV / fleet-ACR PEs register into these
-  # zones; each env's Grafana PE registers into the grafana zone.
+  # never created by this repo, only referenced by resource id. Every
+  # PE (tfstate SA, fleet KV, fleet ACR, env Grafana) registers into
+  # the matching central zone.
   private_dns_zones:
     # TODO: full resource id of privatelink.blob.core.windows.net
     blob: ${networking_pdz_blob}
@@ -81,29 +89,29 @@ networking:                                            # Repo-owned VNets + BYO 
     azurecr: ${networking_pdz_azurecr}
     # TODO: full resource id of privatelink.grafana.azure.com
     grafana: ${networking_pdz_grafana}
-  # Mgmt-tier VNet owned by `bootstrap/fleet` via the
-  # Azure/avm-ptn-alz-sub-vending/azure module (N=1). Houses the
-  # shared-PE subnet (tfstate SA, fleet KV, fleet ACR) and the
-  # ACA-delegated runner subnet. Subnet CIDRs derived per
-  # docs/naming.md from the address_space below (two reserved /26s:
-  # snet-pe-shared, snet-runners). Minimum /20.
-  vnets:
-    mgmt:
-      location: ${primary_region}
-      address_space: "${networking_mgmt_address_space}"
-  # Env-tier VNets owned by `bootstrap/environment` via the same
-  # sub-vending module (mesh_peering_enabled=true intra-env,
-  # hub_peering to networking.hub.resource_id per VNet). One VNet
-  # per env-per-region. Mgmt↔env peerings are authored separately in
-  # `bootstrap/environment` via the peering AVM module with
-  # create_reverse_peering=true (both halves in env state).
+  # Env-tier VNets. One VNet per env-per-region for every env,
+  # including `mgmt`. `bootstrap/fleet` owns its own resource subnets
+  # inside the mgmt VNet (CI-plane PEs for tfstate SA, fleet KV, fleet
+  # ACR, plus the ACA-delegated runner-pool Container App Environment);
+  # `bootstrap/environment` owns the cluster-workload subnets (api
+  # pool, nodes pool, env-PE) on every env VNet uniformly, including
+  # mgmt. Subnet CIDRs derived per docs/naming.md from the
+  # address_space below. Minimum /20.
   #
   # Per-region fields:
-  #   address_space   VNet CIDR; /20 or wider. Per-cluster /28 api +
-  #                   /25 nodes subnets are carved from the second and
-  #                   third-onward /24s of this space by Stage 1, keyed
-  #                   off `networking.subnet_slot` in each cluster.yaml
-  #                   (/20 → 16 slots; /21 → 12; /22 → 4). See PLAN §3.4.
+  #   address_space             VNet CIDR list; /20 or wider. Per-cluster
+  #                             /28 api + /25 nodes subnets are carved
+  #                             from the 2nd-onward /24s of this space
+  #                             by Stage 1, keyed off `networking.subnet_slot`
+  #                             in each cluster.yaml (/20 → 16 slots;
+  #                             /21 → 12; /22 → 4). See PLAN §3.4.
+  #   create_reverse_peering    Optional, default true. Set false when
+  #                             the hub is owned by a team that forbids
+  #                             spoke-initiated reverse peerings.
+  #   mgmt_environment_for_vnet_peering   (mgmt env-regions only)
+  #                             Required on every mgmt region; names the
+  #                             env under `networking.hubs` whose hub
+  #                             this mgmt VNet peers into.
   #
   # Pod CIDR: all clusters share 100.64.0.0/16 (hard-coded in
   # modules/aks-cluster). Non-routable under CNI Overlay + Cilium;
@@ -111,20 +119,17 @@ networking:                                            # Repo-owned VNets + BYO 
   # name, not from the pod IP itself. See PLAN §3.4 Implementation
   # status.
   envs:
-    mgmt:
+%{ for env, cfg in environments ~}
+    ${env}:
       regions:
         ${primary_region}:
-          address_space: "${networking_env_mgmt_eastus_address_space}"
-    nonprod:
-      regions:
-        ${primary_region}:
-          address_space: "${networking_env_nonprod_eastus_address_space}"
-        # <second-region>:
-        #   address_space: "<cidr>"
-    prod:
-      regions:
-        ${primary_region}:
-          address_space: "${networking_env_prod_eastus_address_space}"
+          address_space: ["${cfg.address_space}"]
+%{ if env == "mgmt" ~}
+          # Which env's hub this mgmt VNet peers into. Must name an env
+          # declared under `networking.hubs` with the same region.
+          mgmt_environment_for_vnet_peering: ${cfg.mgmt_peering_target_env}
+%{ endif ~}
+%{ endfor ~}
 
 github_app:
   fleet_runners:                                       # KEDA polling App (actions:read + metadata:read)
@@ -171,9 +176,17 @@ observability:
   action_group:
     short_name_prefix: ${fleet_name}                   # <=12 chars; env is appended at render time
 
-environments:
-  mgmt:
-    subscription_id: ${sub_mgmt}
+envs:
+%{ for env, cfg in environments ~}
+  ${env}:
+    subscription_id: ${cfg.subscription_id}
+%{ if env == "mgmt" ~}
+    # Location for mgmt-only resources that are not bound to a cluster
+    # env-region (fleet resource groups, fleet-meta UAMI, tenant-scope
+    # role assignments, fleet ACR). Cluster-bearing env-regions take
+    # their location from the `networking.envs.<env>.regions.<region>` key.
+    location: ${primary_region}
+%{ endif ~}
     aks:
       # TODO: AAD group object IDs. Break-glass (bypass K8s RBAC).
       admin_groups: []
@@ -185,35 +198,8 @@ environments:
       admins: []
       editors: []
     action_group:
-      receivers:
-        pagerduty: { integration_key_kv_secret: pagerduty-platform }
-
-  nonprod:
-    subscription_id: ${sub_nonprod}
-    aks:
-      admin_groups: []                                 # TODO
-      rbac_cluster_admins: []                          # TODO
-      rbac_readers: []                                 # TODO
-    grafana:
-      admins: []                                       # TODO
-      editors: []                                      # TODO
-    action_group:
-      receivers:
-        slack: { webhook_url_kv_secret: slack-webhook-nonprod }
-
-  prod:
-    subscription_id: ${sub_prod}
-    aks:
-      admin_groups: []                                 # TODO: very small
-      rbac_cluster_admins: []                          # TODO
-      rbac_readers: []                                 # TODO
-    grafana:
-      admins: []                                       # TODO
-      editors: []                                      # TODO
-    action_group:
-      receivers:
-        pagerduty: { integration_key_kv_secret: pagerduty-prod }
-        slack:     { webhook_url_kv_secret: slack-webhook-prod }
+      receivers: {}                                    # TODO: add per-env receivers (pagerduty / slack / email)
+%{ endfor ~}
 
 dns:
   fleet_root: ${dns_fleet_root}                        # every private zone is a child of this

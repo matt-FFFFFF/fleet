@@ -33,35 +33,62 @@ codeowners_owner   = ""           # CODEOWNERS owner: empty → @<github_org>; e
 
 primary_region = "eastus"
 
-sub_shared  = "__PROMPT__" # subscription GUID — shared (ACR / tfstate / fleet KV)
-sub_mgmt    = "__PROMPT__" # subscription GUID — mgmt environment
-sub_nonprod = "__PROMPT__" # subscription GUID — nonprod environment
-sub_prod    = "__PROMPT__" # subscription GUID — prod environment
+sub_shared = "__PROMPT__" # subscription GUID — shared (ACR / tfstate / fleet KV)
 
 # ---- DNS --------------------------------------------------------------------
 
 dns_fleet_root = "__PROMPT__" # e.g. int.acme.example — parent of every per-cluster private zone
 
-# ---- Networking (PLAN §3.4) -------------------------------------------------
+# ---- Networking: central BYO private DNS zones (PLAN §3.4) ------------------
 #
-# BYO hub VNet + four central private DNS zones (never created by this repo,
-# only referenced by id). Address spaces for the four repo-owned VNets —
-# minimum /20 each; non-overlapping. Each is the address_space of a sub-
-# vending-module-rendered VNet; per-cluster /28 api + /25 nodes subnets are
-# carved by Stage 1 (two-pool layout, see PLAN §3.4).
-#
-# Pod CIDR is the same /16 in every cluster (100.64.0.0/16, hard-coded in
-# modules/aks-cluster). Pod IPs are non-routable via CNI Overlay + Cilium;
-# disambiguation across clusters comes from _ResourceId / cluster name.
-
-networking_hub_resource_id = "__PROMPT__" # /subscriptions/<sub-hub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet-hub>
+# BYO privatelink zones — never created by this repo, only referenced by id.
+# Every PE (tfstate SA, fleet KV, fleet ACR, env Grafana) registers into the
+# matching central zone.
 
 networking_pdz_blob      = "__PROMPT__" # BYO privatelink.blob.core.windows.net zone id
 networking_pdz_vaultcore = "__PROMPT__" # BYO privatelink.vaultcore.azure.net zone id
 networking_pdz_azurecr   = "__PROMPT__" # BYO privatelink.azurecr.io zone id
 networking_pdz_grafana   = "__PROMPT__" # BYO privatelink.grafana.azure.com zone id
 
-networking_mgmt_address_space               = "__PROMPT__" # e.g. 10.50.0.0/20 — mgmt VNet (bootstrap/fleet)
-networking_env_mgmt_eastus_address_space    = "__PROMPT__" # e.g. 10.60.0.0/20 — mgmt env VNet in primary_region
-networking_env_nonprod_eastus_address_space = "__PROMPT__" # e.g. 10.70.0.0/20 — nonprod env VNet in primary_region
-networking_env_prod_eastus_address_space    = "__PROMPT__" # e.g. 10.80.0.0/20 — prod env VNet in primary_region
+# ---- Environments (PLAN §3.1 / §3.4) ----------------------------------------
+#
+# Per-env identity + networking, keyed by env name. Edit this map directly:
+# add entries (e.g. `dev`, `stage`, `qa`) as needed, remove any you don't
+# want. The init-fleet.sh prompt flow does not walk nested map values —
+# fill in GUIDs and hub resource IDs here before running init, or after a
+# first selftest run.
+#
+# Each entry:
+#   subscription_id           Azure subscription GUID for this env.
+#   address_space             VNet CIDR in `primary_region`. RFC1918, /20
+#                             or wider, strictly aligned. Minimum /20.
+#                             Per-cluster subnets carved by Stage 1.
+#   hub_resource_id           (non-mgmt only) ARM id of the adopter hub
+#                             VNet this env peers to. MUST be null/omitted
+#                             on mgmt.
+#   mgmt_peering_target_env   (mgmt only, default "prod") name of the
+#                             non-mgmt env whose hub the mgmt VNet peers
+#                             into.
+#
+# Minimum shape: one entry keyed `mgmt` plus at least one non-mgmt env.
+# Pod CIDR is the same /16 in every cluster (100.64.0.0/16, hard-coded in
+# modules/aks-cluster). Pod IPs are non-routable via CNI Overlay + Cilium;
+# cross-cluster disambiguation comes from _ResourceId / cluster name.
+
+environments = {
+  mgmt = {
+    subscription_id         = "__PROMPT__" # GUID — mgmt subscription
+    address_space           = "10.50.0.0/20"
+    mgmt_peering_target_env = "prod"
+  }
+  nonprod = {
+    subscription_id = "__PROMPT__" # GUID — nonprod subscription
+    address_space   = "10.70.0.0/20"
+    hub_resource_id = "__PROMPT__" # /subscriptions/.../virtualNetworks/<vnet-hub-nonprod>
+  }
+  prod = {
+    subscription_id = "__PROMPT__" # GUID — prod subscription
+    address_space   = "10.80.0.0/20"
+    hub_resource_id = "__PROMPT__" # /subscriptions/.../virtualNetworks/<vnet-hub-prod>
+  }
+}

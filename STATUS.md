@@ -25,36 +25,27 @@
 
 ## §3 Cluster config schema
 
-- [!] §3.1 `clusters/_fleet.yaml` rendered by `init/` — **rework
-      required** (pre-143d18b schema still emitted). Concrete drift in
-      `init/templates/_fleet.yaml.tftpl` + `init/variables.tf` +
-      `init/render.tf`:
-  - `fleet.primary_region` still emitted (template L28) and still
-    declared as a variable (`init/variables.tf` L87-95, passed through
-    `init/render.tf` L19). PLAN removes it; replacement is
-    `envs.mgmt.location`.
-  - Top-level `environments:` (template L174-204) → rename to `envs:`.
-  - `envs.mgmt.location` is not emitted anywhere.
-  - `networking.hub.resource_id` (scalar) at template L66-70 +
-    `init/variables.tf` L169-176 → replace with
-    `networking.hubs.<env>.regions.<region>.resource_id` (nested
-    map). Per-env-region hub input variable shape does not exist.
-  - `networking.vnets.mgmt` block still emitted (template L90-93) →
-    remove entirely; mgmt becomes an entry under
-    `networking.envs.mgmt.regions.<region>`.
-  - `init/variables.tf` `networking_mgmt_address_space` (L220-239)
-    treats mgmt as a distinct special VNet → fold into uniform
-    per-env-region input.
-  - Per-env-region variables are hard-coded to `eastus`
-    (`init/variables.tf` L241, L262, L283) and the 4-way pairwise
-    overlap validation (L302-330) is hard-coded to four VNets → must
-    become an open map over `(env, region)`.
-  - No input channels for the new per-env-region fields
-    `create_reverse_peering` and `mgmt_environment_for_vnet_peering`.
-  - Subnet naming `snet-pe-shared` in `init/variables.tf` docstring
-    L221, template comment L84-89 → rename to `snet-pe-fleet`.
-  - Validation messaging assumes mgmt is special for peering; needs
-    rewriting.
+- [~] §3.1 `clusters/_fleet.yaml` rendered by `init/` — renderer
+      rework done (unit 2); end-to-end adoption flow still blocked on
+      downstream consumers (`config-loader/load.sh`, `bootstrap/*`,
+      stages) catching up. Rewrote `init/templates/_fleet.yaml.tftpl`
+      + `init/variables.tf` + `init/render.tf` +
+      `.github/fixtures/adopter-test.tfvars` + `init/tests/unit/`:
+      dropped `fleet.primary_region`, renamed top-level `environments:`
+      → `envs:` with new `envs.mgmt.location`, replaced flat
+      `networking.hub.resource_id` with nested
+      `networking.hubs.{nonprod,prod}.regions.<region>.resource_id`
+      (single hub var fans out; adopters split post-init), removed
+      `networking.vnets.mgmt` block (mgmt folded into
+      `networking.envs.mgmt.regions.<region>` uniformly), renamed
+      `networking_mgmt_address_space` → gone, renamed the three env
+      address-space vars to drop `_eastus_` infix, emitted
+      `address_space` as a YAML list, added
+      `mgmt_environment_for_vnet_peering: prod` on mgmt env-region,
+      omitted `create_reverse_peering` (bootstrap default true),
+      updated comments to `snet-pe-fleet`, rewrote the pairwise
+      overlap validation to 3-way. `init/tests/unit/init.tftest.hcl`
+      rewritten: 32 runs pass.
 - [x] `clusters/_defaults.yaml` + env `_defaults.yaml`.
 - [x] `clusters/_template/cluster.yaml` onboarding scaffold with
       `networking.subnet_slot` required field.
@@ -446,12 +437,15 @@ self-contained enough to land in its own PR.
    `snet_pe_shared_cidr` → `snet_pe_fleet_cidr`, peering names
    include mgmt-region, passthroughs for `create_reverse_peering` +
    `mgmt_environment_for_vnet_peering`. Unit tests rewritten (8
-   pass). `init/tests/unit/` still carries old fixtures — will be
-   updated in unit 2 with the renderer.
-2. **Renderer — `init/`**. Update `init/templates/_fleet.yaml.tftpl`,
-   `init/variables.tf`, `init/render.tf` to emit the new schema.
-   Convert hard-coded-region variables into an open map input.
-   Update `.github/fixtures/adopter-test.tfvars`.
+   pass). `init/tests/unit/` rewritten alongside the renderer in
+   unit 2.
+2. **Renderer — `init/`**. ✅ **Done.** Rewrote
+   `init/templates/_fleet.yaml.tftpl`, `init/variables.tf`,
+   `init/render.tf`, `.github/fixtures/adopter-test.tfvars`, and
+   `init/tests/unit/init.tftest.hcl` to emit the new schema. Kept
+   per-env address-space scalars (hard-coded `primary_region`); open
+   map over `(env, region)` deferred — adopters add additional regions
+   post-init by editing `_fleet.yaml`. 32 tests pass.
 3. **Config loader — `terraform/config-loader/load.sh`**. Rename
    yaml reads, fix mgmt naming (per-region), add `snet-pe-fleet` /
    `snet-pe-env` / `snet-runners` derivations, fix

@@ -85,7 +85,13 @@ variable "team_template_repo" {
 }
 
 variable "primary_region" {
-  description = "Primary Azure region (e.g. eastus)."
+  description = <<-EOT
+    Primary Azure region (e.g. eastus). Used as the single region for the
+    three initial repo-owned env-region VNets (mgmt, nonprod, prod) and as
+    `envs.mgmt.location` (the location for mgmt-only non-cluster resources:
+    fleet resource groups, fleet-meta UAMI, fleet ACR). Adopters add more
+    regions by editing _fleet.yaml post-init.
+  EOT
   type        = string
   default     = "eastus"
   validation {
@@ -100,33 +106,6 @@ variable "sub_shared" {
   validation {
     condition     = can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.sub_shared))
     error_message = "sub_shared must be a GUID."
-  }
-}
-
-variable "sub_mgmt" {
-  description = "Subscription GUID for the mgmt environment."
-  type        = string
-  validation {
-    condition     = can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.sub_mgmt))
-    error_message = "sub_mgmt must be a GUID."
-  }
-}
-
-variable "sub_nonprod" {
-  description = "Subscription GUID for the nonprod environment."
-  type        = string
-  validation {
-    condition     = can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.sub_nonprod))
-    error_message = "sub_nonprod must be a GUID."
-  }
-}
-
-variable "sub_prod" {
-  description = "Subscription GUID for the prod environment."
-  type        = string
-  validation {
-    condition     = can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", var.sub_prod))
-    error_message = "sub_prod must be a GUID."
   }
 }
 
@@ -145,35 +124,17 @@ variable "template_commit" {
   default     = "unknown"
 }
 
-# ---- networking (PLAN §3.4) -------------------------------------------------
+# ---- networking (PLAN §3.1 / §3.4) — central BYO references ----------------
 #
-# Four repo-owned VNets — mgmt (bootstrap/fleet) and one per env-region
-# (bootstrap/environment). Minimum /20 per VNet. Per-cluster /28 api +
-# /25 nodes subnets are carved by Stage 1 using `networking.subnet_slot`
-# in each cluster.yaml (/20 → 16 slots; /21 → 12; /22 → 4; two-pool
-# layout, see PLAN §3.4).
-#
-# BYO: hub VNet resource id + four central private DNS zone resource ids.
-# Every PE created by the repo (tfstate SA, fleet KV, fleet ACR, Grafana)
-# registers into the matching central zone — the repo never creates a
-# zone itself.
+# Four central private DNS zones — all BYO, never created by this repo.
+# Every PE created by the repo (tfstate SA, fleet KV, fleet ACR, env
+# Grafana) registers into the matching central zone.
 #
 # Pod CIDRs: every cluster uses the same CGNAT `/16` (100.64.0.0/16),
 # hard-coded in `modules/aks-cluster/main.tf`. Rationale: pod IPs are
 # non-routable (CNI Overlay + Cilium); cross-cluster disambiguation is
 # already provided by `_ResourceId` / cluster name in every Log
-# Analytics and Prometheus query. A future ClusterMesh requirement
-# would reintroduce uniqueness additively. See PLAN §3.4 Implementation
-# status.
-
-variable "networking_hub_resource_id" {
-  description = "Full ARM resource id of the adopter-owned hub VNet. Every env VNet hub-peers to it; bootstrap/fleet's mgmt VNet hub-peers too."
-  type        = string
-  validation {
-    condition     = can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", var.networking_hub_resource_id))
-    error_message = "networking_hub_resource_id must be a full /subscriptions/.../providers/Microsoft.Network/virtualNetworks/<name> resource id."
-  }
-}
+# Analytics and Prometheus query.
 
 variable "networking_pdz_blob" {
   description = "Full ARM resource id of the BYO privatelink.blob.core.windows.net private DNS zone (tfstate SA PE registers here)."
@@ -211,122 +172,180 @@ variable "networking_pdz_grafana" {
   }
 }
 
-# Address spaces — one per repo-owned VNet. Each: valid CIDR, RFC1918,
-# /20 or wider. Non-overlap across the four is enforced below via a
-# composite validation on networking_mgmt_address_space (last-declared
-# wins; see `can(cidrsubnet(...))` trick — compares normalized network
-# forms).
+# Address spaces — one per repo-owned env-region VNet. Each: valid CIDR,
+# RFC1918, /20 or wider, strictly aligned. Pairwise non-overlap enforced
+# below on `networking_env_prod_address_space` (last-declared wins).
 
-variable "networking_mgmt_address_space" {
-  description = "Address space (CIDR) of the mgmt VNet owned by bootstrap/fleet. RFC1918, /20 or wider. Two /26s reserved (snet-pe-shared, snet-runners)."
-  type        = string
-  validation {
-    condition     = can(cidrnetmask(var.networking_mgmt_address_space))
-    error_message = "networking_mgmt_address_space must be a valid CIDR (e.g. 10.50.0.0/20)."
-  }
-  validation {
-    condition     = !can(cidrnetmask(var.networking_mgmt_address_space)) || tonumber(split("/", var.networking_mgmt_address_space)[1]) <= 20
-    error_message = "networking_mgmt_address_space must be /20 or wider (≤20)."
-  }
-  validation {
-    condition     = can(regex("^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)", var.networking_mgmt_address_space))
-    error_message = "networking_mgmt_address_space must be RFC1918 (10.0.0.0/8, 172.16.0.0/12, or 192.168.0.0/16)."
-  }
-  validation {
-    condition     = !can(cidrnetmask(var.networking_mgmt_address_space)) || cidrhost(var.networking_mgmt_address_space, 0) == split("/", var.networking_mgmt_address_space)[0]
-    error_message = "networking_mgmt_address_space must be strictly aligned on its prefix (no host bits set; e.g. `10.50.0.0/20`, not `10.50.0.1/20`). `config-loader/load.sh` derives subnet CIDRs with Python `ipaddress.ip_network(..., strict=True)` which rejects misaligned inputs."
-  }
-}
+variable "environments" {
+  description = <<-EOT
+    Per-env identity + networking inputs, keyed by env name. One entry
+    per environment the adopter wants; the map is free-form (any env
+    names), but the key `mgmt` is required — it identifies the
+    management env (home of bootstrap/fleet's fleet-plane subnets and
+    the mgmt cluster plane). Typical shape is `{mgmt, nonprod, prod}`,
+    matching the default below; adopters add `dev`, `stage`, `qa`,
+    `preprod`, etc. by editing `init/inputs.auto.tfvars` before running
+    `init-fleet.sh`.
 
-variable "networking_env_mgmt_eastus_address_space" {
-  description = "Address space (CIDR) of the mgmt-env VNet in primary_region. RFC1918, /20 or wider."
-  type        = string
-  validation {
-    condition     = can(cidrnetmask(var.networking_env_mgmt_eastus_address_space))
-    error_message = "networking_env_mgmt_eastus_address_space must be a valid CIDR."
-  }
-  validation {
-    condition     = !can(cidrnetmask(var.networking_env_mgmt_eastus_address_space)) || tonumber(split("/", var.networking_env_mgmt_eastus_address_space)[1]) <= 20
-    error_message = "networking_env_mgmt_eastus_address_space must be /20 or wider (≤20)."
-  }
-  validation {
-    condition     = can(regex("^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)", var.networking_env_mgmt_eastus_address_space))
-    error_message = "networking_env_mgmt_eastus_address_space must be RFC1918."
-  }
-  validation {
-    condition     = !can(cidrnetmask(var.networking_env_mgmt_eastus_address_space)) || cidrhost(var.networking_env_mgmt_eastus_address_space, 0) == split("/", var.networking_env_mgmt_eastus_address_space)[0]
-    error_message = "networking_env_mgmt_eastus_address_space must be strictly aligned on its prefix (no host bits set). `config-loader/load.sh` uses Python `ipaddress.ip_network(..., strict=True)`."
-  }
-}
+    Each entry carries:
+      subscription_id     GUID of the env's Azure subscription.
+      address_space       VNet CIDR in `primary_region`. RFC1918, /20
+                          or wider, strictly aligned. Minimum /20.
+                          Per-cluster /28 api + /25 nodes subnets are
+                          carved by Stage 1 (see PLAN §3.4). For
+                          env=mgmt the VNet additionally hosts
+                          bootstrap/fleet's snet-pe-fleet (/26) and
+                          snet-runners (/23) at the HIGH end.
+      hub_resource_id     (non-mgmt only) ARM resource id of the
+                          adopter-owned hub VNet this env peers to.
+                          Rendered into
+                          `networking.hubs.<env>.regions.<primary_region>.resource_id`.
+                          MUST be null/omitted on the mgmt env — mgmt
+                          does not have its own hub entry; it peers
+                          cross-env via mgmt_peering_target_env.
+      mgmt_peering_target_env
+                          (mgmt only, optional, default `prod`) name
+                          of the non-mgmt env whose hub the mgmt VNet
+                          peers into. MUST name an existing non-mgmt
+                          env in this map. Rendered into
+                          `networking.envs.mgmt.regions.<primary_region>.mgmt_environment_for_vnet_peering`.
 
-variable "networking_env_nonprod_eastus_address_space" {
-  description = "Address space (CIDR) of the nonprod-env VNet in primary_region. RFC1918, /20 or wider."
-  type        = string
-  validation {
-    condition     = can(cidrnetmask(var.networking_env_nonprod_eastus_address_space))
-    error_message = "networking_env_nonprod_eastus_address_space must be a valid CIDR."
+    Pairwise non-overlap is enforced across every address_space below.
+    Every entry's address_space is rendered as a YAML list (single
+    element) under
+    `networking.envs.<env>.regions.<primary_region>.address_space`.
+  EOT
+  type = map(object({
+    subscription_id         = string
+    address_space           = string
+    hub_resource_id         = optional(string)
+    mgmt_peering_target_env = optional(string, "prod")
+  }))
+  default = {
+    mgmt = {
+      subscription_id         = "__PROMPT__"
+      address_space           = "10.50.0.0/20"
+      mgmt_peering_target_env = "prod"
+    }
+    nonprod = {
+      subscription_id = "__PROMPT__"
+      address_space   = "10.70.0.0/20"
+      hub_resource_id = "__PROMPT__"
+    }
+    prod = {
+      subscription_id = "__PROMPT__"
+      address_space   = "10.80.0.0/20"
+      hub_resource_id = "__PROMPT__"
+    }
   }
-  validation {
-    condition     = !can(cidrnetmask(var.networking_env_nonprod_eastus_address_space)) || tonumber(split("/", var.networking_env_nonprod_eastus_address_space)[1]) <= 20
-    error_message = "networking_env_nonprod_eastus_address_space must be /20 or wider (≤20)."
-  }
-  validation {
-    condition     = can(regex("^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)", var.networking_env_nonprod_eastus_address_space))
-    error_message = "networking_env_nonprod_eastus_address_space must be RFC1918."
-  }
-  validation {
-    condition     = !can(cidrnetmask(var.networking_env_nonprod_eastus_address_space)) || cidrhost(var.networking_env_nonprod_eastus_address_space, 0) == split("/", var.networking_env_nonprod_eastus_address_space)[0]
-    error_message = "networking_env_nonprod_eastus_address_space must be strictly aligned on its prefix (no host bits set). `config-loader/load.sh` uses Python `ipaddress.ip_network(..., strict=True)`."
-  }
-}
 
-variable "networking_env_prod_eastus_address_space" {
-  description = "Address space (CIDR) of the prod-env VNet in primary_region. RFC1918, /20 or wider. Must not overlap the other three repo-owned VNets."
-  type        = string
+  # Structural: `mgmt` must be present.
   validation {
-    condition     = can(cidrnetmask(var.networking_env_prod_eastus_address_space))
-    error_message = "networking_env_prod_eastus_address_space must be a valid CIDR."
+    condition     = contains(keys(var.environments), "mgmt")
+    error_message = "environments must contain a `mgmt` entry (the management env name is fixed; downstream bootstrap/stages key on the literal string `mgmt`)."
+  }
+
+  # Env names: lowercase alnum, 2-12 chars (same rule as fleet_name;
+  # used in resource names and yaml keys).
+  validation {
+    condition     = alltrue([for name in keys(var.environments) : can(regex("^[a-z][a-z0-9]{1,11}$", name))])
+    error_message = "Every environments key must match ^[a-z][a-z0-9]{1,11}$ (2-12 chars, lowercase alnum, letter first)."
+  }
+
+  # Every subscription_id is a GUID (or the __PROMPT__ sentinel — the
+  # wrapper shell substitutes those before apply, but default-carrying
+  # entries would otherwise fail validation on `terraform plan` during
+  # selftest runs that use the file's default). Because `__PROMPT__`
+  # never reaches `terraform apply` (init-fleet.sh rewrites it first)
+  # we enforce GUID strictly; test-time callers supply real GUIDs.
+  validation {
+    condition     = alltrue([for cfg in values(var.environments) : can(regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", cfg.subscription_id))])
+    error_message = "environments.<env>.subscription_id must be a GUID (init-fleet.sh substitutes __PROMPT__ sentinels on the TTY before apply)."
+  }
+
+  # CIDR syntax + RFC1918 + /20-or-wider + strict alignment — one
+  # alltrue per rule so the error message names the rule that fired.
+  validation {
+    condition     = alltrue([for cfg in values(var.environments) : can(cidrnetmask(cfg.address_space))])
+    error_message = "Every environments.<env>.address_space must be a valid CIDR (e.g. 10.50.0.0/20)."
   }
   validation {
-    condition     = !can(cidrnetmask(var.networking_env_prod_eastus_address_space)) || tonumber(split("/", var.networking_env_prod_eastus_address_space)[1]) <= 20
-    error_message = "networking_env_prod_eastus_address_space must be /20 or wider (≤20)."
-  }
-  validation {
-    condition     = can(regex("^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)", var.networking_env_prod_eastus_address_space))
-    error_message = "networking_env_prod_eastus_address_space must be RFC1918."
-  }
-  validation {
-    condition     = !can(cidrnetmask(var.networking_env_prod_eastus_address_space)) || cidrhost(var.networking_env_prod_eastus_address_space, 0) == split("/", var.networking_env_prod_eastus_address_space)[0]
-    error_message = "networking_env_prod_eastus_address_space must be strictly aligned on its prefix (no host bits set). `config-loader/load.sh` uses Python `ipaddress.ip_network(..., strict=True)`."
-  }
-  # Non-overlap across all four repo-owned VNets. Pairwise CIDR
-  # overlap check: for CIDR-aligned blocks, A and B overlap iff the
-  # network address of each, re-masked at `min(prefix_A, prefix_B)`,
-  # is equal (i.e. one contains the other). Catches both exact
-  # duplication and partial overlap across mixed prefix lengths
-  # (e.g. 10.50.0.0/20 vs 10.50.0.0/21). Guarded with alltrue+can so
-  # this rule only fires once every input is a valid CIDR —
-  # otherwise the per-field CIDR-syntax rule above fires first.
-  validation {
-    condition = !alltrue([
-      can(cidrnetmask(var.networking_mgmt_address_space)),
-      can(cidrnetmask(var.networking_env_mgmt_eastus_address_space)),
-      can(cidrnetmask(var.networking_env_nonprod_eastus_address_space)),
-      can(cidrnetmask(var.networking_env_prod_eastus_address_space)),
-      ]) || alltrue([
-      for pair in [
-        [var.networking_mgmt_address_space, var.networking_env_mgmt_eastus_address_space],
-        [var.networking_mgmt_address_space, var.networking_env_nonprod_eastus_address_space],
-        [var.networking_mgmt_address_space, var.networking_env_prod_eastus_address_space],
-        [var.networking_env_mgmt_eastus_address_space, var.networking_env_nonprod_eastus_address_space],
-        [var.networking_env_mgmt_eastus_address_space, var.networking_env_prod_eastus_address_space],
-        [var.networking_env_nonprod_eastus_address_space, var.networking_env_prod_eastus_address_space],
-      ] :
-      cidrsubnet("${split("/", pair[0])[0]}/${min(tonumber(split("/", pair[0])[1]), tonumber(split("/", pair[1])[1]))}", 0, 0)
-      !=
-      cidrsubnet("${split("/", pair[1])[0]}/${min(tonumber(split("/", pair[0])[1]), tonumber(split("/", pair[1])[1]))}", 0, 0)
+    condition = alltrue([
+      for cfg in values(var.environments) :
+      !can(cidrnetmask(cfg.address_space)) || tonumber(split("/", cfg.address_space)[1]) <= 20
     ])
-    error_message = "The four repo-owned VNet address spaces (mgmt + mgmt/nonprod/prod env in primary_region) must be pairwise disjoint (no exact match and no partial overlap across mixed prefix lengths)."
+    error_message = "Every environments.<env>.address_space must be /20 or wider (prefix ≤20)."
+  }
+  validation {
+    condition = alltrue([
+      for cfg in values(var.environments) :
+      can(regex("^(10\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.|192\\.168\\.)", cfg.address_space))
+    ])
+    error_message = "Every environments.<env>.address_space must be RFC1918 (10.0.0.0/8, 172.16.0.0/12, or 192.168.0.0/16)."
+  }
+  validation {
+    condition = alltrue([
+      for cfg in values(var.environments) :
+      !can(cidrnetmask(cfg.address_space)) || cidrhost(cfg.address_space, 0) == split("/", cfg.address_space)[0]
+    ])
+    error_message = "Every environments.<env>.address_space must be strictly aligned on its prefix (no host bits set; e.g. `10.50.0.0/20`, not `10.50.0.1/20`). `config-loader/load.sh` derives subnet CIDRs with Python `ipaddress.ip_network(..., strict=True)` which rejects misaligned inputs."
+  }
+
+  # Pairwise non-overlap across every env's address_space. For CIDR-
+  # aligned blocks, A and B overlap iff the network address of each,
+  # re-masked at `min(prefix_A, prefix_B)`, is equal (one contains
+  # the other). Catches both exact duplication and partial overlap
+  # across mixed prefix lengths (e.g. 10.50.0.0/20 vs 10.50.0.0/21).
+  # Guarded with alltrue+can so this rule only fires once every
+  # input is a valid CIDR — otherwise the per-field CIDR-syntax rule
+  # above fires first. `setproduct` yields every ordered pair; we
+  # skip the diagonal (a == b) and rely on symmetric comparison.
+  validation {
+    condition = !alltrue([for cfg in values(var.environments) : can(cidrnetmask(cfg.address_space))]) || alltrue([
+      for pair in setproduct(keys(var.environments), keys(var.environments)) :
+      pair[0] == pair[1] ? true : (
+        cidrsubnet("${split("/", var.environments[pair[0]].address_space)[0]}/${min(tonumber(split("/", var.environments[pair[0]].address_space)[1]), tonumber(split("/", var.environments[pair[1]].address_space)[1]))}", 0, 0)
+        !=
+        cidrsubnet("${split("/", var.environments[pair[1]].address_space)[0]}/${min(tonumber(split("/", var.environments[pair[0]].address_space)[1]), tonumber(split("/", var.environments[pair[1]].address_space)[1]))}", 0, 0)
+      )
+    ])
+    error_message = "All environments.<env>.address_space values must be pairwise disjoint (no exact match and no partial overlap across mixed prefix lengths)."
+  }
+
+  # Hub resource id: required on non-mgmt envs; must be absent/null
+  # on mgmt (mgmt has no hub entry; it peers via
+  # mgmt_peering_target_env pointing at a non-mgmt env's hub).
+  validation {
+    condition = alltrue([
+      for name, cfg in var.environments :
+      name == "mgmt" ? (cfg.hub_resource_id == null) : (cfg.hub_resource_id != null)
+    ])
+    error_message = "environments.<env>.hub_resource_id must be set on every non-mgmt env (each env owns its own hub reference) and must be null/omitted on the mgmt env (mgmt peers via mgmt_peering_target_env, not its own hub entry)."
+  }
+
+  # Hub resource id shape — only validated when set.
+  validation {
+    condition = alltrue([
+      for cfg in values(var.environments) :
+      cfg.hub_resource_id == null ||
+      can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", cfg.hub_resource_id))
+    ])
+    error_message = "environments.<env>.hub_resource_id must be a full /subscriptions/.../providers/Microsoft.Network/virtualNetworks/<name> resource id when set."
+  }
+
+  # mgmt_peering_target_env: on mgmt only, and must name another env
+  # in the map (and not `mgmt` itself). Ignored on non-mgmt (the
+  # object schema still exposes the default "prod" there; we just
+  # don't render it and don't enforce its referent).
+  validation {
+    condition = (
+      !contains(keys(var.environments), "mgmt") ||
+      var.environments.mgmt.mgmt_peering_target_env == null ||
+      (
+        var.environments.mgmt.mgmt_peering_target_env != "mgmt" &&
+        contains(keys(var.environments), var.environments.mgmt.mgmt_peering_target_env)
+      )
+    )
+    error_message = "environments.mgmt.mgmt_peering_target_env must name a non-mgmt env that exists in the environments map."
   }
 }
-
