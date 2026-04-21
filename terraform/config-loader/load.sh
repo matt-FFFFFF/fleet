@@ -211,8 +211,12 @@ if pod_slot_raw:
         print(json.dumps({"error": f"pod_cidr_slot {pod_slot} out of range [0, 15]"}))
         sys.exit(0)
     third_octet = 64 + pod_slot * 16 + i
-    if third_octet > 127:
-        print(json.dumps({"error": f"pod_cidr third octet {third_octet} exceeds CGNAT upper bound 127; shrink pod_cidr_slot or subnet_slot"}))
+    # Upper bound 126 (not 127): 100.127.0.0/16 is reserved for the
+    # fleet-wide AKS service_cidr (see modules/aks-cluster/main.tf +
+    # PLAN §3.4). Lowering the bound fences that /16 off so no pod
+    # allocation can collide with the virtual ClusterIP pool.
+    if third_octet > 126:
+        print(json.dumps({"error": f"pod_cidr third octet {third_octet} exceeds CGNAT upper bound 126 (100.127.0.0/16 is reserved for service_cidr); shrink pod_cidr_slot or subnet_slot"}))
         sys.exit(0)
     out["pod_cidr"] = f"100.{third_octet}.0.0/16"
     out["pod_cidr_slot"] = pod_slot

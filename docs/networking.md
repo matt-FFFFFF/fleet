@@ -378,9 +378,12 @@ The fleet assumes **Azure CNI Overlay + Cilium** on every AKS cluster:
   is ignored by Stage 1 and will be removed in a cleanup commit).
 - Nodes subnet only holds nodes + internal load balancers → `/25` is
   comfortably sized for realistic node counts.
-- Services CIDR is currently hard-coded to `10.0.0.0/16` inside
-  `modules/aks-cluster` (cluster-local, non-routable). Overridable
-  later if a conflict appears.
+- Services CIDR is hard-coded to `100.127.0.0/16` inside
+  `modules/aks-cluster` (DNS at `100.127.0.10`). Reserved from the
+  top of CGNAT, fenced off from pod allocations by the third-octet
+  ≤ 126 bound in `config-loader/load.sh`. Virtual / in-cluster only
+  — safe to share across every cluster in the fleet. See the
+  "Service CIDR" section below for the rationale.
 
 If the fleet ever moves off CNI Overlay, the nodes subnet sizing
 needs to be re-derived against `nodes × (1 + max_pods)`; this is a
@@ -424,6 +427,46 @@ pod-to-pod traffic); no peering, UDR, or firewall configuration
 depends on them. The `pod_cidr_slot` × `subnet_slot` grid exists
 purely to keep debugging output (`kubectl get pods -o wide`) readable
 across clusters — prod vs nonprod pod IPs never overlap.
+
+**Reserved `/16` for service CIDR.** The top /16 of CGNAT —
+`100.127.0.0/16` — is reserved fleet-wide for the AKS `service_cidr`
+(see next section). `config-loader/load.sh` upper-bounds the pod
+third octet at 126 to fence it off, reducing the effective pod cap
+from 64 /16s to 63 /16s (still far beyond the 16 env-region × 16
+cluster product we document here).
+
+## Service CIDR (reserved 100.127.0.0/16)
+
+`service_cidr` is the in-cluster virtual pool from which Kubernetes
+draws ClusterIPs. Unlike pod CIDRs, these addresses never appear on
+any wire — kube-proxy (Cilium here) rewrites ClusterIP → pod IP at
+packet dispatch inside the node's dataplane. That makes service CIDRs
+safe to share across every cluster in the fleet: each cluster's
+ClusterIPs are only meaningful inside its own kube-proxy/Cilium
+rules.
+
+The one real hazard is **overlap with an address reachable from
+pods**. If `service_cidr` sits inside a VNet's `address_space` (or
+any peered range), a pod trying to reach an actual VM at that address
+gets DNATed to a random pod instead of the VM. This is the classic
+"we picked `10.0.0.0/16` in a 10/8 VNet" footgun.
+
+The fleet sidesteps it by reserving `100.127.0.0/16` inside CGNAT:
+
+- `modules/aks-cluster/main.tf` hard-codes
+  `service_cidr = "100.127.0.0/16"` and `dns_service_ip =
+  "100.127.0.10"`.
+- `init/variables.tf` requires every `address_space` variable to be
+  RFC-1918 — CGNAT (RFC 6598) is disjoint from RFC-1918 by
+  construction, so no legal adopter VNet can overlap.
+- `config-loader/load.sh` enforces the pod third-octet ≤ 126 bound
+  so pod allocations can never collide with the service /16.
+
+If the fleet ever needs per-cluster service CIDRs (e.g. cross-cluster
+service mesh without NAT), the derivation pattern is already known:
+`100.[112 + subnet_slot].0.0/16` carves a /12 at `100.112.0.0/12`
+alongside pod allocations. This would be a PLAN §3.4 amendment.
+
 
 ## Pre-Phase-B (legacy) note
 

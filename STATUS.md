@@ -410,13 +410,20 @@ branch. Remaining implementation (Phases D–H) tracked in `_TASK.md`.
       `modules/fleet-identity/main.tf` (`networking_derived.envs.<k>`
       now emits `pod_cidr_slot` + `pod_cidr_envelope`),
       `config-loader/load.sh` (python3 block validates [0,15] + third
-      octet ≤ 127; emits `.derived.networking.{pod_cidr, pod_cidr_slot}`),
+      octet ≤ 126; emits `.derived.networking.{pod_cidr, pod_cidr_slot}`),
       and consumed by the Stage 1 AKS module
       (`network_profile.pod_cidr`). 33/33 init tests + 8/8
       fleet-identity tests pass. Also fixed stale
       `docs/naming.md` capacity table (`/21`=12 was `10`, `/22`=4 was
       `2`; `fleet-identity/main.tf` and the cluster.yaml template
       were already correct — docs-only bug).
+      Bound lowered from 127 to 126 (2026-04-21, PR #9 round 6) to
+      reserve `100.127.0.0/16` for the fleet-wide AKS `service_cidr`;
+      `modules/aks-cluster/main.tf` now hard-codes
+      `service_cidr = 100.127.0.0/16` + `dns_service_ip =
+      100.127.0.10` (previously `10.0.0.0/16` — collision risk with
+      adopter VNets in 10/8). See PLAN §3.4 Implementation-status
+      paragraph + `docs/networking.md` "Service CIDR".
 - [~] Provider set: **azurerm + random carveout** (PLAN §2) declared
       in `stages/1-cluster/providers.tf` + `modules/aks-cluster/terraform.tf`.
       The AVM AKS module authors the cluster via azapi but ships

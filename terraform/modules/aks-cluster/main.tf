@@ -115,8 +115,19 @@ module "aks" {
     outbound_type     = "userDefinedRouting"
     load_balancer_sku = "standard"
     pod_cidr          = var.pod_cidr
-    service_cidr      = "10.0.0.0/16"
-    dns_service_ip    = "10.0.0.10"
+    # service_cidr is the in-cluster virtual ClusterIP pool. It never
+    # appears on any wire — kube-proxy (here: Cilium) DNATs ClusterIP
+    # → pod IP at dispatch. BUT: if service_cidr overlaps any VNet
+    # address_space reachable from pods, the cluster DNATs real traffic
+    # to random pods (e.g. service_cidr=10.0.0.0/16 collides with any
+    # adopter VNet addressed out of RFC-1918 10/8). To guarantee
+    # disjointness from any adopter VNet, service_cidr is reserved
+    # inside the fleet's CGNAT envelope at 100.127.0.0/16 (the top /16
+    # of 100.64.0.0/10). Pod CIDR allocation upper-bounds the third
+    # octet at 126 in config-loader/load.sh to keep 100.127.0.0/16
+    # fenced off. See PLAN §3.4 + docs/networking.md.
+    service_cidr      = "100.127.0.0/16"
+    dns_service_ip    = "100.127.0.10"
   }
 
   # --- System (default) node pool ----------------------------------------

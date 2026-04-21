@@ -148,6 +148,32 @@ VNet `/28` + `/25` line up under a single slot number.
   UDR, or NSG accounts for them. Uniqueness only matters within a
   fleet (multi-cluster service mesh planning) and is guaranteed by
   the `pod_cidr_slot` × `subnet_slot` grid.
+- **`100.127.0.0/16` is reserved fleet-wide** for the AKS
+  `service_cidr` (virtual in-cluster ClusterIP pool; DNS at
+  `100.127.0.10`). `config-loader/load.sh` upper-bounds pod
+  allocations at third octet ≤ 126 to fence this /16 off. See
+  `docs/networking.md` § "Service CIDR" and PLAN §3.4.
+
+### Service CIDR (reserved 100.127.0.0/16)
+
+`service_cidr` is the in-cluster virtual pool from which Kubernetes
+draws ClusterIPs. It never appears on any wire — kube-proxy (Cilium
+here) rewrites ClusterIP → pod IP at packet dispatch. Because the
+pool is virtual, *sharing one /16 across all clusters in the fleet is
+safe*: each cluster's ClusterIPs are only meaningful inside that
+cluster's dataplane.
+
+The hazard is overlap with any **real** address reachable from pods:
+if `service_cidr` sits inside a VNet's `address_space`, a pod trying
+to talk to an actual VM at that address gets DNATed to a random
+pod instead. Placing `service_cidr` in CGNAT guarantees disjointness
+from any adopter VNet (which must be RFC-1918 per `init/variables.tf`
+validation).
+
+- Hard-coded at `100.127.0.0/16` in `modules/aks-cluster/main.tf`
+  (`dns_service_ip = 100.127.0.10`).
+- Fenced off from pod allocations by the third-octet ≤ 126 bound in
+  `config-loader/load.sh`.
 
 ## Truncation
 

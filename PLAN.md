@@ -558,6 +558,23 @@ form plan` succeeds but `terraform apply` on a live cluster will be
 rejected by ARM for lacking a 0.0.0.0/0 route on the node subnet —
 this is by design so the two halves ship as one atomic change.
 
+**Implementation status (service CIDR reservation).** `modules/aks-
+cluster` hard-codes `network_profile.service_cidr = 100.127.0.0/16`
+with `dns_service_ip = 100.127.0.10`, reserving the top /16 of CGNAT
+(`100.64.0.0/10`) for the in-cluster virtual ClusterIP pool. Rationale:
+service CIDRs are DNATed inside the node's dataplane and never appear
+on any wire, but they MUST NOT overlap any address reachable from
+pods — otherwise pods trying to reach a real VM at a service-CIDR
+address get DNATed to a random pod. Placing the service CIDR in
+CGNAT guarantees disjointness from any adopter VNet (RFC-1918
+required by `init/variables.tf`). To fence 100.127.0.0/16 off from
+pod allocations, `config-loader/load.sh` upper-bounds the pod third
+octet at **126** (previously 127). The same value is shared across
+every cluster in the fleet, which is safe because ClusterIPs are
+cluster-local. Per-cluster service CIDRs (derived similarly to
+`pod_cidr` inside a reserved `100.112.0.0/12`) remain an option if
+cross-cluster service meshes without NAT ever become a requirement.
+
 **Tiers.**
 
 | Tier     | VNet                                  | Owner                   | Peerings                                                                 |
