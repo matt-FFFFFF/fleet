@@ -224,7 +224,7 @@ variable "networking_mgmt_address_space" {
     error_message = "networking_mgmt_address_space must be a valid CIDR (e.g. 10.50.0.0/20)."
   }
   validation {
-    condition     = !can(cidrnetmask(var.networking_mgmt_address_space)) || tonumber(split("/", var.networking_mgmt_address_space)[1]) <= 20
+    condition     = !can(cidrnetmask(var.networking_mgmt_address_space)) || try(tonumber(split("/", var.networking_mgmt_address_space)[1]), 0) <= 20
     error_message = "networking_mgmt_address_space must be /20 or wider (≤20)."
   }
   validation {
@@ -241,7 +241,7 @@ variable "networking_env_mgmt_eastus_address_space" {
     error_message = "networking_env_mgmt_eastus_address_space must be a valid CIDR."
   }
   validation {
-    condition     = !can(cidrnetmask(var.networking_env_mgmt_eastus_address_space)) || tonumber(split("/", var.networking_env_mgmt_eastus_address_space)[1]) <= 20
+    condition     = !can(cidrnetmask(var.networking_env_mgmt_eastus_address_space)) || try(tonumber(split("/", var.networking_env_mgmt_eastus_address_space)[1]), 0) <= 20
     error_message = "networking_env_mgmt_eastus_address_space must be /20 or wider (≤20)."
   }
   validation {
@@ -258,7 +258,7 @@ variable "networking_env_nonprod_eastus_address_space" {
     error_message = "networking_env_nonprod_eastus_address_space must be a valid CIDR."
   }
   validation {
-    condition     = !can(cidrnetmask(var.networking_env_nonprod_eastus_address_space)) || tonumber(split("/", var.networking_env_nonprod_eastus_address_space)[1]) <= 20
+    condition     = !can(cidrnetmask(var.networking_env_nonprod_eastus_address_space)) || try(tonumber(split("/", var.networking_env_nonprod_eastus_address_space)[1]), 0) <= 20
     error_message = "networking_env_nonprod_eastus_address_space must be /20 or wider (≤20)."
   }
   validation {
@@ -275,7 +275,7 @@ variable "networking_env_prod_eastus_address_space" {
     error_message = "networking_env_prod_eastus_address_space must be a valid CIDR."
   }
   validation {
-    condition     = !can(cidrnetmask(var.networking_env_prod_eastus_address_space)) || tonumber(split("/", var.networking_env_prod_eastus_address_space)[1]) <= 20
+    condition     = !can(cidrnetmask(var.networking_env_prod_eastus_address_space)) || try(tonumber(split("/", var.networking_env_prod_eastus_address_space)[1]), 0) <= 20
     error_message = "networking_env_prod_eastus_address_space must be /20 or wider (≤20)."
   }
   validation {
