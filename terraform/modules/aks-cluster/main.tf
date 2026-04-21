@@ -126,8 +126,8 @@ module "aks" {
     # of 100.64.0.0/10). Pod CIDR allocation upper-bounds the third
     # octet at 126 in config-loader/load.sh to keep 100.127.0.0/16
     # fenced off. See PLAN §3.4 + docs/networking.md.
-    service_cidr      = "100.127.0.0/16"
-    dns_service_ip    = "100.127.0.10"
+    service_cidr   = "100.127.0.0/16"
+    dns_service_ip = "100.127.0.10"
   }
 
   # --- System (default) node pool ----------------------------------------

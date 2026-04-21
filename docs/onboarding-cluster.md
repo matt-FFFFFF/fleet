@@ -1,9 +1,13 @@
 # Onboarding a new AKS cluster
 
 Operator walkthrough for adding a cluster to an existing, bootstrapped
-fleet. One reviewed PR creates the cluster; `tf-apply.yaml` runs
-Stage 1 (subnets + AKS + per-cluster private DNS zone) and Stage 2
-(ArgoCD bootstrap) in a single matrix leg on merge.
+fleet. One reviewed PR creates the cluster. Today the apply step is
+**manual** — an operator runs `terraform apply` on `stages/1-cluster`
+(subnets + AKS + per-cluster private DNS zone) and then `stages/2-
+bootstrap` (ArgoCD bootstrap) against the merged cluster.yaml. The
+`tf-apply.yaml` workflow that drives this automatically on merge is
+tracked in PLAN §10 / STATUS §10 and lands in a follow-up PR; until
+then, this guide describes the manual flow.
 
 Prerequisites:
 
@@ -135,7 +139,9 @@ on the existing cluster and add a new cluster instead.
 
 ## 5. Merge → apply
 
-On merge, `tf-apply.yaml` runs one matrix leg for your cluster:
+On merge, an operator runs the two stages manually (tracked: the
+`tf-apply.yaml` workflow will automate this matrix leg — PLAN §10 /
+STATUS §10):
 
 1. **Stage 1** (`terraform/stages/1-cluster`):
    - `azapi_resource.snet_aks_api` + `snet_aks_nodes` as children
@@ -149,14 +155,16 @@ On merge, `tf-apply.yaml` runs one matrix leg for your cluster:
    - ArgoCD / Kargo bootstrap.
 
 Total wall-clock: AKS creation dominates (~15 min). The PR itself is
-the audit record; no follow-up manual apply is required.
+the audit record; once `tf-apply.yaml` ships, no follow-up manual
+apply will be required.
 
 ## 6. Retiring a cluster
 
 1. Remove the `clusters/<env>/<region>/<name>/` directory in a PR.
-2. `tf-apply.yaml` destroys Stage 2 then Stage 1 resources for that
+2. Operator runs `terraform destroy` on Stage 2 then Stage 1 for that
    cluster (including the AKS cluster, its subnets, and its private
    DNS zone). The env-region VNet, ASG, and peerings are untouched.
+   The future `tf-apply.yaml` workflow will automate this teardown.
 3. The retired slot is immediately reusable by a future cluster in
    the same env-region — the PR-check compares against the merged
    state, so deletion + re-add in a later PR is supported.

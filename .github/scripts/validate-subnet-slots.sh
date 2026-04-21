@@ -132,6 +132,10 @@ for path in "${cluster_files[@]}"; do
     err "$path: networking.subnet_slot=\"$slot\" is not a non-negative integer"
     continue
   fi
+  # Force base-10: a quoted YAML value like "08" passes the digit regex
+  # but bash arithmetic (( slot >= capacity )) below treats it as octal
+  # and aborts with "value too great for base". Normalize here.
+  slot=$((10#$slot))
 
   # --- Rule 2: owning env-region exists in _fleet.yaml ---------------------
   address_space="$(address_space_for_env_region "$env" "$region")"

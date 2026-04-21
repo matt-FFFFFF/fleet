@@ -27,8 +27,12 @@
 #   - Mgmt-cluster-only: Kargo RP secret rotation + KV write
 #
 # Inputs arrive via the loader-produced tfvars.json; no provider data
-# sources at plan time (PLAN §10). Stage 0 outputs flow in as repo-env
-# variables (TF_VAR_*) published by the Stage 0 workflow.
+# sources at plan time (PLAN §10). Cross-stage values (MGMT_VNET_RESOURCE_ID,
+# <ENV>_<REGION>_VNET_RESOURCE_ID, etc.) flow in as repo/env variables
+# (TF_VAR_*) published directly by `bootstrap/fleet` and
+# `bootstrap/environment` — Stage 0 does **not** proxy them (see PLAN §4
+# Stage -1 "Implementation status 2026-04-19" for the cycle-break
+# rationale).
 
 locals {
   # Whole fleet doc + per-cluster merged doc. `var.doc` is the loader

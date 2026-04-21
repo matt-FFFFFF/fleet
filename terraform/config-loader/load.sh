@@ -35,6 +35,7 @@ die() { printf 'load.sh: %s\n' "$*" >&2; exit 1; }
 
 command -v yq >/dev/null 2>&1 || die "yq is required (https://github.com/mikefarah/yq)"
 command -v jq >/dev/null 2>&1 || die "jq is required"
+command -v python3 >/dev/null 2>&1 || die "python3 is required (used by derive_cluster_cidrs for CIDR math)"
 
 [[ $# -eq 1 ]] || die "usage: $0 <cluster-path>"
 
@@ -140,6 +141,10 @@ subnet_slot="$(printf '%s' "$merged_json" | jq -r '.networking.subnet_slot // em
 case "$subnet_slot" in
   ''|*[!0-9]*) die "networking.subnet_slot must be a non-negative integer; got: $subnet_slot" ;;
 esac
+# Normalize leading zeros: a quoted YAML value like "08" passes the digit
+# check above but would poison bash arithmetic (octal) and `jq --argjson`
+# (invalid JSON number). Force base-10 reinterpretation here.
+subnet_slot=$((10#$subnet_slot))
 
 env_address_space="$(printf '%s' "$fleet_json" | jq -r --arg env "$env" --arg region "$region" '
   .networking.envs[$env].regions[$region].address_space // empty

@@ -250,19 +250,21 @@ comment pointing at PLAN §3.4.
    and edits `cluster.yaml` (including `subnet_slot`).
 2. Opens PR → `validate.yaml` runs schema lint + the `subnet_slot`
    checks above.
-3. On merge, `tf-apply.yaml` runs Stage 1 (creates the `/28` api
+3. On merge, an operator runs Stage 1 manually (creates the `/28` api
    subnet in the API pool and the `/25` nodes subnet in the nodes
    pool via azapi children of the env VNet, attaches the AKS node
    pool to the env-region node ASG, creates the AKS cluster) and
-   Stage 2 (ArgoCD bootstrap) in one matrix leg. No re-run of
-   `bootstrap/environment` is required.
+   Stage 2 (ArgoCD bootstrap). No re-run of
+   `bootstrap/environment` is required. The `tf-apply.yaml` workflow
+   that will automate this matrix leg on merge is tracked in PLAN §10
+   / STATUS §10 and lands in a follow-up PR.
 
 ```mermaid
 sequenceDiagram
     actor OP as Operator
     participant REPO as fleet repo
     participant CI as validate.yaml
-    participant APPLY as tf-apply.yaml
+    participant APPLY as tf-apply.yaml (future)
     participant ENV as env VNet
     participant AKS as AKS cluster
 
