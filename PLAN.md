@@ -813,7 +813,7 @@ not worked-around.
 ## 4. Terraform stages
 
 > **Implementation status (2026-04-21) — networking topology.**
-> Landed on branch `feat/networking-topology`; see commits
+> Landed on branch `feat/networking-topology` (PR #9); see commits
 > `5f73b9b..HEAD` (spec through cleanup). The repo-owned VNet/subnet
 > topology described in §3.4 supersedes the previous "BYO subnet id
 > per cluster" model. `bootstrap/fleet` owns the mgmt VNet (via

@@ -13,7 +13,7 @@
 > `[ ]` not started · `[-]` deferred.
 
 Last updated: 2026-04-21 · **Networking topology (PLAN §3.4) landed
-end-to-end** on `feat/networking-topology`. Phases A–H complete. The
+end-to-end** on `feat/networking-topology` (PR #9). Phases A–H complete. The
 repo-owned VNet/subnet topology supersedes the previous BYO model
 in full: `bootstrap/fleet` owns the mgmt VNet (sub-vending `~> 0.2`,
 N=1) + the two reserved `/26`s (`snet-pe-shared`, `snet-runners`);
