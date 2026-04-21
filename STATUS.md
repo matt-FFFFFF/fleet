@@ -66,28 +66,31 @@
 - [x] `clusters/_template/cluster.yaml` onboarding scaffold with
       `networking.subnet_slot` required field.
 - [x] §3.2 DNS hierarchy; zone FQDN pattern encoded in `_fleet.yaml`.
-- [!] §3.3 Derivation rules — **rework required** across
-      `config-loader/load.sh` and `modules/fleet-identity/`:
-  - `config-loader/load.sh`:
-    - L114 reads `.environments[$env].subscription_id` → rename to
-      `.envs[$env].subscription_id`.
-    - L108-110, L136-138 comments reference removed `networking.vnets.mgmt`
-      and "pre-Phase-B" wording → rewrite.
-    - L212 `mgmt_vnet_name="vnet-${fleet_name}-mgmt"` (region-less)
-      → must become `vnet-<fleet>-mgmt-<region>` (uniform per-region).
-    - L214 `mgmt_net_rg="rg-net-mgmt"` (region-less) → must be
-      `rg-net-mgmt-<region>`.
-    - L271-272 emit `mgmt_vnet_name` / `mgmt_net_resource_group` into
-      every cluster's `derived.networking` treating mgmt as singleton
-      → must derive from the cluster's own env-region (including when
-      `env=mgmt`) via the uniform map.
-    - No derivation of `snet-pe-fleet`, `snet-runners`, or
-      `snet-pe-env` names; only `snet-aks-api-<cluster>` +
-      `snet-aks-nodes-<cluster>` (L218-219). Add the three missing
-      subnet name derivations.
-    - L150-152 parses `address_space` as scalar; PLAN §3.1 shows it
-      as a YAML list — confirm intent and fix parsing accordingly
-      (Python `ipaddress.ip_network` at L167 will crash on a list).
+- [~] §3.3 Derivation rules — `config-loader/load.sh` rework done
+      (unit 3); `modules/fleet-identity/` done (unit 1). Parity
+      contract between shell + HCL is re-established. Downstream
+      Stage -1/0/1 consumers of `derived.networking` still consume
+      the old output shape and land in units 4-7:
+  - `config-loader/load.sh` — **done** (unit 3). `.environments` →
+    `.envs` rename; comments rewritten to uniform env-region model
+    (no "pre-Phase-B" wording, no `networking.vnets.mgmt`); mgmt
+    no longer treated as singleton — the cluster's own env-region
+    drives VNet/RG/subnet/NSG/route-table derivations uniformly
+    whether env=mgmt or not; `address_space` parsed as YAML list
+    (jq `.[0]`-ish pick before piping to Python); new derivations
+    emitted: `snet_pe_env_{name,cidr}`, `nsg_pe_env_name`,
+    `route_table_name`, `peer_mgmt_{region,vnet_name,net_resource_group}`
+    + `peering_{spoke_to_mgmt,mgmt_to_spoke}_name` (null when
+    env=mgmt) — mgmt region resolved by same-region-else-first
+    rule mirroring `modules/fleet-identity/` local.mgmt_regions.
+    Mgmt clusters additionally emit `snet_pe_fleet_{name,cidr}`,
+    `snet_runners_{name,cidr}`, `nsg_{pe_fleet,runners}_name` via
+    the Python CIDR helper (fleet zone = upper /(N+1); runners =
+    first /23; pe-fleet = 8th /26 of the fleet zone) — Python
+    raises a structured error if mgmt address_space is < /20.
+    Manual smoke test vs the example clusters passes
+    (`aks-mgmt-01` and `aks-nonprod-01`). No unit-test harness for
+    load.sh yet; gap tracked as deferred.
   - `modules/fleet-identity/` — **done** (unit 1): rewritten to PLAN
     §3.1/§3.3/§3.4 shape. `envs.mgmt.location` replaces
     `fleet.primary_region` fallback. `networking_central.hubs` is a
@@ -101,8 +104,8 @@
     `mgmt_environment_for_vnet_peering` uniform. Unit tests rewritten
     to cover new shape (8 runs pass).
   - Naming parity sub-item (`docs/naming.md` vs bootstrap HCL locals)
-    was already `[ ]`; stays `[ ]` but is now blocked on the above
-    rework.
+    stays `[ ]`; unit 3 + unit 1 unblocked it, but `docs/naming.md`
+    still carries pre-143d18b wording (tracked under §11).
 - [!] §3.4 Networking topology — spec rewritten in PLAN (commit
       143d18b) to uniform env-region model. No implementation
       landed yet; all work tracked under the §4 Stage -1 rows and
@@ -466,10 +469,17 @@ self-contained enough to land in its own PR.
    sentinels are adopter-edited; `--values-file` overlay now `cp`s
    verbatim. 37 tests pass incl. `render_open_map_extra_env` +
    14 validation-rejection runs.
-3. **Config loader — `terraform/config-loader/load.sh`**. Rename
-   yaml reads, fix mgmt naming (per-region), add `snet-pe-fleet` /
-   `snet-pe-env` / `snet-runners` derivations, fix
-   address_space scalar-vs-list handling.
+3. **Config loader — `terraform/config-loader/load.sh`**. ✅ **Done.**
+   Rename `.environments` → `.envs`, rewrite comments to uniform
+   env-region model, drop mgmt-singleton assumption, parse
+   `address_space` as YAML list, add `snet-pe-env` / `snet-pe-fleet`
+   / `snet-runners` / `nsg-pe-env` / `route-table` / `peering`
+   derivations (peer mgmt region resolved by same-region-else-first
+   rule), extend Python CIDR helper with mgmt fleet-plane carve
+   (fleet zone = upper /(N+1); runners = first /23; pe-fleet = 8th
+   /26) with `/20`-minimum guard. Manual smoke test vs example
+   clusters (`aks-mgmt-01`, `aks-nonprod-01`) passes; no shell-level
+   test harness landed (deferred).
 4. **`bootstrap/fleet` network** — per-region mgmt VNet shells,
    fleet-plane subnets at HIGH end, rename `snet-pe-shared` →
    `snet-pe-fleet`, per-region NSGs, per-region Network Contributor
