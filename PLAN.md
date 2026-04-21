@@ -42,7 +42,7 @@ manage upgrades, and add Kargo promotion.
 | Kargo GitHub auth               | Dedicated GitHub App; PEM in Key Vault; synced by ESO                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Kargo RBAC                      | Same `oidcGroup` as Argo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Container registry              | One ACR per fleet; hosts images and Helm OCI charts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Key Vault                       | Two-tier: one **fleet KV** created by `bootstrap/fleet` (Stage -1, alongside the tfstate SA and runner pool — ownership relocated from Stage 0 to break the runner-pool KV-reference cycle; see §4 Stage -1 Implementation status 2026-04-19) strictly for secrets consumed by more than one cluster (e.g., Argo GitHub App PEM, Argo OIDC client secret, runner-pool GH App PEM); **one cluster KV per cluster** (Stage 1) for cluster-local secrets. Stage 0 still owns *seeding and rotating* secrets into the fleet KV (`Key Vault Secrets Officer` role assignment on the vault), it just no longer creates the vault itself. Mgmt-cluster-only secrets (Kargo GitHub App PEM, Kargo OIDC client secret) live in the mgmt cluster's KV, not the fleet KV.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Key Vault                       | Two-tier: one **fleet KV** created by `bootstrap/fleet` (Stage -1, alongside the tfstate SA and runner pool — co-located to break the runner-pool KV-reference cycle) strictly for secrets consumed by more than one cluster (e.g., Argo GitHub App PEM, Argo OIDC client secret, runner-pool GH App PEM); **one cluster KV per cluster** (Stage 1) for cluster-local secrets. Stage 0 owns *seeding and rotating* secrets into the fleet KV (`Key Vault Secrets Officer` role assignment on the vault). Mgmt-cluster-only secrets (Kargo GitHub App PEM, Kargo OIDC client secret) live in the mgmt cluster's KV, not the fleet KV.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | AAD app registrations           | Managed by Terraform (Stage 0) — one for Argo, one for Kargo. Each app carries **Federated Identity Credentials** keyed off every cluster's OIDC issuer URL (subjects: Argo/Kargo ServiceAccounts) so workload→AAD calls are secret-less. A **single residual `client_secret` per app** remains, used **only** by the OIDC RP auth-code flow for human login (Argo/Dex upstream don't yet support `client_assertion` RP auth); auto-rotated on every Stage 0 apply with a short TTL.                                                                                    |
 | Residual long-lived secrets     | **Exactly one class**: the Argo and Kargo AAD-app `client_secret` values used by their OIDC RP auth-code flows (human login). Stored in fleet KV, rotated on every Stage 0 apply (`end_date_relative` short TTL), reflected to cluster via ESO, picked up by Argo/Kargo on restart. All other fleet credentials — CI→Azure, workload→Azure, CI→Graph, AAD-app→Azure (`client_credentials`) — are federated and secret-less. Tracked in §15 with upstream removal trigger.                                                                                               |
 | Metrics                         | **Azure Managed Prometheus** — one **Azure Monitor Workspace per env** (created by `bootstrap/environment`) plus a **Data Collection Endpoint** per env; both are members of a per-env **Network Security Perimeter** (no public ingress). Each cluster gets a DCR + DCRA in Stage 1 pointing at its env's DCE+AMW; AKS `azureMonitorProfile.metrics` enabled; the env NSP inbound rule admits the env subscription so cluster addon identities can ingest.                                                                                                             |
@@ -545,96 +545,29 @@ structure and Azure-resource names.
 > parity is enforced across `docs/naming.md`, `config-loader/load.sh`,
 > and `modules/fleet-identity/`.
 
-**Implementation status (mgmt-tier collapse — 2026-04-21).** Earlier
-drafts of this section kept two separate mgmt VNets: a *fleet-tier*
-mgmt VNet under `networking.vnets.mgmt` (hosting tfstate SA / fleet
-KV / fleet ACR private endpoints + the ACA-delegated runner pool)
-and an *env-tier* mgmt VNet under `networking.envs.mgmt.regions.
-<region>` (hosting the mgmt-tier Kubernetes cluster). Maintaining
-both required N extra mgmt↔env peerings (one per env-region to the
-fleet-tier VNet on top of the N mgmt↔env peerings already authored
-from env state) and a dedicated `bootstrap/environment` invocation
-for `env=mgmt`. The split was collapsed: the single mgmt VNet under
-`networking.vnets.mgmt` now hosts BOTH the CI plane (PE subnet +
-runner subnet) AND the mgmt-tier AKS clusters (api `/28` pool +
-nodes `/25` pool + per-region node ASG) using the same two-pool
-design as env VNets. `networking.envs.mgmt` is removed from the
-`_fleet.yaml` schema; mgmt clusters (`clusters/mgmt/<region>/...`)
-derive their subnet parent from the mgmt VNet via config-loader
-branching on `cluster.env`. `bootstrap/environment` is still
-invoked for `env=mgmt` but in a **BYO-vnet mode**: when
-`vnet_resource_id` + `pe_subnet_id` are supplied (both published by
-`bootstrap/fleet` as `MGMT_VNET_RESOURCE_ID` /
-`MGMT_<REGION>_PE_SUBNET_ID`), the module skips VNet / node ASG /
-peering / NSG authoring and only creates the mgmt env's
-observability stack (AMW / DCE / Grafana PE / Action Group). For
-`env ∈ {nonprod, prod}`, `vnet_resource_id` is null and the module
-creates the env VNet as before. The remaining mgmt↔env peerings
-(N, one per env-region) stay in env state with
-`create_reverse_peering = true`; they now terminate on the single
-collapsed mgmt VNet and continue to carry Kargo control-plane
-traffic + observability scrape paths. Mgmt remains single-region
-in v1 (clusters must live in the fleet's `primary_region`);
-multi-region mgmt is a bounded PLAN follow-up that swaps
-`networking.vnets.mgmt.{location,address_space}` for a
-`regions: { <region>: { address_space } }` map.
-
-**Implementation status (UDR for AKS node egress).** `modules/aks-
-cluster` hard-codes `network_profile.outbound_type =
-userDefinedRouting` (commit landing with this note); the hub-firewall
-next-hop IP that AKS nodes route 0.0.0.0/0 at is carried as
+**UDR for AKS node egress.** `modules/aks-cluster` sets
+`network_profile.outbound_type = userDefinedRouting`. The hub-firewall
+next-hop IP that AKS nodes route `0.0.0.0/0` at is carried as
 `networking.egress_next_hop_ip` in each env's region-scope
-`_defaults.yaml` (`clusters/<env>/<region>/_defaults.yaml`). The
-stub files ship with the key set to `null` — adopters fill this in
-with their real hub firewall / NVA private IP before creating a
-cluster in that region. The route table + subnet association that
-materialise this contract are **deferred**: Stage 1 does not yet
-author `Microsoft.Network/routeTables` on the env VNet, nor does the
-env-VNet subnet call in `bootstrap/environment` associate one to the
-node subnet. Landing that follow-up turns `egress_next_hop_ip` into
-a hard requirement (Stage 1 fail-fast on null). Until then, `terra-
-form plan` succeeds but `terraform apply` on a live cluster will be
-rejected by ARM for lacking a 0.0.0.0/0 route on the node subnet —
-this is by design so the two halves ship as one atomic change.
+`_defaults.yaml` (`clusters/<env>/<region>/_defaults.yaml`); adopters
+fill this in with their hub firewall / NVA private IP before creating
+a cluster in that region. The route table + node-subnet association
+that materialise this contract are authored by `bootstrap/environment`
+on the env VNet (and by `bootstrap/fleet` on the mgmt VNet); Stage 1
+fails fast when `egress_next_hop_ip` is null for a region that hosts
+clusters.
 
-**Implementation status (service CIDR reservation).** `modules/aks-
-cluster` hard-codes `network_profile.service_cidr = 100.127.0.0/16`
-with `dns_service_ip = 100.127.0.10`, reserving the top /16 of CGNAT
-(`100.64.0.0/10`) for the in-cluster virtual ClusterIP pool. Rationale:
-service CIDRs are DNATed inside the node's dataplane and never appear
-on any wire, but they MUST NOT overlap any address reachable from
-pods — otherwise pods trying to reach a real VM at a service-CIDR
-address get DNATed to a random pod. Placing the service CIDR in
-CGNAT guarantees disjointness from any adopter VNet (RFC-1918
-required by `init/variables.tf`). To fence 100.127.0.0/16 off from
-pod allocations, `config-loader/load.sh` upper-bounds the pod third
-octet at **126** (previously 127). The same value is shared across
-every cluster in the fleet, which is safe because ClusterIPs are
-cluster-local. Per-cluster service CIDRs (derived similarly to
-`pod_cidr` inside a reserved `100.112.0.0/12`) remain an option if
-cross-cluster service meshes without NAT ever become a requirement.
-
-**Implementation status (pod CIDR uniqueness — dropped 2026-04-21).**
-Earlier drafts of this section prescribed per-cluster pod `/16`s
-derived from a per-env-region `pod_cidr_slot` × per-cluster
-`subnet_slot` grid, with a fleet-wide uniqueness invariant and a
-hard cap of 16 env-regions per fleet. The pod CIDR is now a
-fleet-wide constant (`100.64.0.0/16`, hard-coded in
-`modules/aks-cluster/main.tf`); see the *Pod CIDR (shared,
-fleet-wide)* subsection below for the current contract. Pod IPs
-are non-routable outside the node (Azure CNI Overlay encapsulates
-pod-to-pod on the node; egress SNATs to the node IP), and every
-observability tool that surfaces pod IPs (Log Analytics, managed
-Prometheus, kube-state-metrics scrapes) carries `_ResourceId` /
-cluster name in the same row, so cross-cluster disambiguation was
-already solved upstream. Collapsing the allocation grid removed:
-`pod_cidr_slot` from `_fleet.yaml` (init schema + prompts), the
-`/12`-envelope math in `modules/fleet-identity/main.tf` + tests, the
-pod-CIDR python block in `terraform/config-loader/load.sh`, the
-cross-env uniqueness validation in `init/`, and the 16-env-region
-cap. If ClusterMesh or any other cross-cluster pod routing is
-introduced later, `pod_cidr` becomes a per-cluster input again and
-the derivation returns.
+**Service CIDR reservation.** `modules/aks-cluster` hard-codes
+`network_profile.service_cidr = 100.127.0.0/16` with
+`dns_service_ip = 100.127.0.10`, reserving the top `/16` of CGNAT
+(`100.64.0.0/10`) for the in-cluster virtual ClusterIP pool. Service
+CIDRs are DNATed inside the node's dataplane and never appear on any
+wire, but they MUST NOT overlap any address reachable from pods —
+otherwise pods trying to reach a real VM at a service-CIDR address get
+DNATed to a random pod. Placing the service CIDR in CGNAT guarantees
+disjointness from any adopter VNet (RFC-1918 required by
+`init/variables.tf`). The same value is shared across every cluster
+in the fleet, which is safe because ClusterIPs are cluster-local.
 
 **Tiers.**
 
@@ -876,17 +809,14 @@ required.
 The service CIDR is likewise fleet-wide: `100.127.0.0/16`, hard-coded
 in the same module with `dns_service_ip = 100.127.0.10`. It is
 disjoint from the shared pod `/16` by construction (top `/16` of the
-same `100.64.0.0/10` CGNAT block). See the
-*Implementation status (service CIDR reservation)* paragraph near
-the top of this section for rationale.
+same `100.64.0.0/10` CGNAT block). See the *Service CIDR reservation*
+paragraph earlier in this section for rationale.
 
 Re-introducing per-cluster pod CIDRs is a bounded change if
 ClusterMesh or any cross-cluster pod routing is ever adopted: restore
 the `pod_cidr` variable in `modules/aks-cluster`, re-derive it in
 `config-loader/load.sh` from a per-env-region slot, and thread it
-through Stage 1. The previous per-cluster derivation (`pod_cidr_slot`
-× `subnet_slot` grid over `100.64.0.0/10`) is documented in git
-history on `feat/networking-topology` at PR #9 round 7.
+through Stage 1.
 
 **Stage 1 AKS module passthrough (`cluster.aks.*`).**
 
@@ -899,7 +829,7 @@ new knob means adding a variable to `modules/aks-cluster/variables.tf`
 plus a one-line assignment in its `main.tf`, keeping the contract
 between cluster YAML and AKS ARM inputs explicit and reviewable.
 
-Keys exposed at Phase E landing (expand commit-by-commit as needs
+Keys exposed at initial landing (expand commit-by-commit as needs
 arise): `kubernetes_version`, `sku_tier`, `auto_scaler_profile`,
 `auto_upgrade_profile`. The following are **hard-coded** inside
 `modules/aks-cluster` per this section's security/auth contract and
@@ -924,100 +854,51 @@ not worked-around.
 
 ## 4. Terraform stages
 
-> **Implementation status (2026-04-21) — networking topology.**
-> Landed on branch `feat/networking-topology` (PR #9); see commits
-> `5f73b9b..HEAD` (spec through cleanup). The repo-owned VNet/subnet
-> topology described in §3.4 supersedes the previous "BYO subnet id
-> per cluster" model. `bootstrap/fleet` owns the mgmt VNet (via
-> `Azure/avm-ptn-alz-sub-vending/azure`, N=1); `bootstrap/environment`
-> owns env VNets (sub-vending, intra-env mesh), both halves of every
-> mgmt↔env peering (via
-> `Azure/avm-res-network-virtualnetwork/azurerm//modules/peering` with
-> `create_reverse_peering = true`), and one `asg-nodes-<env>-<region>`
-> per env-region. Stage 1 authors per-cluster `/28` api + `/25` nodes
-> subnets as azapi children of the env VNet, instantiates the AKS
-> cluster via
-> `Azure/avm-res-containerservice-managedcluster/azurerm ~> 0.5`
-> (curated-typed `cluster.aks.*` passthrough — adding a knob = adding
-> a variable to `modules/aks-cluster/variables.tf`, no freeform
-> escape hatch), and creates a per-cluster private DNS zone +
-> `virtualNetworkLinks` to `[env, mgmt]`. Node pools attach to the
-> env-region ASG via `network_profile.application_security_groups`.
-> `cluster.yaml.networking` lost `vnet_id`, `subnet_name`, and
-> `dns_linked_vnet_ids` — replaced by a single **required**
-> `networking.subnet_slot: <int>` operator-set at cluster creation
-> and immutable thereafter (PR-check enforced via
-> `.github/scripts/validate-subnet-slots.sh` + `.github/workflows/validate.yaml`:
-> presence, integer type, `[0, capacity-1]` range, per-`(env, region)`
-> uniqueness, PR-base immutability). Pod CIDRs carve from CGNAT
-> (`100.64.0.0/10`) keyed by a per-env-region `pod_cidr_slot` + the
-> per-cluster `subnet_slot`. Docs live in `docs/networking.md`
-> (design reference) and `docs/onboarding-cluster.md` (operator
-> walkthrough). **Remaining Stage-1 surface** (cluster KV, UAMIs,
-> role assignments, managed Prometheus DCR/DCRA + rules, Kargo mgmt
-> rotation) is deferred to a follow-up branch; tracked in STATUS §4
-> Stage 1.
-
 ### Stage -1 — Bootstrap (`terraform/bootstrap/`)
-
-> **Implementation status (2026-04-18).** All three Stage -1 roots
-> (`bootstrap/fleet`, `bootstrap/environment`, `bootstrap/team`) are
-> refactored onto the vendored `terraform/modules/github-repo` module
-> (fork of `terraform-github-repository-and-content`; see
-> `terraform/modules/github-repo/VENDORING.md`). Consequences:
->
-> - The fleet repo, both its GH Actions environments (`fleet-stage0`,
->   `fleet-meta`), their UAMIs + federated credentials, env-scoped RBAC,
->   and the `main`-branch protection ruleset are all owned by a single
->   `module "fleet_repo"` call in `bootstrap/fleet/main.github.tf`.
-> - `bootstrap/environment` calls
->   `modules/github-repo/modules/environment` directly (the fleet repo
->   itself is already owned by `bootstrap/fleet`) and preserves the
->   legacy FIC name `gh-fleet-<env>` via the `identity.fic_name`
->   override.
-> - OIDC subject claims use ID-based keys
->   (`repository_owner_id`, `repository_id`, `environment`) on both
->   sides — immutable, so org/repo renames cannot silently invalidate
->   federated credentials.
-> - `bootstrap/team` uses `template = {...}` + a managed
->   `.github/CODEOWNERS` file via `files`, plus a matching
->   `main`-branch ruleset.
-> - Env variables that reference the module's own UAMI output
->   (`AZURE_CLIENT_ID` etc.) are created at the callsite as separate
->   `github_actions_environment_variable` resources, not via the
->   module's `variables` input, to avoid a module-to-child-output
->   cycle.
-> - GH Apps (`fleet-meta`, `stage0-publisher`) and their PEMs → KV
->   wiring remain TODO as previously tracked.
->
-> **Implementation status (2026-04-19) — fleet KV ownership.** The fleet
-> Key Vault has been **relocated from Stage 0 to `bootstrap/fleet`
-> (Stage -1)** to break a deploy-time cycle: the Stage -1 runner pool's
-> Container App Job holds a Key Vault reference to `fleet-runners-app-
-> pem`, which ACA validates (via the attached UAMI) at PUT time —
-> requiring the KV, the secret path, and the `Key Vault Secrets User`
-> role assignment to exist in the same apply graph as the runner
-> module. The vault is now strictly private (`publicNetworkAccess =
-> Disabled`, `networkAcls.defaultAction = Deny`, `bypass = None`) with
-> a PE on a new operator-supplied subnet
-> (`networking.fleet_kv.private_endpoint.subnet_id`) and A-record
-> registration in a new central BYO zone
-> (`networking.fleet_kv.private_endpoint.private_dns_zone_id`,
-> symmetric with the tfstate and runner-ACR zones). Stage 0 still
-> holds `Key Vault Secrets Officer` on the vault (for rotating
-> `argocd-oidc-client-secret` and seeding GH App PEMs) but no longer
-> creates it — it references the KV by a derived id reconstructed
-> from `_fleet.yaml`. The `uami-fleet-runners` identity and its
-> `Key Vault Secrets User` role assignment on the vault also live in
-> `bootstrap/fleet` (same apply graph as the runner module's KV
-> reference). PEM seeding of `fleet-runners-app-pem` moves from Stage 0
-> to the post-bootstrap `init-gh-apps.sh` helper, which must run from
-> a host with data-plane reach to the KV. The prose further down in
-> §4 Stage 0, §16.4, and §10 has been reconciled to match (this
-> callout remains as the change-record).
 
 Three TF roots, each run rarely. Bootstrap exists to create the
 identities and GitHub scaffolding that CI-run stages depend on.
+
+All three roots compose the vendored `terraform/modules/github-repo`
+module (fork of `terraform-github-repository-and-content`; see
+`terraform/modules/github-repo/VENDORING.md`). `bootstrap/fleet`
+owns the fleet repo, both its GH Actions environments (`fleet-stage0`,
+`fleet-meta`), their UAMIs + federated credentials, env-scoped RBAC,
+and the `main`-branch protection ruleset via a single
+`module "fleet_repo"` call. `bootstrap/environment` calls the
+`modules/github-repo/modules/environment` submodule directly (the
+fleet repo itself is already owned by `bootstrap/fleet`) and
+preserves the FIC name `gh-fleet-<env>` via the `identity.fic_name`
+override. `bootstrap/team` uses `template = {...}` + a managed
+`.github/CODEOWNERS` file via `files`, plus a matching `main`-branch
+ruleset. OIDC subject claims use ID-based keys (`repository_owner_id`,
+`repository_id`, `environment`) on both sides — immutable, so
+org/repo renames cannot silently invalidate federated credentials.
+Env variables that reference a module's own UAMI output
+(`AZURE_CLIENT_ID` etc.) are created at the callsite as separate
+`github_actions_environment_variable` resources, not via the module's
+`variables` input, to avoid a module-to-child-output cycle.
+
+The fleet Key Vault is owned by `bootstrap/fleet` (Stage -1),
+co-located with the tfstate SA and runner pool. The Stage -1 runner
+pool's Container App Job holds a Key Vault reference to
+`fleet-runners-app-pem`, which ACA validates (via the attached UAMI)
+at PUT time — requiring the KV, the secret path, and the
+`Key Vault Secrets User` role assignment to exist in the same apply
+graph as the runner module. The vault is strictly private
+(`publicNetworkAccess = Disabled`, `networkAcls.defaultAction =
+Deny`, `bypass = None`) with a PE on the derived `snet-pe-shared`
+subnet registering into the central
+`privatelink.vaultcore.azure.net` zone. Stage 0 holds
+`Key Vault Secrets Officer` on the vault (for rotating
+`argocd-oidc-client-secret` and seeding GH App PEMs) and references
+the KV by a derived id reconstructed from `_fleet.yaml`. The
+`uami-fleet-runners` identity and its `Key Vault Secrets User` role
+assignment on the vault also live in `bootstrap/fleet` (same apply
+graph as the runner module's KV reference). PEM seeding of
+`fleet-runners-app-pem` is done by the post-bootstrap
+`init-gh-apps.sh` helper, which must run from a host with data-plane
+reach to the KV.
 
 #### `bootstrap/fleet/` — human-run, one-time per repo
 
@@ -1207,10 +1088,9 @@ Creates:
   the GitHub App Manifest flow requires a one-time browser consent
   click that no API can bypass. **`bootstrap/fleet` does not touch
   GH App credentials** — the fleet Key Vault is created by
-  `bootstrap/fleet` itself (§4 Stage -1 Implementation status
-  2026-04-19), but storing the PEMs / webhook secrets there is
-  Stage 0's job (Stage 0 holds `Key Vault Secrets Officer` on the
-  vault for exactly this purpose). `bootstrap/fleet`'s only
+  `bootstrap/fleet` itself, but storing the PEMs / webhook secrets
+  there is Stage 0's job (Stage 0 holds `Key Vault Secrets Officer`
+  on the vault for exactly this purpose). `bootstrap/fleet`'s only
   involvement with the Apps is creating the `fleet-stage0` /
   `fleet-meta` GitHub environments that Stage 0 later populates
   with App-derived variables.
@@ -1272,13 +1152,12 @@ Key design choices:
   Container App Job as a **Key Vault secret reference** (`{ keyVaultUrl,
   identity }`) via a callsite-created `uami-fleet-runners` UAMI.
   `bootstrap/fleet` grants that UAMI `Key Vault Secrets User` on the
-  fleet KV it creates in the same apply graph (the KV, the secret
+  fleet KV it creates in the same apply graph — the KV, the secret
   path, and the role assignment must all exist before ACA validates
-  the Container App Job's KV reference at PUT time — this is the
-  deploy-time cycle that motivated relocating fleet-KV ownership from
-  Stage 0 to Stage -1; see §4 Stage -1 Implementation status
-  2026-04-19). The PEM never enters Terraform
-  state. Vendor patch documented in `modules/cicd-runners/VENDORING.md` §4.
+  the Container App Job's KV reference at PUT time, which is why
+  fleet-KV ownership sits in Stage -1 rather than Stage 0. The PEM
+  never enters Terraform state. Vendor patch documented in
+  `modules/cicd-runners/VENDORING.md` §4.
 - **Private tfstate SA**: `bootstrap/fleet/main.state.tf` sets
   `publicNetworkAccess = var.allow_public_state_during_bootstrap ? "Enabled"
   : "Disabled"` (default `false`) with `networkAcls.defaultAction = "Deny"`
@@ -2479,16 +2358,15 @@ Each environment holds its own `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
 
 ### Branch protection
 
-> **Implementation status (2026-04-18).** `main`-branch protection on
-> the fleet repo and the team-template repo is enforced via GitHub
-> repository **rulesets** (vendored
-> `terraform/modules/github-repo/modules/ruleset`), not the legacy
-> `github_branch_protection` resource. The ruleset requires signed
-> commits, PR review (1 approver, CODEOWNERS), up-to-date branches,
-> and a `validate` status check; non-fast-forward pushes are blocked.
-> Kargo-bot bypass on
-> `platform-gitops/components/*/environments/{dev,staging}/values.yaml`
-> is deferred until the Kargo GitHub App is minted (see §15).
+`main`-branch protection on the fleet repo and the team-template repo
+is enforced via GitHub repository **rulesets** (vendored
+`terraform/modules/github-repo/modules/ruleset`), not the legacy
+`github_branch_protection` resource. The ruleset requires signed
+commits, PR review (1 approver, CODEOWNERS), up-to-date branches, and
+a `validate` status check; non-fast-forward pushes are blocked.
+Kargo-bot bypass on
+`platform-gitops/components/*/environments/{dev,staging}/values.yaml`
+is deferred until the Kargo GitHub App is minted (see §15).
 
 - `main` requires PR review, `validate.yaml` to pass, signed commits.
 - Exception for the Kargo GitHub App on paths
@@ -2694,17 +2572,16 @@ Each environment holds its own `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
   Created in Stage 0. Kubelet identity on every cluster gets `AcrPull`.
 - **Key Vaults**: two-tier.
   - **Fleet KV** (`kv-<fleet.name>-fleet`) created by `bootstrap/fleet`
-    (Stage -1, alongside the tfstate SA and runner pool — ownership
-    relocated from Stage 0 to break the runner-pool KV-reference
-    deploy-time cycle; see §4 Stage -1 Implementation status
-    2026-04-19). Strictly private: `publicNetworkAccess = Disabled`,
-    `networkAcls.defaultAction = Deny`, private endpoint on an
-    operator-supplied subnet registering into a central BYO
+    (Stage -1, alongside the tfstate SA and runner pool — co-located
+    to break the runner-pool KV-reference deploy-time cycle). Strictly
+    private: `publicNetworkAccess = Disabled`,
+    `networkAcls.defaultAction = Deny`, private endpoint on the
+    derived `snet-pe-shared` subnet registering into the central
     `privatelink.vaultcore.azure.net` zone. Stores GH App PEMs
     (Argo, fleet-meta, stage0-publisher, fleet-runners) and AAD
-    OIDC client secrets. Secret seeding and rotation remain
-    Stage 0's responsibility (it holds `Key Vault Secrets Officer`
-    on the vault). One instance for the whole fleet.
+    OIDC client secrets. Secret seeding and rotation are Stage 0's
+    responsibility (it holds `Key Vault Secrets Officer` on the
+    vault). One instance for the whole fleet.
   - **Cluster KV** (`kv-<cluster.name>`) created by Stage 1; one per
     cluster; stores cluster-local secrets (TLS wildcard, observability
     keys, team-owned app secrets). ESO on each cluster binds via
@@ -2816,24 +2693,17 @@ one-shot initializer to materialize adopter-specific values. After
 initialization the repo is a concrete, self-contained fleet repo with
 no template machinery left behind.
 
-> **Implementation status (Phase 1):** §§16.1–16.3, §§16.5–16.9, and
-> §§16.10.1–16.10.9 are implemented. **§16.4 (`init-gh-apps.sh`
-> GitHub-App provisioning helper) is specified but not yet built** —
-> the two GH Apps are currently created manually by the adopter
-> operator. §16.10.10 (CI naming-derivation parity diff) is deferred
-> to Phase 2 CI work. The rendering layer was changed from an initial
-> sed-over-`__UPPER_SNAKE__` token pass to a **throwaway Terraform root
-> module at `init/`** driven by a thin wrapper shell (`init-fleet.sh`).
-> Rationale: Terraform is already a hard dependency for bootstrap, and
-> `templatefile()` plus variable validation blocks give us typed inputs
-> and per-field regex checks without a second toolchain or sed quoting
-> hazards. The single-source-of-truth contract (everything lives in
-> `clusters/_fleet.yaml`; bootstrap stages `yamldecode` it) is
-> unchanged. Post-init-fill fields (§16.1) render as `null` / `[]` with
-> `TODO` comments rather than angle-bracket `<...>` sentinels: bootstrap
-> preconditions use a single `!= null && != ""` check, and the
-> placeholder string never leaks into provider resources (where
-> azurerm's ID parser would emit an unactionable segment dump).
+The rendering layer is a **throwaway Terraform root module at `init/`**
+driven by a thin wrapper shell (`init-fleet.sh`). Terraform is already
+a hard dependency for bootstrap, and `templatefile()` plus variable
+validation blocks give us typed inputs and per-field regex checks
+without a second toolchain or sed quoting hazards. The
+single-source-of-truth contract (everything lives in
+`clusters/_fleet.yaml`; bootstrap stages `yamldecode` it) holds
+throughout. Post-init-fill fields (§16.1) render as `null` / `[]` with
+`TODO` comments rather than angle-bracket `<...>` sentinels:
+bootstrap preconditions use a single `!= null && != ""` check, and no
+placeholder string ever leaks into provider resources.
 
 ### 16.1 Single source of truth
 
