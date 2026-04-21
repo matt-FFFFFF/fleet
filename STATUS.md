@@ -530,10 +530,12 @@ self-contained enough to land in its own PR.
      `init/templates/_fleet.yaml.tftpl` (removed `networking.hubs`
      block, emits `hub_network_resource_id` per env-region with YAML
      null support), `init/tests/unit/init.tftest.hcl` (34/34 pass),
-     `.github/fixtures/adopter-test.tfvars` refreshed. Also hardened
-     `init-fleet.sh` dirty-tree guard to include untracked files via
-     `git status --porcelain`. PLAN §3.4 rewrite pass deferred to
-     follow-up commit.
+      `.github/fixtures/adopter-test.tfvars` refreshed. Also hardened
+      `init-fleet.sh` dirty-tree guard to include untracked files via
+      `git status --porcelain`. PLAN §3.4 prose + §3.1 YAML example +
+      §4 bootstrap stages + §14 + §16.1 rewritten in lockstep (all
+      `networking.hubs` / `mgmt_environment_for_vnet_peering` refs
+      gone).
 6. **Stage 1 rework** — replace `var.mgmt_vnet_resource_id` with
    per-region resolution; add mgmt-cluster DNS-link collapse; add
    `var.route_table_resource_id` input and set `routeTableId` on

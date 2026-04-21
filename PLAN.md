@@ -341,23 +341,6 @@ aad:
     enable_azure_rbac: true # Azure RBAC for Kubernetes Authorization
 
 networking:
-  # Adopter-owned hub VNets (not managed by this repo). One hub per
-  # env-region; every env VNet hub-peers to the hub for its own
-  # (env, region), and every mgmt env-region hub-peers to the hub of
-  # the env named in `envs.mgmt.regions.<region>.mgmt_environment_for_vnet_peering`
-  # (cross-env, because mgmt typically shares a non-prod or prod hub
-  # rather than running its own). Shape mirrors `networking.envs`
-  # (env → regions → region map); each region entry carries exactly
-  # one field, `resource_id`.
-  hubs:
-    nonprod:
-      regions:
-        eastus:
-          resource_id: /subscriptions/<sub-hub>/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-nonprod-eastus
-    prod:
-      regions:
-        eastus:
-          resource_id: /subscriptions/<sub-hub>/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus
   # Central private DNS zones for PE A-record registration. All BYO —
   # never created by this repo, only referenced by resource id.
   private_dns_zones:
@@ -371,35 +354,49 @@ networking:
   # KV, fleet ACR, plus the ACA-delegated runner-pool Container App
   # Environment); `bootstrap/environment` owns the cluster-workload
   # subnets (api pool, nodes pool, env-PE) on every env VNet
-  # uniformly, including mgmt. See §3.4. Intra-env mesh peering is
-  # emitted by the sub-vending module; mgmt↔env peerings are authored
-  # from env state via the peering AVM module, with both halves
+  # uniformly, including mgmt. See §3.4.
+  #
+  # Each env-region entry carries a `hub_network_resource_id`
+  # pointing at an adopter-owned hub VNet (not managed by this repo).
+  # The sub-vending module emits a hub peering against this id.
+  # Null opts the env-region out of hub peering entirely (e.g. when
+  # an adopter has no hub in that region yet). Mgmt↔env peerings are
+  # implicit: `bootstrap/environment` iterates every
+  # `networking.envs.mgmt.regions.*` entry and peers each non-mgmt
+  # env-region to the mgmt VNet in the same region (falling back to
+  # the first mgmt region if no same-region mgmt VNet exists). Both
+  # halves are authored from env state via the peering AVM module,
   # toggled by `create_reverse_peering` per env-region (default true).
   envs:
     mgmt:
       regions:
         eastus:
           address_space: ["10.50.0.0/20"]
-          # Which env's hub this mgmt VNet peers into. Required for
-          # every mgmt env-region; must name an env under
-          # `networking.hubs` that declares the same region.
-          mgmt_environment_for_vnet_peering: nonprod
+          # Adopter-owned hub VNet this mgmt env-region peers into
+          # (mgmt typically shares a non-prod or prod hub rather
+          # than running its own). Null opts out of hub peering.
+          hub_network_resource_id: /subscriptions/<sub-hub>/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-nonprod-eastus
           # Optional, default true. Set false when the hub is owned
           # by a team that forbids spoke-initiated reverse peerings
           # (in that case the hub team authors the reverse half
-          # out-of-band and Stage -1 only creates the spoke→hub
-          # half).
+          # out-of-band and the sub-vending call only creates the
+          # spoke→hub half).
           create_reverse_peering: true
     nonprod:
       regions:
         eastus:
           address_space: ["10.60.0.0/20"]
+          hub_network_resource_id: /subscriptions/<sub-hub>/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-nonprod-eastus
           create_reverse_peering: true
-        # westeurope: { address_space: ["10.61.0.0/20"], create_reverse_peering: true }
+        # westeurope:
+        #   address_space: ["10.61.0.0/20"]
+        #   hub_network_resource_id: null          # opt out of hub peering in this region
+        #   create_reverse_peering: true
     prod:
       regions:
         eastus:
           address_space: ["10.70.0.0/20"]
+          hub_network_resource_id: /subscriptions/<sub-hub>/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus
           create_reverse_peering: true
 
 observability:
@@ -614,7 +611,7 @@ in the fleet, which is safe because ClusterIPs are cluster-local.
 
 | Tier | VNet                                   | Owner                                                  | Peerings                                                                                                                           |
 | ---- | -------------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Hub  | adopter-owned, BYO (per env-region)    | adopter (outside repo)                                 | every env-region VNet hubs to the hub for its (env, region); every mgmt env-region hubs to the hub for `mgmt_environment_for_vnet_peering` + region |
+| Hub  | adopter-owned, BYO (per env-region)    | adopter (outside repo)                                 | every env-region VNet with a non-null `hub_network_resource_id` hub-peers to that hub via the sub-vending module (null = opt out) |
 | Env  | `vnet-<fleet.name>-<env>-<region>`     | `bootstrap/environment` (VNet + cluster-workload subnets); `bootstrap/fleet` (fleet-plane subnets on mgmt VNets only) | ↔ hub (via sub-vending); full mesh intra-env (sub-vending, per-env invocation); ↔ mgmt (per env-region, both halves in env state)       |
 
 - One env-region VNet per `networking.envs.<env>.regions.<region>`
@@ -628,12 +625,13 @@ in the fleet, which is safe because ClusterIPs are cluster-local.
   env-region VNets authored by `bootstrap/environment`, its own
   cluster-workload subnets, its own env-PE subnet (for the mgmt
   cluster KV and any other mgmt-cluster PEs), and its own node
-  ASG. It differs only in two respects: (1) `bootstrap/fleet`
-  additionally reserves a fleet-plane zone on the mgmt VNet for
-  the CI-plane PEs and the runner-pool Container App Environment,
-  and (2) each mgmt env-region peers into another env's hub (named
-  by `mgmt_environment_for_vnet_peering`) rather than running its
-  own hub.
+  ASG. It differs only in that `bootstrap/fleet` additionally
+  reserves a fleet-plane zone on the mgmt VNet for the CI-plane PEs
+  and the runner-pool Container App Environment. Mgmt env-regions
+  carry their own `hub_network_resource_id` (typically pointing at
+  another env's hub, since mgmt usually shares a non-prod or prod
+  hub rather than running its own) and hub-peer via the sub-vending
+  module on the same code path as every other env.
 - Peerings between non-mgmt envs (e.g. prod↔nonprod) are
   intentionally **not** authored. The sub-vending
   `mesh_peering_enabled` flag is scoped to a single invocation, so
@@ -794,24 +792,29 @@ Design notes:
 
 **Peering ownership.**
 
-- Every env-region hub peering is emitted by the sub-vending module
-  (per-VNet `hub_peering_enabled = true`) against the hub chosen for
-  that (env, region): the hub in `networking.hubs.<env>.regions.<region>`
-  for non-mgmt envs, and the hub in
-  `networking.hubs.<mgmt_environment_for_vnet_peering>.regions.<region>`
-  for mgmt env-regions.
-- Intra-env mesh peerings are emitted by the sub-vending module
+- **Hub peerings** are emitted by the sub-vending module (per-VNet
+  `hub_peering_enabled`) against
+  `networking.envs.<env>.regions.<region>.hub_network_resource_id`.
+  Non-null → `hub_peering_enabled = true` with that id as the target;
+  null → `hub_peering_enabled = false` (env-region opts out of hub
+  peering). The same code path applies uniformly to every env
+  including mgmt — there is no mgmt-specific hub-selection rule.
+- **Intra-env mesh peerings** are emitted by the sub-vending module
   (`mesh_peering_enabled = true`) so all regions within a single env
   peer to each other.
-- **Mgmt↔spoke peerings live in the env state** (`bootstrap/environment`,
-  authored on the spoke side). For every non-mgmt env-region, the
-  peering AVM module is called once with `create_reverse_peering =
+- **Mgmt↔env peerings live in the env state** (`bootstrap/environment`,
+  authored on the non-mgmt side for non-mgmt envs; authored implicitly
+  for mgmt as the reverse half of those peerings). For every non-mgmt
+  env-region, `bootstrap/environment` iterates
+  `networking.envs.mgmt.regions.*` and calls the peering AVM module
+  once per mgmt env-region — resolving the mgmt target VNet by
+  same-region match if one exists, otherwise the first mgmt region.
+  Each call uses `create_reverse_peering =
   networking.envs.<env>.regions.<region>.create_reverse_peering`
-  (default true). When true, both halves of the peering are
-  provisioned in the spoke env's plan and destroyed atomically if
-  the spoke VNet is retired; when false, only the spoke→mgmt half is
-  authored and the mgmt→spoke half is expected to exist out-of-band
-  (adopter-managed hub team).
+  (default true). When true, both halves land in the env state and
+  are destroyed atomically if the spoke VNet is retired; when false,
+  only the spoke→mgmt half is authored and the mgmt→spoke half is
+  expected to exist out-of-band.
 - `bootstrap/fleet` grants the `fleet-meta` UAMI `Network Contributor`
   scoped to every mgmt env-region VNet resource id so
   `bootstrap/environment` can write the mgmt→spoke half under the
@@ -855,7 +858,7 @@ Design notes:
 | ------------------------------------- | -------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `<ENV>_<REGION>_VNET_RESOURCE_ID`     | scalar ARM id                                | `bootstrap/environment` | Stage 1 (subnet parent, DNS zone link); env observability wiring; cross-env spoke reverse-peering target for mgmt VNets |
 | `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID` | scalar ARM id                                | `bootstrap/environment` | Stage 1 (AKS node-pool ASG attachment, or NSG rule author)                                                           |
-| `MGMT_VNET_RESOURCE_IDS`              | `jsonencode({ <region> = <vnet-resource-id> })` | `bootstrap/fleet`       | `bootstrap/environment` (env=mgmt branch carves cluster-workload subnets as azapi children of these VNets; non-mgmt envs resolve reverse-peering target by `mgmt_environment_for_vnet_peering` + region); Stage 1 (mgmt DNS zone VNet link in the cluster's region) |
+| `MGMT_VNET_RESOURCE_IDS`              | `jsonencode({ <region> = <vnet-resource-id> })` | `bootstrap/fleet`       | `bootstrap/environment` (env=mgmt branch carves cluster-workload subnets as azapi children of these VNets; non-mgmt envs resolve mgmt↔env reverse-peering targets by iterating this map with same-region-else-first fallback); Stage 1 (mgmt DNS zone VNet link in the cluster's region) |
 | `MGMT_PE_FLEET_SUBNET_IDS`            | `jsonencode({ <region> = <subnet-resource-id> })` | `bootstrap/fleet`    | (consumed inside `bootstrap/fleet` for tfstate SA / fleet KV / fleet ACR PEs; published for observability/diagnostics) |
 | `MGMT_RUNNERS_SUBNET_IDS`             | `jsonencode({ <region> = <subnet-resource-id> })` | `bootstrap/fleet`    | (consumed inside `bootstrap/fleet` for the ACA runner-pool Container App Environment; published for diagnostics)       |
 
@@ -1132,8 +1135,10 @@ Creates:
   `networking.envs.mgmt.regions.<region>` entry, `mesh_peering_enabled
   = true` if multiple mgmt regions, `enable_telemetry = false`). Each
   VNet is named `vnet-<fleet.name>-mgmt-<region>` in
-  `rg-net-mgmt-<region>`. `hub_peering_enabled = true` against
-  `_fleet.yaml.networking.hubs.<mgmt_environment_for_vnet_peering>.regions.<region>.resource_id`.
+  `rg-net-mgmt-<region>`. `hub_peering_enabled` is set from
+  `networking.envs.mgmt.regions.<region>.hub_network_resource_id`:
+  non-null → `true` with that id as the target; null → `false`
+  (mgmt env-region opts out of hub peering).
   The sub-vending module does **not** pre-create any per-cluster
   subnets; `bootstrap/environment` carves those (api pool, nodes
   pool, env-PE, node ASG, route table) as azapi children in a later
@@ -1312,11 +1317,12 @@ Creates:
     invokes `Azure/avm-ptn-alz-sub-vending/azure` once with
     `N = len(regions)`, `mesh_peering_enabled = true`,
     `enable_telemetry = false`. Each VNet named
-    `vnet-<fleet.name>-<env>-<region>` in `rg-net-<env>-<region>`,
-    with `hub_peering_enabled = true` against
-    `_fleet.yaml.networking.hubs.<env>.regions.<region>.resource_id`.
-    The sub-vending module does **not** pre-create per-cluster
-    subnets.
+    `vnet-<fleet.name>-<env>-<region>` in `rg-net-<env>-<region>`.
+    Per-region `hub_peering_enabled` is set from
+    `networking.envs.<env>.regions.<region>.hub_network_resource_id`:
+    non-null → `true` with that id as the target; null → `false`
+    (env-region opts out of hub peering). The sub-vending module
+    does **not** pre-create per-cluster subnets.
   - **`env=mgmt`.** The mgmt env-region VNets already exist (created
     by `bootstrap/fleet` alongside the fleet-plane subnets). This
     stage does **not** re-create them; it references them by id from
@@ -1345,19 +1351,22 @@ Creates:
       `routeTableId` set from this table (Stage 1 creates the
       per-slot associations; this stage creates the route table + the
       route entry).
-- **Spoke↔mgmt peerings** — for every non-mgmt env-region, one call
-  to `Azure/avm-res-network-virtualnetwork/azurerm//modules/peering`
-  with `create_reverse_peering =
+- **Env↔mgmt peerings** — for every non-mgmt env-region,
+  `bootstrap/environment` iterates
+  `networking.envs.mgmt.regions.*` and calls
+  `Azure/avm-res-network-virtualnetwork/azurerm//modules/peering`
+  once per mgmt env-region. The mgmt target VNet is resolved by
+  same-region match (`networking.envs.mgmt.regions.<env-region>`
+  if present) with fallback to the first mgmt region. Each call
+  uses `create_reverse_peering =
   networking.envs.<env>.regions.<region>.create_reverse_peering`
   (default true), names `peer-<env>-<region>-to-mgmt-<mgmt-region>`
-  and `peer-mgmt-<mgmt-region>-to-<env>-<region>` where
-  `<mgmt-region>` is the mgmt env-region whose
-  `mgmt_environment_for_vnet_peering` names this env. Both halves
-  land in the env state when `create_reverse_peering = true`; only
-  the spoke→mgmt half is authored when false. Requires
+  and `peer-mgmt-<mgmt-region>-to-<env>-<region>`. Both halves
+  land in the env state when `create_reverse_peering = true`;
+  only the spoke→mgmt half is authored when false. Requires
   `Network Contributor` on the mgmt VNet resource id — granted to
   the `fleet-meta` UAMI by `bootstrap/fleet` (see above). For
-  `env=mgmt`, no spoke↔mgmt peering is authored (the mgmt VNet *is*
+  `env=mgmt`, no env↔mgmt peering is authored (the mgmt VNet *is*
   the mgmt VNet); mgmt's only cross-VNet peerings are the hub
   peering emitted by its sub-vending call and the reverse halves
   authored by other envs' `bootstrap/environment` runs.
@@ -2728,12 +2737,12 @@ is deferred until the Kargo GitHub App is minted (see §15).
 - **VNets**: repo-owned per §3.4. Mgmt VNet (N=1) created by
   `bootstrap/fleet` via `Azure/avm-ptn-alz-sub-vending/azure`; env
   VNets (one per env-per-region) created by `bootstrap/environment`
-  via the same module with intra-env mesh. Mgmt↔spoke peerings
+  via the same module with intra-env mesh. Env↔mgmt peerings
   authored by `bootstrap/environment` via
   `Azure/avm-res-network-virtualnetwork/azurerm//modules/peering` with
   `create_reverse_peering` honoured per env-region. Adopter-owned
   hub VNets referenced by resource id from
-  `_fleet.yaml.networking.hubs.<env>.regions.<region>.resource_id`
+  `_fleet.yaml.networking.envs.<env>.regions.<region>.hub_network_resource_id`
   only — not provisioned by this repo.
 
 ## 15. Remaining open items (deferred)
@@ -2858,14 +2867,14 @@ angle-bracket `<...>` placeholders or `TODO` in the rendered yaml):
 - AAD group object IDs (`aad.argocd.owners`, `aad.kargo.owners`,
   per-env `aks.admin_groups`, `rbac_cluster_admins`, `rbac_readers`,
   `grafana.admins`, `grafana.editors`).
-- Networking resource ids — `networking.hubs.<env>.regions.<region>.resource_id`,
+- Networking resource ids —
+  `networking.envs.<env>.regions.<region>.hub_network_resource_id`,
   `networking.private_dns_zones.{blob,vaultcore,azurecr,grafana}` —
   the adopter typically fills these after provisioning (or pointing
   at) the hub VNets and central private DNS zones out-of-band.
   Address spaces under `networking.envs.<env>.regions.<region>.address_space`
   (for every env including `mgmt`) are prompted (they're pure CIDR
-  math, known at adoption time), as is
-  `networking.envs.mgmt.regions.<region>.mgmt_environment_for_vnet_peering`.
+  math, known at adoption time).
 
 These typically aren't known at adoption time and the adopter edits
 `clusters/_fleet.yaml` directly after init. Everything else (CIDRs,
