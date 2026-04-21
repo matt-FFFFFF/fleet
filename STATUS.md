@@ -506,6 +506,35 @@ self-contained enough to land in its own PR.
     `modules/fleet-identity/` + `config-loader/load.sh` pass it
     through. PLAN §3.4 prose updated in lockstep. `terraform
     validate` + `fmt -check` + all 45 unit tests pass.
+ 5b. **Schema simplification: fold `networking.hubs` into per-env-region
+     `hub_network_resource_id`, drop `mgmt_environment_for_vnet_peering`** —
+     ✅ **Done (TF side) / [ ] init/ side.** Decision: the top-level
+     `networking.hubs.<env>.regions.<region>.resource_id` map is
+     redundant with the per-env-region key, and `mgmt_environment_for_vnet_peering`
+     is redundant because mgmt↔env peering is implicit from the mgmt
+     key (only one env is named `mgmt`). Collapsed in
+     `modules/fleet-identity/` (dropped `hubs_raw`/`hubs` flattener;
+     added `hub_network_resource_id` passthrough on
+     `networking_derived.envs.<env>/<region>`; nullable on all envs
+     incl. mgmt; tests rewritten — 8/8 pass), `config-loader/load.sh`
+     (added `hub_network_resource_id` jq lookup + emission; smoke-tested
+     on mgmt + nonprod clusters), `bootstrap/fleet/main.network.tf`
+     (per-region `hub_peering_enabled = each.value.hub_network_resource_id
+     != null`; mgmt↔hub peering owned here; preflight allows null),
+     `bootstrap/environment/main.network.tf` (per-region
+     `hub_peering_enabled` conditional; env↔hub peering for env≠mgmt),
+     plus a doc sweep in `variables.tf` / `outputs.tf` / `main.tf`
+     headers + cluster `_defaults.yaml` comments. `terraform validate`
+     green on both bootstrap stacks; 44 unit tests pass.
+     **Still TODO in init/ side (next commit):** `init/variables.tf`
+     (drop `mgmt_peering_target_env`, make `hub_resource_id` nullable
+     on every env incl. mgmt), `init/templates/_fleet.yaml.tftpl`
+     (remove `networking.hubs` block, emit `hub_network_resource_id`
+     per env-region; remove mgmt `mgmt_environment_for_vnet_peering`),
+     `init/tests/unit/init.tftest.hcl` updates, and
+     `.github/fixtures/adopter-test.tfvars` schema refresh. PLAN §3.4
+     also needs a rewrite pass to eliminate `networking.hubs` +
+     `mgmt_environment_for_vnet_peering` references and example YAML.
 6. **Stage 1 rework** — replace `var.mgmt_vnet_resource_id` with
    per-region resolution; add mgmt-cluster DNS-link collapse; add
    `var.route_table_resource_id` input and set `routeTableId` on

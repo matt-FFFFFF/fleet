@@ -9,7 +9,8 @@
 #       regions declared under `networking.envs.<env>.regions`,
 #       `mesh_peering_enabled = true`, and per-VNet `hub_peering_enabled
 #       = true` against
-#       `networking.hubs.<env>.regions.<region>.resource_id`.
+#       `networking.envs.<env>.regions.<region>.hub_network_resource_id`
+#       when non-null (null = opt out, adopter-managed routing).
 #     - Cluster-workload subnets (`snet-pe-env`, api pool, nodes pool),
 #       node ASG, route table, and the 443-from-nodes NSG rule are
 #       carved as azapi children on each VNet.
@@ -99,14 +100,17 @@ resource "terraform_data" "network_preconditions" {
       condition     = alltrue([for k in local.region_keys : try(local.env_regions[k].address_space, null) != null])
       error_message = "clusters/_fleet.yaml: networking.envs.${var.env}.regions.<region>.address_space is required for every region. See docs/adoption.md §5.1 + PLAN §3.4."
     }
-    # Non-mgmt: each region must resolve a hub VNet id.
+    # Non-mgmt: each region's hub_network_resource_id, when non-null,
+    # must be a full ARM VNet resource id. Null opts out of hub peering
+    # (adopter-managed routing). Mgmt's hub peering is owned by
+    # bootstrap/fleet; skipped here.
     precondition {
       condition = var.env == "mgmt" || alltrue([
         for k in local.region_keys :
-        local.networking_central.hubs["${var.env}/${local.env_regions[k].region}"] != null &&
-        can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", local.networking_central.hubs["${var.env}/${local.env_regions[k].region}"]))
+        local.env_regions[k].hub_network_resource_id == null ||
+        can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", local.env_regions[k].hub_network_resource_id))
       ])
-      error_message = "clusters/_fleet.yaml: networking.hubs.${var.env}.regions.<region>.resource_id must be a full ARM VNet resource id for every region declared under networking.envs.${var.env}.regions. See docs/adoption.md §5.1 + docs/networking.md."
+      error_message = "clusters/_fleet.yaml: networking.envs.${var.env}.regions.<region>.hub_network_resource_id, when set, must be a full ARM VNet resource id (or null to skip hub peering). See docs/adoption.md §5.1 + docs/networking.md."
     }
     precondition {
       condition     = local.networking_central.pdz_grafana != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.grafana\\.azure\\.com$", local.networking_central.pdz_grafana))
@@ -218,8 +222,12 @@ module "env_network" {
       subnets = {}
 
       # --- Hub peering (tohub + fromhub) ----------------------------------
-      hub_peering_enabled     = true
-      hub_network_resource_id = local.networking_central.hubs["${var.env}/${r}"]
+      #
+      # Nullable per env-region: null opts out (adopter-managed
+      # routing). Sub-vending requires a non-null string on the
+      # variable schema, so pass an empty sentinel when disabled.
+      hub_peering_enabled     = local.env_regions[k].hub_network_resource_id != null
+      hub_network_resource_id = local.env_regions[k].hub_network_resource_id != null ? local.env_regions[k].hub_network_resource_id : ""
       hub_peering_direction   = "both"
       hub_peering_options_tohub = {
         allow_forwarded_traffic      = true

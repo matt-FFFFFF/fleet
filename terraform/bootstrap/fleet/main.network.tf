@@ -6,8 +6,10 @@
 # invocation creates:
 #
 #   - `vnet-<fleet.name>-mgmt-<region>` in `rg-net-mgmt-<region>`,
-#     hub-peered to the hub selected for (mgmt_environment_for_vnet_peering,
-#     region) from `networking.hubs`.
+#     hub-peered to the hub named in
+#     `networking.envs.mgmt.regions.<region>.hub_network_resource_id`
+#     when non-null (null opts out of hub peering; adopter handles
+#     routing externally).
 #   - Fleet-plane subnets (HIGH end of the /20, second /21 by PLAN §3.4):
 #       * `snet-pe-fleet` — /26 for tfstate SA, fleet KV, fleet ACR PEs.
 #         NSG `nsg-pe-fleet-<region>`.
@@ -31,9 +33,8 @@
 # error before the sub-vending module runs. Checks:
 #   - At least one `networking.envs.mgmt.regions.<region>` entry;
 #   - Each mgmt region has a non-null /20-or-larger address_space;
-#   - Each mgmt region names a `mgmt_environment_for_vnet_peering` that
-#     resolves to a hub in `networking.hubs.<env>.regions.<region>` for
-#     the same region;
+#   - Each mgmt region's `hub_network_resource_id`, when non-null, is a
+#     full ARM VNet resource id (null is allowed — opts out of peering);
 #   - Central PDZs (blob + vaultcore + azurecr) are populated.
 
 locals {
@@ -42,23 +43,12 @@ locals {
     for key, e in local.networking_derived.envs : key => e
     if e.env == "mgmt"
   }
-
-  # For each mgmt region, resolve the hub VNet id it peers into. Shape:
-  # "<peer_env>/<region>" keyed into `networking_central.hubs`.
-  mgmt_hub_ids = {
-    for key, e in local.mgmt_regions :
-    key => try(
-      local.networking_central.hubs["${e.mgmt_environment_for_vnet_peering}/${e.region}"],
-      null,
-    )
-  }
 }
 
 resource "terraform_data" "network_preconditions" {
   input = {
     mgmt_region_count = length(local.mgmt_regions)
     mgmt_regions      = local.mgmt_regions
-    mgmt_hub_ids      = local.mgmt_hub_ids
     pdz_blob          = local.networking_central.pdz_blob
     pdz_vaultcore     = local.networking_central.pdz_vaultcore
     pdz_azurecr       = local.networking_central.pdz_azurecr
@@ -79,16 +69,10 @@ resource "terraform_data" "network_preconditions" {
     precondition {
       condition = alltrue([
         for key, e in local.mgmt_regions :
-        e.mgmt_environment_for_vnet_peering != null && trimspace(e.mgmt_environment_for_vnet_peering) != ""
+        e.hub_network_resource_id == null ||
+        can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", e.hub_network_resource_id))
       ])
-      error_message = "clusters/_fleet.yaml: every networking.envs.mgmt.regions.<region> must declare `mgmt_environment_for_vnet_peering` naming the non-mgmt env whose hub this mgmt VNet peers into. See PLAN §3.1 + §3.4."
-    }
-    precondition {
-      condition = alltrue([
-        for key, hub in local.mgmt_hub_ids :
-        hub != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", hub))
-      ])
-      error_message = "clusters/_fleet.yaml: networking.hubs.<mgmt_environment_for_vnet_peering>.regions.<region>.resource_id must exist and be a full ARM VNet resource id for every mgmt region. See docs/adoption.md §5.1 + docs/networking.md."
+      error_message = "clusters/_fleet.yaml: networking.envs.mgmt.regions.<region>.hub_network_resource_id, when set, must be a full ARM VNet resource id (or null to skip hub peering). See docs/adoption.md §5.1 + docs/networking.md."
     }
     precondition {
       condition     = local.networking_central.pdz_blob != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.blob\\.core\\.windows\\.net$", local.networking_central.pdz_blob))
@@ -221,8 +205,14 @@ module "mgmt_network" {
       }
 
       # --- Hub peering (tohub + fromhub) -----------------------------------
-      hub_peering_enabled     = true
-      hub_network_resource_id = local.mgmt_hub_ids[each.key]
+      #
+      # Nullable: when each.value.hub_network_resource_id is null the
+      # mgmt region opts out of hub peering (adopter handles routing
+      # externally). hub_network_resource_id is still required by the
+      # sub-vending variable schema, so pass an empty string sentinel
+      # that the module ignores when hub_peering_enabled = false.
+      hub_peering_enabled     = each.value.hub_network_resource_id != null
+      hub_network_resource_id = each.value.hub_network_resource_id != null ? each.value.hub_network_resource_id : ""
       hub_peering_direction   = "both"
       hub_peering_options_tohub = {
         allow_forwarded_traffic      = true

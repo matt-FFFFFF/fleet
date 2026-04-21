@@ -4,7 +4,7 @@
 #   fleet/_defaults.yaml << env/_defaults.yaml << region/_defaults.yaml << cluster.yaml
 #
 # Per-env-region networking config (address_space, egress_next_hop_ip,
-# create_reverse_peering, mgmt_environment_for_vnet_peering) lives in
+# hub_network_resource_id, create_reverse_peering) lives in
 # `_fleet.yaml` under `networking.envs.mgmt.regions.eastus` — not here.
 # This file is a placeholder for future region-wide mgmt/eastus
 # tunables that do NOT belong in _fleet.yaml (e.g. region-specific

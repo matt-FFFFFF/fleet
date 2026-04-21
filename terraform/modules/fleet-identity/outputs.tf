@@ -17,15 +17,16 @@ output "networking_central" {
   description = <<-EOT
     Adopter-BYO central networking (PLAN §3.1 / §3.4):
 
-      hubs          = { "<env>/<region>" = <hub-vnet-resource-id> }
       pdz_blob      = <privatelink.blob... zone id>
       pdz_vaultcore = <privatelink.vaultcore... zone id>
       pdz_azurecr   = <privatelink.azurecr... zone id>
       pdz_grafana   = <privatelink.grafana... zone id>
 
-    `hubs` is an empty map when `networking.hubs` is absent. The four
-    PDZ ids may each be null when absent. Downstream callsites
+    Each PDZ id may be null when absent. Downstream callsites
     precondition non-null.
+
+    Hub VNet references are per-(env,region) — see
+    `networking_derived.envs.<env>/<region>.hub_network_resource_id`.
   EOT
   value       = local.networking_central
 }
@@ -44,7 +45,7 @@ output "networking_derived" {
           peering_spoke_to_mgmt_name,    # null when env == "mgmt"
           peering_mgmt_to_spoke_name,    # null when env == "mgmt"
           create_reverse_peering,
-          mgmt_environment_for_vnet_peering,
+          hub_network_resource_id,       # nullable per env-region
           egress_next_hop_ip,            # null unless adopter filled it
           # mgmt-only fleet-plane fields; null for non-mgmt:
           snet_pe_fleet_cidr, snet_runners_cidr,

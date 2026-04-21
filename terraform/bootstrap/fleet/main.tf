@@ -31,8 +31,9 @@
 #  10. Mgmt env-region VNets (PLAN §3.4) — one per
 #      `networking.envs.mgmt.regions.<region>` entry via
 #      Azure/avm-ptn-alz-sub-vending/azure (N=1 per invocation, no
-#      mesh, hub_peering to the hub selected from
-#      `networking.hubs.<mgmt_environment_for_vnet_peering>.regions.<region>`).
+#      mesh, hub_peering to
+#      `networking.envs.mgmt.regions.<region>.hub_network_resource_id`
+#      when non-null; null opts out of hub peering).
 #      Authors fleet-plane subnets only (snet-pe-fleet, snet-runners)
 #      at the HIGH end of each VNet's /20; cluster-workload subnets
 #      (snet-pe-env, api pool, nodes pool, node ASG, route table) on

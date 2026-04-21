@@ -4,8 +4,9 @@
 # `command = apply` runs using `variables { fleet_doc = {...} }`. The
 # fixture shapes below mirror PLAN §3.1 (post-143d18b rework: uniform
 # per-(env, region) networking; no `fleet.primary_region`; no
-# `networking.vnets.mgmt`; `networking.hubs` map; mgmt is an env with
-# its own regions entry).
+# `networking.vnets.mgmt`; no `networking.hubs` map — hub refs live
+# on `networking.envs.<env>.regions.<region>.hub_network_resource_id`;
+# mgmt is an env with its own regions entry).
 
 # ---- happy path: names, defaults, KV location fallback ---------------------
 
@@ -70,16 +71,15 @@ run "defaults_derive_names_per_naming_contract" {
     error_message = "Fleet KV must default its location to envs.mgmt.location when keyvault.location is absent."
   }
 
-  # All networking_central.* default to empty/null when no networking block.
+  # All networking_central.* default to null when no networking block.
   assert {
     condition = alltrue([
-      output.networking_central.hubs == {},
       output.networking_central.pdz_blob == null,
       output.networking_central.pdz_vaultcore == null,
       output.networking_central.pdz_azurecr == null,
       output.networking_central.pdz_grafana == null,
     ])
-    error_message = "networking_central.* must be empty/null when fleet_doc.networking is absent."
+    error_message = "networking_central.* must be null when fleet_doc.networking is absent."
   }
 
   assert {
@@ -230,18 +230,28 @@ run "networking_central_passthrough_when_populated" {
       }
       envs = { mgmt = { location = "eastus" } }
       networking = {
-        hubs = {
+        envs = {
+          mgmt = {
+            regions = {
+              eastus = {
+                address_space           = ["10.50.0.0/20"]
+                hub_network_resource_id = "/subscriptions/hhh/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-mgmt-eastus"
+              }
+            }
+          }
           nonprod = {
             regions = {
               eastus = {
-                resource_id = "/subscriptions/hhh/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-nonprod-eastus"
+                address_space           = ["10.60.0.0/20"]
+                hub_network_resource_id = "/subscriptions/hhh/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-nonprod-eastus"
               }
             }
           }
           prod = {
             regions = {
               eastus = {
-                resource_id = "/subscriptions/hhh/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
+                address_space           = ["10.70.0.0/20"]
+                hub_network_resource_id = "/subscriptions/hhh/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-prod-eastus"
               }
             }
           }
@@ -264,13 +274,18 @@ run "networking_central_passthrough_when_populated" {
   }
 
   assert {
-    condition     = endswith(output.networking_central.hubs["nonprod/eastus"], "/virtualNetworks/vnet-hub-nonprod-eastus")
-    error_message = "networking.hubs.<env>.regions.<region>.resource_id must flatten into networking_central.hubs keyed `<env>/<region>`."
+    condition     = endswith(output.networking_derived.envs["nonprod/eastus"].hub_network_resource_id, "/virtualNetworks/vnet-hub-nonprod-eastus")
+    error_message = "networking.envs.<env>.regions.<region>.hub_network_resource_id must pass through on networking_derived.envs[\"<env>/<region>\"].hub_network_resource_id."
   }
 
   assert {
-    condition     = endswith(output.networking_central.hubs["prod/eastus"], "/virtualNetworks/vnet-hub-prod-eastus")
-    error_message = "Every (env, region) hub entry must pass through verbatim."
+    condition     = endswith(output.networking_derived.envs["mgmt/eastus"].hub_network_resource_id, "/virtualNetworks/vnet-hub-mgmt-eastus")
+    error_message = "mgmt env-regions carry hub_network_resource_id too (mgmt↔hub peering owned by bootstrap/fleet)."
+  }
+
+  assert {
+    condition     = endswith(output.networking_derived.envs["prod/eastus"].hub_network_resource_id, "/virtualNetworks/vnet-hub-prod-eastus")
+    error_message = "Every (env, region) hub reference must pass through verbatim."
   }
 
   assert {
@@ -333,9 +348,8 @@ run "networking_derived_populates_topology_at_slash20" {
           mgmt = {
             regions = {
               eastus = {
-                address_space                     = ["10.50.0.0/20"]
-                mgmt_environment_for_vnet_peering = "nonprod"
-                create_reverse_peering            = true
+                address_space          = ["10.50.0.0/20"]
+                create_reverse_peering = true
               }
             }
           }
@@ -394,8 +408,8 @@ run "networking_derived_populates_topology_at_slash20" {
   }
 
   assert {
-    condition     = output.networking_derived.envs["mgmt/eastus"].mgmt_environment_for_vnet_peering == "nonprod"
-    error_message = "mgmt_environment_for_vnet_peering must pass through."
+    condition     = output.networking_derived.envs["mgmt/eastus"].hub_network_resource_id == null
+    error_message = "mgmt env-region hub_network_resource_id must default to null when fixture omits it."
   }
 
   assert {

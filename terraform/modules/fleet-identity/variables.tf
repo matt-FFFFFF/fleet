@@ -23,12 +23,12 @@ variable "fleet_doc" {
       envs.<env>.subscription_id (string, per-env)
       envs.mgmt.location       (string; the canonical location for fleet-wide
                                resources not bound to a cluster env-region)
-      networking.hubs.<env>.regions.<region>.resource_id (optional; BYO hubs)
       networking.private_dns_zones.{blob,vaultcore,azurecr,grafana} (optional)
       networking.envs.<env>.regions.<region>.address_space (list<string>)
       networking.envs.<env>.regions.<region>.location (string, optional)
+      networking.envs.<env>.regions.<region>.hub_network_resource_id (string, nullable; BYO hub VNet id, null = opt out of hub peering)
       networking.envs.<env>.regions.<region>.create_reverse_peering (bool, default true)
-      networking.envs.mgmt.regions.<region>.mgmt_environment_for_vnet_peering (string)
+      networking.envs.<env>.regions.<region>.egress_next_hop_ip (string, nullable)
       github_app.fleet_runners.{app_id,installation_id,private_key_kv_secret} (optional)
   EOT
   type        = any

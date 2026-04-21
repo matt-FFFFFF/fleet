@@ -52,28 +52,16 @@ locals {
     fleet_kv_location       = try(var.fleet_doc.keyvault.location, local.mgmt_location)
   }
 
-  # Central adopter-owned networking inputs — the per-env-region hub VNets
-  # the repo peers to and the four central `privatelink.*` private DNS
-  # zones used for PE A-record registration. All BYO; referenced by
-  # resource id only. `try()`-guarded so partial `_fleet.yaml` docs stay
-  # parseable; downstream callsites assert non-null with `precondition`
-  # blocks.
+  # Central adopter-owned networking inputs — the four central
+  # `privatelink.*` private DNS zones used for PE A-record registration.
+  # All BYO; referenced by resource id only. `try()`-guarded so partial
+  # `_fleet.yaml` docs stay parseable; downstream callsites assert
+  # non-null with `precondition` blocks.
   #
-  # PLAN §3.1 shape:
-  #   networking.hubs.<env>.regions.<region>.resource_id
-  # The hubs map mirrors `networking.envs` (env → regions → region).
-  # `hubs` is a flat map keyed "<env>/<region>" for symmetry with
-  # `networking_derived.envs`.
-  hubs_raw = try(var.fleet_doc.networking.hubs, {})
-  hubs = merge([
-    for env_name, env_block in local.hubs_raw : {
-      for region_name, region_block in try(env_block.regions, {}) :
-      "${env_name}/${region_name}" => try(region_block.resource_id, null)
-    }
-  ]...)
-
+  # Hub VNet references are per-(env,region) under
+  # `networking.envs.<env>.regions.<region>.hub_network_resource_id`
+  # (PLAN §3.4); see `env_regions` below for the passthrough.
   networking_central = {
-    hubs          = local.hubs
     pdz_blob      = try(var.fleet_doc.networking.private_dns_zones.blob, null)
     pdz_vaultcore = try(var.fleet_doc.networking.private_dns_zones.vaultcore, null)
     pdz_azurecr   = try(var.fleet_doc.networking.private_dns_zones.azurecr, null)
@@ -116,20 +104,21 @@ locals {
   # Flatten `envs.<env>.regions.<region>` into a map keyed
   # "<env>/<region>". `address_space` is expected to be a YAML list of
   # CIDR strings (PLAN §3.1); we pick the first entry for CIDR math.
-  # `location` defaults to the region name. Passes through the two
-  # per-env-region peering toggles so Stage -1 can consume them.
+  # `location` defaults to the region name. Passes through the
+  # per-env-region hub reference, egress next-hop, and
+  # `create_reverse_peering` toggle so Stage -1 can consume them.
   env_regions = merge([
     for env_name, env_block in local.env_regions_raw : {
       for region_name, region_block in try(env_block.regions, {}) :
       "${env_name}/${region_name}" => {
-        env                               = env_name
-        region                            = region_name
-        address_space                     = try(tolist(region_block.address_space), null)
-        cidr                              = try(tolist(region_block.address_space)[0], null)
-        location                          = try(region_block.location, region_name)
-        egress_next_hop_ip                = try(region_block.egress_next_hop_ip, null)
-        create_reverse_peering            = try(region_block.create_reverse_peering, true)
-        mgmt_environment_for_vnet_peering = try(region_block.mgmt_environment_for_vnet_peering, null)
+        env                     = env_name
+        region                  = region_name
+        address_space           = try(tolist(region_block.address_space), null)
+        cidr                    = try(tolist(region_block.address_space)[0], null)
+        location                = try(region_block.location, region_name)
+        hub_network_resource_id = try(region_block.hub_network_resource_id, null)
+        egress_next_hop_ip      = try(region_block.egress_next_hop_ip, null)
+        create_reverse_peering  = try(region_block.create_reverse_peering, true)
       }
     }
   ]...)
@@ -184,8 +173,9 @@ locals {
         # region ("-to-mgmt-<mgmt-region>"). Authored from env state
         # (spoke side) for every non-mgmt env-region, with
         # reverse-half gated on `create_reverse_peering`. For mgmt
-        # env-regions the fields are null (mgmt doesn't peer to
-        # itself from env state; mgmt↔hub is sub-vending's job).
+        # env-regions the fields are null (mgmt↔env peering is the
+        # non-mgmt env's responsibility; mgmt↔hub is owned by
+        # `bootstrap/fleet`).
         peering_spoke_to_mgmt_name = r.env == "mgmt" ? null : (
           length(keys(local.mgmt_regions)) == 0 ? null :
           "peer-${r.env}-${r.region}-to-mgmt-${contains(keys(local.mgmt_regions), r.region) ? r.region : keys(local.mgmt_regions)[0]}"
@@ -195,9 +185,15 @@ locals {
           "peer-mgmt-${contains(keys(local.mgmt_regions), r.region) ? r.region : keys(local.mgmt_regions)[0]}-to-${r.env}-${r.region}"
         )
 
-        # Per-env-region peering toggles (passthroughs).
-        create_reverse_peering            = r.create_reverse_peering
-        mgmt_environment_for_vnet_peering = r.mgmt_environment_for_vnet_peering
+        # Per-env-region peering toggle (passthrough).
+        create_reverse_peering = r.create_reverse_peering
+
+        # Adopter-owned hub VNet this env-region peers to (PLAN §3.4).
+        # When null, no hub peering is created for this env-region
+        # (escape hatch; adopter handles routing externally). Mgmt↔hub
+        # peering is owned by `bootstrap/fleet`; non-mgmt env↔hub
+        # peering is owned by `bootstrap/environment`.
+        hub_network_resource_id = r.hub_network_resource_id
 
         # Adopter-supplied next-hop IP for the `0.0.0.0/0` UDR on
         # cluster-workload subnets. `bootstrap/environment` authors

@@ -39,6 +39,8 @@
 #         "nsg_pe_env_name":         "nsg-pe-env-<env>-<region>",
 #         "route_table_name":        "rt-aks-<env>-<region>",
 #         "cluster_slot_capacity":   <int>,
+#         "egress_next_hop_ip":      "<ip>" | null,
+#         "hub_network_resource_id": "<arm-id>" | null,
 #
 #         # Peer mgmt env-region (null when env=mgmt — clusters in
 #         # mgmt share the mgmt VNet directly and don't peer).
@@ -183,6 +185,16 @@ fi
 # of the per-env-region networking config.
 egress_next_hop_ip="$(printf '%s' "$fleet_json" | jq -r --arg env "$env" --arg region "$region" '
   .networking.envs[$env].regions[$region].egress_next_hop_ip // empty
+')"
+
+# Adopter-owned hub VNet this env-region peers to (PLAN §3.4). Pulled
+# from `_fleet.yaml`.networking.envs.<env>.regions.<region>.hub_network_resource_id.
+# Null when the adopter opted out of hub peering for this env-region.
+# bootstrap/fleet (env=mgmt) and bootstrap/environment (env≠mgmt) gate
+# hub-peering resource creation on non-null. Stage 1 passes it through
+# for preconditions.
+hub_network_resource_id="$(printf '%s' "$fleet_json" | jq -r --arg env "$env" --arg region "$region" '
+  .networking.envs[$env].regions[$region].hub_network_resource_id // empty
 ')"
 
 subnet_slot="$(printf '%s' "$merged_json" | jq -r '.networking.subnet_slot // empty')"
@@ -402,6 +414,7 @@ jq -n \
   --arg nsg_pe_fleet  "$nsg_pe_fleet_name" \
   --arg nsg_runners   "$nsg_runners_name" \
   --arg egress_hop    "$egress_next_hop_ip" \
+  --arg hub_net_id    "$hub_network_resource_id" \
   --argjson slot   "$subnet_slot" \
   '
   # Empty-string → null helper.
@@ -438,6 +451,7 @@ jq -n \
          snet_runners_name:             ($snet_runners      | orNull),
          nsg_pe_fleet_name:             ($nsg_pe_fleet     | orNull),
          nsg_runners_name:              ($nsg_runners      | orNull),
-         egress_next_hop_ip:            ($egress_hop       | orNull)
+         egress_next_hop_ip:            ($egress_hop       | orNull),
+         hub_network_resource_id:       ($hub_net_id       | orNull)
        } + $cidrs)
      }'
