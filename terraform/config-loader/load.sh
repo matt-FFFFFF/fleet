@@ -164,8 +164,20 @@ derive_cluster_cidrs() {
   [[ -z "$address_space" ]] && { echo "{}" ; return ; }
   python3 - "$address_space" "$slot" "$pod_cidr_slot" <<'PY'
 import ipaddress, json, sys
-net = ipaddress.ip_network(sys.argv[1], strict=True)
-i = int(sys.argv[2])
+try:
+    net = ipaddress.ip_network(sys.argv[1], strict=True)
+except ValueError as e:
+    # strict=True rejects CIDRs with host bits set; also catches
+    # malformed strings ("not-a-cidr", "10.0.0.0/33", etc.). Emit the
+    # structured {error: ...} JSON the caller already expects rather
+    # than letting set -euo pipefail abort with a Python traceback.
+    print(json.dumps({"error": f"address_space {sys.argv[1]!r} is not a valid strict CIDR: {e}"}))
+    sys.exit(0)
+try:
+    i = int(sys.argv[2])
+except ValueError:
+    print(json.dumps({"error": f"subnet_slot must be an integer; got: {sys.argv[2]!r}"}))
+    sys.exit(0)
 pod_slot_raw = sys.argv[3]
 slots_total = 2 ** (24 - net.prefixlen)   # number of /24s in the VNet
 if slots_total < 3:

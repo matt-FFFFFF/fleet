@@ -15,7 +15,7 @@ terraform {
     # module's `enable_telemetry = false` flag, but the provider must
     # still be declared at every callsite.
     modtm = {
-      source  = "azure/modtm"
+      source  = "Azure/modtm"
       version = "~> 0.3"
     }
     # Sub-vending also depends on `random ~> 3.5`; the existing

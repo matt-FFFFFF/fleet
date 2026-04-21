@@ -104,8 +104,15 @@ module "aks" {
     network_plugin_mode = "overlay"
     network_dataplane   = "cilium"
     network_policy      = "cilium"
-    # outbound_type stays on the AVM default (loadBalancer); UDR via
-    # hub egress is a follow-up once the hub firewall is modelled.
+    # Egress is forced through the hub via userDefinedRouting (UDR): the
+    # node subnet's route table (authored in Stage 1) points 0.0.0.0/0
+    # at the hub firewall's private IP, and AKS must be told not to
+    # provision a cluster-owned outbound Load Balancer / NAT Gateway for
+    # egress. Setting this to "userDefinedRouting" is the only value
+    # that is compatible with a hub-and-spoke topology where the spoke
+    # has no public egress of its own. This is set at cluster creation
+    # and cannot be changed later (ARM-level immutability).
+    outbound_type     = "userDefinedRouting"
     load_balancer_sku = "standard"
     pod_cidr          = var.pod_cidr
     service_cidr      = "10.0.0.0/16"

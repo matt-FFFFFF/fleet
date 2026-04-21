@@ -210,6 +210,15 @@ branch. Remaining implementation (Phases D–H) tracked in `_TASK.md`.
       assignments, managed Prometheus, Kargo rotation), Phases G/H
       docs + cleanup. Tracked in `_TASK.md`. Phase F PR-check landed
       2026-04-20 (see §4 Stage 1 / validate.yaml).
+- [~] §3.4 UDR for AKS node egress (2026-04-21,
+      `feat/networking-topology`): `modules/aks-cluster/main.tf` sets
+      `network_profile.outbound_type = userDefinedRouting`; per-env-
+      per-region `networking.egress_next_hop_ip` stubbed (null) in
+      new `clusters/{mgmt,nonprod}/eastus/_defaults.yaml`; loader
+      deep-merge carries the key through unchanged. Route-table
+      resource + node-subnet association **deferred** to a follow-up
+      (see PLAN §3.4 *Implementation status*); until then apply on a
+      live cluster will be rejected by ARM, plan still passes.
 - [x] Example clusters: `mgmt/eastus/aks-mgmt-01`,
       `nonprod/eastus/aks-nonprod-01` — networking blocks flipped to
       `subnet_slot: 0` (2026-04-20, Phase B); both in distinct env

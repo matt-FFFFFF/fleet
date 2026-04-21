@@ -540,6 +540,24 @@ structure and Azure-resource names.
 > parity is enforced across `docs/naming.md`, `config-loader/load.sh`,
 > and `modules/fleet-identity/`.
 
+**Implementation status (UDR for AKS node egress).** `modules/aks-
+cluster` hard-codes `network_profile.outbound_type =
+userDefinedRouting` (commit landing with this note); the hub-firewall
+next-hop IP that AKS nodes route 0.0.0.0/0 at is carried as
+`networking.egress_next_hop_ip` in each env's region-scope
+`_defaults.yaml` (`clusters/<env>/<region>/_defaults.yaml`). The
+stub files ship with the key set to `null` — adopters fill this in
+with their real hub firewall / NVA private IP before creating a
+cluster in that region. The route table + subnet association that
+materialise this contract are **deferred**: Stage 1 does not yet
+author `Microsoft.Network/routeTables` on the env VNet, nor does the
+env-VNet subnet call in `bootstrap/environment` associate one to the
+node subnet. Landing that follow-up turns `egress_next_hop_ip` into
+a hard requirement (Stage 1 fail-fast on null). Until then, `terra-
+form plan` succeeds but `terraform apply` on a live cluster will be
+rejected by ARM for lacking a 0.0.0.0/0 route on the node subnet —
+this is by design so the two halves ship as one atomic change.
+
 **Tiers.**
 
 | Tier     | VNet                                  | Owner                   | Peerings                                                                 |
@@ -796,7 +814,7 @@ are not overridable per cluster: `disable_local_accounts = true`,
 `oidc_issuer_profile.enabled = true`,
 `security_profile.workload_identity.enabled = true`,
 `api_server_access_profile.{enable_private_cluster, enable_vnet_integration} = true`,
-`network_profile.{network_plugin=azure, network_plugin_mode=overlay, network_dataplane=cilium}`.
+`network_profile.{network_plugin=azure, network_plugin_mode=overlay, network_dataplane=cilium, network_policy=cilium, outbound_type=userDefinedRouting, load_balancer_sku=standard}`.
 
 **Provider carveout.** The AVM AKS module authors the managed
 cluster via `azapi_resource` but ships `azurerm_management_lock`,
