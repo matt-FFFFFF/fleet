@@ -61,10 +61,19 @@ resource "azapi_resource" "fleet_kv" {
 
 # --- Private endpoint --------------------------------------------------------
 #
-# Lands in the mgmt VNet's `snet-pe-shared` subnet (repo-owned, created by
-# main.network.tf via the sub-vending module; PLAN §3.4). A-record
-# registers in the adopter-owned central `privatelink.vaultcore.azure.net`
-# zone from `networking.private_dns_zones.vaultcore`.
+# Lands in the `snet-pe-fleet` subnet of the mgmt VNet co-located with
+# the fleet KV (by `fleet_kv_location`, defaulting to mgmt's scalar
+# location). PLAN §3.4. A-record registers in the adopter-owned central
+# `privatelink.vaultcore.azure.net` zone from
+# `networking.private_dns_zones.vaultcore`.
+
+locals {
+  # Pick the mgmt region matching the KV's location; fall back to the
+  # first mgmt region. The precondition below surfaces a mismatch early.
+  fleet_kv_mgmt_region = contains(keys(local.mgmt_vnet_ids), local.derived.fleet_kv_location) ? (
+    local.derived.fleet_kv_location
+  ) : keys(local.mgmt_vnet_ids)[0]
+}
 
 resource "azapi_resource" "fleet_kv_pe" {
   type      = "Microsoft.Network/privateEndpoints@2023-11-01"
@@ -75,7 +84,7 @@ resource "azapi_resource" "fleet_kv_pe" {
   body = {
     properties = {
       subnet = {
-        id = local.snet_pe_shared_id
+        id = local.mgmt_snet_pe_fleet_ids[local.fleet_kv_mgmt_region]
       }
       privateLinkServiceConnections = [
         {
@@ -86,6 +95,13 @@ resource "azapi_resource" "fleet_kv_pe" {
           }
         }
       ]
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = contains(keys(local.mgmt_vnet_ids), local.derived.fleet_kv_location)
+      error_message = "clusters/_fleet.yaml: no networking.envs.mgmt.regions.<region> entry matches the fleet KV location (`keyvault.location` resolves to ${local.derived.fleet_kv_location}); the fleet KV PE cannot land in a co-located mgmt VNet."
     }
   }
 

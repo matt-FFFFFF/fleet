@@ -1,56 +1,98 @@
 # main.network.tf
 #
-# Repo-owned mgmt-tier VNet (PLAN §3.4). Authored via the
-# `Azure/avm-ptn-alz-sub-vending/azure` module (N=1, no mesh, hub peering
-# enabled). The sub-vending module is used purely for its network-layer
-# creation — subscription creation is DISABLED (we run against the
-# already-bootstrapped shared subscription) — but we still go through it
-# because it is the same abstraction `bootstrap/environment` uses for
-# env-tier VNets, which keeps the two stages symmetric and makes
-# upstream network-design changes land in one place.
+# Repo-owned mgmt env-region VNet shells (PLAN §3.4). Authored via the
+# `Azure/avm-ptn-alz-sub-vending/azure` module, one invocation per
+# `networking.envs.mgmt.regions.<region>` entry in _fleet.yaml. Each
+# invocation creates:
 #
-# Carves two reserved /26 subnets:
-#   - snet-pe-shared  → tfstate SA, fleet KV, fleet ACR private endpoints
-#   - snet-runners    → ACA-delegated self-hosted GitHub runner pool
+#   - `vnet-<fleet.name>-mgmt-<region>` in `rg-net-mgmt-<region>`,
+#     hub-peered to the hub selected for (mgmt_environment_for_vnet_peering,
+#     region) from `networking.hubs`.
+#   - Fleet-plane subnets (HIGH end of the /20, second /21 by PLAN §3.4):
+#       * `snet-pe-fleet` — /26 for tfstate SA, fleet KV, fleet ACR PEs.
+#         NSG `nsg-pe-fleet-<region>`.
+#       * `snet-runners` — /23 delegated to Microsoft.App/environments
+#         for the ACA runner pool. NSG `nsg-runners-<region>`.
 #
-# Subnet CIDRs come from `networking_derived.mgmt.snet_{pe_shared,runners}_cidr`
-# (first and second /26 of the VNet address_space; see docs/naming.md).
+# The sub-vending module does NOT pre-create cluster-workload subnets
+# (api pool, nodes pool, env-PE, node ASG, route table) — those are
+# carved by `bootstrap/environment` as azapi children of the VNets this
+# stage creates, authenticated via the `Network Contributor` grant
+# placed on the `fleet-meta` UAMI at each mgmt env-region VNet below.
 #
-# Peering to the adopter-owned hub is delegated to the sub-vending
-# module (`hub_peering_enabled = true`). Mgmt↔env peerings are
-# authored separately by `bootstrap/environment` via the peering AVM
-# submodule with `create_reverse_peering = true` so both halves land
-# in the env state in a single apply; this stage only ensures the
-# `fleet-meta` UAMI holds `Network Contributor` on the mgmt VNet so
-# that reverse half can be written (see role assignment below).
+# Downstream PEs (tfstate SA, fleet KV, fleet ACR) register into the
+# snet-pe-fleet of a single chosen mgmt region per resource — see the
+# `state_mgmt_region`, `fleet_kv_mgmt_region`, and `runner_mgmt_region`
+# selectors in main.state.tf / main.kv.tf / main.runner.tf.
 
-# --- Preflight on the Phase-B networking inputs -----------------------------
+# --- Preflight -------------------------------------------------------------
 #
-# Pattern mirrors main.state.tf / main.runner.tf: reject null / empty /
-# legacy `<...>` sentinel / non-ARM-id shapes with a single yaml-anchored
-# error. Without these, the sub-vending module / azapi provider fail
-# much later with cryptic errors.
+# Reject partial / malformed networking inputs with a single yaml-anchored
+# error before the sub-vending module runs. Checks:
+#   - At least one `networking.envs.mgmt.regions.<region>` entry;
+#   - Each mgmt region has a non-null /20-or-larger address_space;
+#   - Each mgmt region names a `mgmt_environment_for_vnet_peering` that
+#     resolves to a hub in `networking.hubs.<env>.regions.<region>` for
+#     the same region;
+#   - Central PDZs (blob + vaultcore + azurecr) are populated.
+
+locals {
+  # Per-(env,region) entries from fleet-identity, filtered to env=mgmt.
+  mgmt_regions = {
+    for key, e in local.networking_derived.envs : key => e
+    if e.env == "mgmt"
+  }
+
+  # For each mgmt region, resolve the hub VNet id it peers into. Shape:
+  # "<peer_env>/<region>" keyed into `networking_central.hubs`.
+  mgmt_hub_ids = {
+    for key, e in local.mgmt_regions :
+    key => try(
+      local.networking_central.hubs["${e.mgmt_environment_for_vnet_peering}/${e.region}"],
+      null,
+    )
+  }
+}
 
 resource "terraform_data" "network_preconditions" {
   input = {
-    hub_resource_id = local.networking_central.hub_resource_id
-    pdz_blob        = local.networking_central.pdz_blob
-    pdz_vaultcore   = local.networking_central.pdz_vaultcore
-    pdz_azurecr     = local.networking_central.pdz_azurecr
-    mgmt_address_space = try(
-      local.networking_derived.mgmt.address_space,
-      null,
-    )
+    mgmt_region_count = length(local.mgmt_regions)
+    mgmt_regions      = local.mgmt_regions
+    mgmt_hub_ids      = local.mgmt_hub_ids
+    pdz_blob          = local.networking_central.pdz_blob
+    pdz_vaultcore     = local.networking_central.pdz_vaultcore
+    pdz_azurecr       = local.networking_central.pdz_azurecr
   }
 
   lifecycle {
     precondition {
-      condition     = local.networking_central.hub_resource_id != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", local.networking_central.hub_resource_id))
-      error_message = "clusters/_fleet.yaml: networking.hub.resource_id must be a full ARM resource id of shape `/subscriptions/<uuid>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<name>` (adopter-owned hub VNet). See docs/adoption.md §5.1 + docs/networking.md."
+      condition     = length(local.mgmt_regions) > 0
+      error_message = "clusters/_fleet.yaml: networking.envs.mgmt.regions must declare at least one region. See docs/adoption.md §5.1 + PLAN §3.4."
+    }
+    precondition {
+      condition = alltrue([
+        for key, e in local.mgmt_regions :
+        e.cidr != null && can(cidrnetmask(e.cidr)) && tonumber(split("/", e.cidr)[1]) <= 20
+      ])
+      error_message = "clusters/_fleet.yaml: every networking.envs.mgmt.regions.<region>.address_space must be a valid CIDR with prefix ≤ /20 (fleet-plane zone requires upper /21). See PLAN §3.4."
+    }
+    precondition {
+      condition = alltrue([
+        for key, e in local.mgmt_regions :
+        e.mgmt_environment_for_vnet_peering != null && trimspace(e.mgmt_environment_for_vnet_peering) != ""
+      ])
+      error_message = "clusters/_fleet.yaml: every networking.envs.mgmt.regions.<region> must declare `mgmt_environment_for_vnet_peering` naming the non-mgmt env whose hub this mgmt VNet peers into. See PLAN §3.1 + §3.4."
+    }
+    precondition {
+      condition = alltrue([
+        for key, hub in local.mgmt_hub_ids :
+        hub != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", hub))
+      ])
+      error_message = "clusters/_fleet.yaml: networking.hubs.<mgmt_environment_for_vnet_peering>.regions.<region>.resource_id must exist and be a full ARM VNet resource id for every mgmt region. See docs/adoption.md §5.1 + docs/networking.md."
     }
     precondition {
       condition     = local.networking_central.pdz_blob != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.blob\\.core\\.windows\\.net$", local.networking_central.pdz_blob))
-      error_message = "clusters/_fleet.yaml: networking.private_dns_zones.blob must be a full ARM resource id ending in `/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net`. Replace it with the resource id of the central BYO blob PDZ. See docs/adoption.md §5.1."
+      error_message = "clusters/_fleet.yaml: networking.private_dns_zones.blob must be a full ARM resource id ending in `/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net`. See docs/adoption.md §5.1."
     }
     precondition {
       condition     = local.networking_central.pdz_vaultcore != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.vaultcore\\.azure\\.net$", local.networking_central.pdz_vaultcore))
@@ -60,37 +102,31 @@ resource "terraform_data" "network_preconditions" {
       condition     = local.networking_central.pdz_azurecr != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.azurecr\\.io$", local.networking_central.pdz_azurecr))
       error_message = "clusters/_fleet.yaml: networking.private_dns_zones.azurecr must be a full ARM resource id ending in `/providers/Microsoft.Network/privateDnsZones/privatelink.azurecr.io`. See docs/adoption.md §5.1."
     }
-    precondition {
-      condition     = try(local.networking_derived.mgmt.address_space, null) != null
-      error_message = "clusters/_fleet.yaml: networking.vnets.mgmt.address_space is required for bootstrap/fleet. See docs/adoption.md §5.1 + PLAN §3.4."
-    }
   }
 }
 
-# --- Mgmt VNet via sub-vending (N=1, no mesh, hub peering) ------------------
+# --- Mgmt env-region VNets via sub-vending ---------------------------------
+#
+# One module invocation per mgmt region. Each invocation creates a
+# single VNet (N=1, no intra-call mesh). When there are multiple mgmt
+# regions we rely on operator convention to peer them out-of-band — the
+# fleet plane is intentionally single-region in the worked example, so
+# N>1 is unusual.
 
 locals {
-  mgmt_vnet_name = local.networking_derived.mgmt.vnet_name # vnet-<fleet>-mgmt
-  mgmt_rg_name   = local.networking_derived.mgmt.rg_name   # rg-net-mgmt
-  mgmt_rg_key    = "net-mgmt"                              # internal map key for sub-vending
-
-  mgmt_vnet_key = "mgmt" # internal map key for sub-vending
-
-  snet_pe_shared_name = "snet-pe-shared"
-  snet_runners_name   = "snet-runners"
-
-  nsg_pe_shared_key = "pe-shared"
-  nsg_runners_key   = "runners"
-
-  # Node-resource-id string of the mgmt VNet is
-  # "<rg-id>/providers/Microsoft.Network/virtualNetworks/<name>". The
-  # sub-vending module returns this via `virtual_network_resource_ids[<key>]`.
-  # Reference it through that output once it exists; see `local.mgmt_vnet_id`.
+  # Internal map keys for sub-vending. One VNet and one RG key per
+  # mgmt region; NSG keys are shared across regions since each module
+  # invocation is scoped to a single region.
+  mgmt_rg_key      = "net-mgmt"
+  mgmt_vnet_key    = "mgmt"
+  nsg_pe_fleet_key = "pe-fleet"
+  nsg_runners_key  = "runners"
 }
 
 module "mgmt_network" {
-  source  = "Azure/avm-ptn-alz-sub-vending/azure"
-  version = "~> 0.2"
+  source   = "Azure/avm-ptn-alz-sub-vending/azure"
+  version  = "~> 0.2"
+  for_each = local.mgmt_regions
 
   depends_on = [terraform_data.network_preconditions]
 
@@ -103,18 +139,20 @@ module "mgmt_network" {
   subscription_update_existing                      = false
   subscription_management_group_association_enabled = false
 
-  location = local.networking_derived.mgmt.location
+  location = each.value.location
 
   # --- Resource group ------------------------------------------------------
   resource_group_creation_enabled = true
   resource_groups = {
     (local.mgmt_rg_key) = {
-      name     = local.mgmt_rg_name
-      location = local.networking_derived.mgmt.location
+      name     = each.value.rg_name # rg-net-mgmt-<region>
+      location = each.value.location
       tags = {
         fleet     = local.fleet.name
         component = "networking"
         stage     = "bootstrap-fleet"
+        env       = "mgmt"
+        region    = each.value.region
       }
     }
   }
@@ -122,18 +160,17 @@ module "mgmt_network" {
   # --- NSGs ----------------------------------------------------------------
   network_security_group_enabled = true
   network_security_groups = {
-    (local.nsg_pe_shared_key) = {
-      name               = "nsg-pe-shared"
-      location           = local.networking_derived.mgmt.location
+    (local.nsg_pe_fleet_key) = {
+      name               = each.value.nsg_pe_fleet_name # nsg-pe-fleet-<region>
+      location           = each.value.location
       resource_group_key = local.mgmt_rg_key
       # Default-deny only — PE subnets need no explicit ingress; the PLS
-      # handles the traffic. Azure NSG has implicit Allow-Outbound and
-      # Deny-Inbound at priority 65500 which is what we want.
+      # handles the traffic.
       security_rules = {}
     }
     (local.nsg_runners_key) = {
-      name               = "nsg-runners"
-      location           = local.networking_derived.mgmt.location
+      name               = each.value.nsg_runners_name # nsg-runners-<region>
+      location           = each.value.location
       resource_group_key = local.mgmt_rg_key
       # Outbound-only: ACA jobs reach GitHub + Azure control plane via
       # hub firewall (UDR on the subnet). No ingress required.
@@ -141,26 +178,30 @@ module "mgmt_network" {
     }
   }
 
-  # --- Mgmt VNet + subnets -------------------------------------------------
+  # --- VNet + fleet-plane subnets ------------------------------------------
   virtual_network_enabled = true
   virtual_networks = {
     (local.mgmt_vnet_key) = {
-      name               = local.mgmt_vnet_name
+      name               = each.value.vnet_name # vnet-<fleet>-mgmt-<region>
       resource_group_key = local.mgmt_rg_key
-      location           = local.networking_derived.mgmt.location
-      address_space      = [local.networking_derived.mgmt.address_space]
+      location           = each.value.location
+      address_space      = each.value.address_space
 
+      # Fleet-plane subnets only. Cluster-workload subnets
+      # (snet-pe-env, api pool, nodes pool) are carved by
+      # bootstrap/environment as azapi children under the Network
+      # Contributor grant below.
       subnets = {
-        pe-shared = {
-          name             = local.snet_pe_shared_name
-          address_prefixes = [local.networking_derived.mgmt.snet_pe_shared_cidr]
+        pe-fleet = {
+          name             = "snet-pe-fleet"
+          address_prefixes = [each.value.snet_pe_fleet_cidr]
           network_security_group = {
-            key_reference = local.nsg_pe_shared_key
+            key_reference = local.nsg_pe_fleet_key
           }
         }
         runners = {
-          name             = local.snet_runners_name
-          address_prefixes = [local.networking_derived.mgmt.snet_runners_cidr]
+          name             = "snet-runners"
+          address_prefixes = [each.value.snet_runners_cidr]
           network_security_group = {
             key_reference = local.nsg_runners_key
           }
@@ -179,13 +220,10 @@ module "mgmt_network" {
         }
       }
 
-      # --- Hub peering (tohub + fromhub) ------------------------------------
+      # --- Hub peering (tohub + fromhub) -----------------------------------
       hub_peering_enabled     = true
-      hub_network_resource_id = local.networking_central.hub_resource_id
+      hub_network_resource_id = local.mgmt_hub_ids[each.key]
       hub_peering_direction   = "both"
-      # Classic hub-and-spoke defaults; hub is likely running Azure
-      # Firewall so we allow the mgmt VNet to use remote gateways and
-      # the hub to forward traffic (standard spoke pattern).
       hub_peering_options_tohub = {
         allow_forwarded_traffic      = true
         allow_gateway_transit        = false
@@ -199,48 +237,58 @@ module "mgmt_network" {
         use_remote_gateways          = false
       }
 
-      # Intra-mesh peering is N/A at N=1; leave disabled.
+      # Intra-mesh peering is N/A at N=1 per invocation; cross-region
+      # mgmt mesh (if ever needed) is adopter-owned out-of-band.
       mesh_peering_enabled = false
     }
   }
 }
 
-# --- Derived subnet resource ids -------------------------------------------
+# --- Per-region VNet + subnet resource ids ---------------------------------
 #
 # The sub-vending module does not expose subnet resource ids directly
 # (only `virtual_network_resource_ids[key]`). Subnet ids follow the
 # deterministic ARM path `<vnet-id>/subnets/<name>`, so we build them
-# from the VNet output. This keeps downstream PE / ACA wiring anchored
-# to a module output (ensuring the correct depends_on chain) while
-# avoiding a provider data lookup.
+# from the VNet output. Maps keyed by region (NOT by env/region pair)
+# since `env` is always "mgmt" on this stack.
 
 locals {
-  mgmt_vnet_id = module.mgmt_network.virtual_network_resource_ids[local.mgmt_vnet_key]
-
-  snet_pe_shared_id = "${local.mgmt_vnet_id}/subnets/${local.snet_pe_shared_name}"
-  snet_runners_id   = "${local.mgmt_vnet_id}/subnets/${local.snet_runners_name}"
+  mgmt_vnet_ids = {
+    for key, e in local.mgmt_regions :
+    e.region => module.mgmt_network[key].virtual_network_resource_ids[local.mgmt_vnet_key]
+  }
+  mgmt_snet_pe_fleet_ids = {
+    for region, vnet_id in local.mgmt_vnet_ids :
+    region => "${vnet_id}/subnets/snet-pe-fleet"
+  }
+  mgmt_snet_runners_ids = {
+    for region, vnet_id in local.mgmt_vnet_ids :
+    region => "${vnet_id}/subnets/snet-runners"
+  }
 }
 
-# --- RBAC: fleet-meta UAMI → Network Contributor on the mgmt VNet ----------
+# --- RBAC: fleet-meta UAMI → Network Contributor per mgmt VNet -------------
 #
-# Env-bootstrap authors the reverse half of every mgmt↔env peering via
-# the peering AVM submodule (create_reverse_peering = true). That PUT
-# lands on the mgmt VNet in this stage's subscription, so the executor
-# identity (`uami-fleet-meta`) needs Network Contributor on the mgmt
-# VNet resource id. Scope is the VNet, not the RG, so the grant is
-# minimal and survives renames of sibling mgmt resources.
+# `bootstrap/environment` carves cluster-workload subnets onto these
+# pre-existing mgmt VNets (PLAN §4 Stage -1 `bootstrap/environment` for
+# env=mgmt branch) and authors the mgmt→spoke half of every non-mgmt
+# env-region peering when `create_reverse_peering = true`. Both
+# operations PUT on the mgmt VNet in this stage's subscription, so the
+# `fleet-meta` UAMI needs Network Contributor at each mgmt VNet's
+# resource id.
 #
-# Built-in role GUID: Network Contributor
-#   4d97b98b-1d4f-4787-a291-c67834d212e7
+# Built-in role GUID: Network Contributor 4d97b98b-1d4f-4787-a291-c67834d212e7
 
 locals {
   role_network_contributor_guid = "4d97b98b-1d4f-4787-a291-c67834d212e7"
 }
 
 resource "azapi_resource" "ra_meta_mgmt_vnet_netctrb" {
+  for_each = local.mgmt_vnet_ids
+
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
-  name      = uuidv5("url", "fleet-meta-mgmt-vnet-netctrb-${local.mgmt_vnet_id}")
-  parent_id = local.mgmt_vnet_id
+  name      = uuidv5("url", "fleet-meta-mgmt-vnet-netctrb-${each.value}")
+  parent_id = each.value
 
   body = {
     properties = {

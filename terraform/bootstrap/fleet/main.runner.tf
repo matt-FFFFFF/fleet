@@ -34,6 +34,14 @@ locals {
   runner_postfix        = "fleet-runners"
   runner_pool_name      = "fleet-runners"
 
+  # The runner pool is co-located with the fleet shared RG
+  # (`acr_location`). Pick the matching mgmt region for subnet
+  # resolution; fall back to the first mgmt region. The precondition on
+  # the `module "runner"` call surfaces a mismatch early.
+  runner_mgmt_region = contains(keys(local.mgmt_vnet_ids), local.derived.acr_location) ? (
+    local.derived.acr_location
+  ) : keys(local.mgmt_vnet_ids)[0]
+
   # Versionless KV secret URI — points at the fleet KV created in
   # main.kv.tf. The Container App Job resolves the secret at runtime via
   # the attached UAMI; the PEM itself is seeded post-bootstrap by
@@ -123,15 +131,17 @@ module "runner" {
   #
   # All three subnet / zone references land in repo-owned infrastructure
   # authored by main.network.tf (PLAN §3.4):
-  #   - container_app_subnet_id                    → snet-runners in mgmt VNet
-  #   - container_registry_private_endpoint_subnet → snet-pe-shared in mgmt VNet
+  #   - container_app_subnet_id                    → snet-runners in the
+  #                                                   co-located mgmt VNet
+  #   - container_registry_private_endpoint_subnet → snet-pe-fleet in the
+  #                                                   co-located mgmt VNet
   #   - container_registry_dns_zone_id             → adopter-BYO
   #                                                   privatelink.azurecr.io
   #                                                   from networking.private_dns_zones.azurecr
   use_private_networking                               = true
   virtual_network_creation_enabled                     = false
-  container_app_subnet_id                              = local.snet_runners_id
-  container_registry_private_endpoint_subnet_id        = local.snet_pe_shared_id
+  container_app_subnet_id                              = local.mgmt_snet_runners_ids[local.runner_mgmt_region]
+  container_registry_private_endpoint_subnet_id        = local.mgmt_snet_pe_fleet_ids[local.runner_mgmt_region]
   container_registry_private_dns_zone_creation_enabled = false
   container_registry_dns_zone_id                       = local.networking_central.pdz_azurecr
 

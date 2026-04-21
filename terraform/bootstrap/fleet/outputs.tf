@@ -39,19 +39,19 @@ output "fleet_repo_full_name" {
   value = module.fleet_repo.full_name
 }
 
-output "mgmt_vnet_resource_id" {
-  description = "Resource id of the repo-owned mgmt-tier VNet (PLAN §3.4). Consumed by bootstrap/environment (reverse peering) and stages/1-cluster (cluster DNS zone VNet links) via the MGMT_VNET_RESOURCE_ID repo variable published on the fleet-meta environment."
-  value       = local.mgmt_vnet_id
+output "mgmt_vnet_resource_ids" {
+  description = "Per-region mgmt VNet resource ids, keyed by region (e.g. { eastus = \"/subscriptions/.../virtualNetworks/vnet-<fleet>-mgmt-eastus\" }). Consumed by bootstrap/environment (env=mgmt branch carves cluster-workload subnets as azapi children; non-mgmt-envs resolve reverse-peering target by `mgmt_environment_for_vnet_peering` + region) and stages/1-cluster (cluster DNS zone VNet link in the cluster's region). Published on the fleet-meta GH environment as MGMT_VNET_RESOURCE_IDS (jsonencoded)."
+  value       = local.mgmt_vnet_ids
 }
 
-output "mgmt_snet_pe_shared_id" {
-  description = "Resource id of the mgmt VNet's snet-pe-shared subnet (tfstate SA, fleet KV, and fleet ACR private endpoints land here)."
-  value       = local.snet_pe_shared_id
+output "mgmt_snet_pe_fleet_ids" {
+  description = "Per-region mgmt VNet snet-pe-fleet subnet resource ids (tfstate SA / fleet KV / fleet ACR PE landing subnets), keyed by region. Published as MGMT_PE_FLEET_SUBNET_IDS (jsonencoded)."
+  value       = local.mgmt_snet_pe_fleet_ids
 }
 
-output "mgmt_snet_runners_id" {
-  description = "Resource id of the mgmt VNet's snet-runners subnet (ACA-delegated self-hosted GitHub Actions runner pool)."
-  value       = local.snet_runners_id
+output "mgmt_snet_runners_ids" {
+  description = "Per-region mgmt VNet snet-runners subnet resource ids (ACA-delegated self-hosted GitHub Actions runner pool subnets), keyed by region. Published as MGMT_RUNNERS_SUBNET_IDS (jsonencoded)."
+  value       = local.mgmt_snet_runners_ids
 }
 
 output "team_template_repo_full_name" {

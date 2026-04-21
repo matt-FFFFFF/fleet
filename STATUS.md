@@ -118,51 +118,30 @@
 
 ### Stage -1 — `terraform/bootstrap/`
 
-- [!] `bootstrap/fleet/` — **rework required**. Current code targets
-      the pre-143d18b schema (single mgmt VNet, `snet-pe-shared`,
-      fleet-scope `MGMT_VNET_RESOURCE_ID`). Concrete drift:
-  - `main.network.tf` L70-206: single `module "mgmt_network"`
-    invocation with `mgmt_vnet_key = "mgmt"` (L77) creates ONE VNet
-    with a single address_space (L147-205). Must become one VNet per
-    `networking.envs.mgmt.regions.<region>` (iterable).
-  - `main.network.tf` L79 `snet_pe_shared_name = "snet-pe-shared"` →
-    rename to `snet-pe-fleet`. Propagate rename through L82, L126,
-    L154-155, L218-221 (IDs/outputs), and `outputs.tf` L47-50.
-  - `main.network.tf` L153-180 subnet map only declares
-    `pe-shared` + `runners`; CIDRs are at the LOW end (first two
-    /26s). PLAN requires them at the HIGH end (fleet-plane zone =
-    second /21 of the /20). Relocate.
-  - `main.network.tf` L126 `nsg-pe-shared`, L135 `nsg-runners` →
-    must carry `<region>` suffix per PLAN §4 L1136/L1139.
-  - `main.network.tf` L36 hub lookup reads
-    `local.networking_central.hub_resource_id` (scalar) → consume
-    per-env-region hub map.
-  - `main.network.tf` L40-43 uses single `mgmt_address_space` → must
-    iterate per-region.
-  - `main.network.tf` L240-252 authors a single Network Contributor
-    role assignment for `fleet-meta` on the one mgmt VNet → must be
-    `for_each` over mgmt env-regions.
-  - `main.github.tf` L246-252 publishes fleet-scope
-    `MGMT_VNET_RESOURCE_ID = local.mgmt_vnet_id` → REMOVE. Replace
-    with per-region `MGMT_<REGION>_VNET_RESOURCE_ID` map and add
-    `MGMT_<REGION>_PE_FLEET_SUBNET_ID` +
-    `MGMT_<REGION>_RUNNERS_SUBNET_ID` publishes (currently absent).
-  - `outputs.tf` L42-55 exposes scalar `mgmt_vnet_resource_id`,
-    `mgmt_snet_pe_shared_id`, `mgmt_snet_runners_id` → convert all
-    three to per-region maps and rename `snet_pe_shared` →
-    `snet_pe_fleet`.
-  - `main.state.tf` L114, `main.kv.tf` L78, `main.runner.tf` L133-134
-    all consume the scalar `snet_pe_shared_id` / `snet_runners_id`
-    → must pick the correct mgmt region for each resource (state SA
-    region, fleet KV region, runner pool region).
-  - Stale comments in `main.tf` L7-31, `main.state.tf` L98-99,
-    `main.kv.tf` L64-65, `main.runner.tf` L126-127 reference
-    "snet-pe-shared" / "mgmt VNet" singular / `MGMT_VNET_RESOURCE_ID`
-    → update.
-  - **Scope expansion**: `bootstrap/fleet` must NO LONGER author
-    cluster-workload subnets on the mgmt VNet. It authors the VNet
-    shell + fleet-plane subnets only; cluster-workload subnets
-    become `bootstrap/environment`'s responsibility (see below).
+- [~] `bootstrap/fleet/` — **rework done** (unit 4): aligned with
+      PLAN §3.4 uniform env-region model. `main.network.tf` rewritten
+      to `for_each` over `networking.envs.mgmt.regions.<region>` with
+      one sub-vending invocation per mgmt region creating
+      `vnet-<fleet>-mgmt-<region>` in `rg-net-mgmt-<region>`, fleet-plane
+      subnets `snet-pe-fleet` (`/26`) + `snet-runners` (`/23`) at the
+      HIGH end of each /20, NSGs `nsg-pe-fleet-<region>` +
+      `nsg-runners-<region>`, hub peering against
+      `networking.hubs.<mgmt_environment_for_vnet_peering>.regions.<region>.resource_id`.
+      Network Contributor grant to `fleet-meta` fanned out per mgmt
+      VNet. `main.state.tf` / `main.kv.tf` / `main.runner.tf` each
+      select the co-located mgmt region (matching `acr_location` /
+      `fleet_kv_location`) with same-region-else-first fallback +
+      precondition for the strict case. `outputs.tf` exposes
+      per-region maps `mgmt_vnet_resource_ids` /
+      `mgmt_snet_pe_fleet_ids` / `mgmt_snet_runners_ids`.
+      `main.github.tf` publishes them as JSON-encoded map vars
+      `MGMT_VNET_RESOURCE_IDS` / `MGMT_PE_FLEET_SUBNET_IDS` /
+      `MGMT_RUNNERS_SUBNET_IDS` on the `fleet-meta` environment
+      (replacing the fleet-scope scalar `MGMT_VNET_RESOURCE_ID`).
+      Cluster-workload subnet authoring moved out of this stage; now
+      `bootstrap/environment`'s responsibility (unit 5). PLAN §3.4
+      updated in lockstep to document the JSON-map variable shape.
+      Validates cleanly against rendered `_fleet.yaml`.
   - [ ] GH Apps (`fleet-meta`, `stage0-publisher`, `fleet-runners`) —
         documented as TODO in `main.github.tf`; manifest-flow helper
         not written. Not affected by drift.
@@ -356,8 +335,8 @@
   - [x] Repo scaffold per §2.
   - [!] `_fleet.yaml` (generated) + `_defaults.yaml` — rendering
         driven by `init/` which drifts from PLAN; see §3.1 above.
-  - [!] `bootstrap/fleet` code; not applied; **rework required** per
-        §4 Stage -1 above.
+  - [~] `bootstrap/fleet` code; not applied; PLAN-compliant after
+        unit 4 (mgmt VNet shells + fleet-plane subnets per-region).
   - [!] `bootstrap/environment` code; not applied; **rework required**
         per §4 Stage -1 above.
   - [!] `stages/0-fleet` body; not applied; **rework required** on
@@ -480,14 +459,22 @@ self-contained enough to land in its own PR.
    /26) with `/20`-minimum guard. Manual smoke test vs example
    clusters (`aks-mgmt-01`, `aks-nonprod-01`) passes; no shell-level
    test harness landed (deferred).
-4. **`bootstrap/fleet` network** — per-region mgmt VNet shells,
-   fleet-plane subnets at HIGH end, rename `snet-pe-shared` →
-   `snet-pe-fleet`, per-region NSGs, per-region Network Contributor
-   grants, drop fleet-scope `MGMT_VNET_RESOURCE_ID`, publish
-   `MGMT_<REGION>_{VNET_RESOURCE_ID,PE_FLEET_SUBNET_ID,RUNNERS_SUBNET_ID}`.
-   Update `outputs.tf` to per-region maps. Update `main.state.tf`,
-   `main.kv.tf`, `main.runner.tf` to pick the correct mgmt region
-   per resource.
+4. **`bootstrap/fleet` network** — ✅ **Done.** Per-region mgmt VNet
+   shells via `for_each` over `networking.envs.mgmt.regions.<region>`,
+   fleet-plane subnets at the HIGH end of each /20,
+   `snet-pe-shared` → `snet-pe-fleet` renamed throughout, per-region
+   NSGs (`nsg-pe-fleet-<region>` / `nsg-runners-<region>`), per-region
+   Network Contributor grants for `fleet-meta` on each mgmt VNet.
+   Dropped fleet-scope `MGMT_VNET_RESOURCE_ID`; replaced with
+   JSON-encoded map vars `MGMT_VNET_RESOURCE_IDS` /
+   `MGMT_PE_FLEET_SUBNET_IDS` / `MGMT_RUNNERS_SUBNET_IDS` on the
+   `fleet-meta` environment (keyed by region). `outputs.tf` converted
+   to per-region maps. `main.state.tf` / `main.kv.tf` /
+   `main.runner.tf` each resolve the co-located mgmt region
+   (same-region-else-first) with preconditions. PLAN §3.4 updated to
+   document the JSON-map variable shape. `terraform validate` +
+   `terraform fmt -check` + all 45 unit tests (8 fleet-identity,
+   37 init) pass.
 5. **`bootstrap/environment` network** — add env=mgmt branch that
    references pre-existing mgmt VNet via per-region input and
    carves subnets as `azapi_resource` children; add api pool +

@@ -243,13 +243,24 @@ locals {
     TFSTATE_STORAGE_ACCOUNT = local.derived.state_storage_account
     TFSTATE_RESOURCE_GROUP  = local.derived.state_resource_group
     FLEET_NAME              = local.fleet.name
-    # PLAN §3.4: mgmt VNet resource id is consumed by
-    # `bootstrap/environment` (reverse half of every mgmt↔env peering
-    # is authored there via the peering AVM submodule with
-    # create_reverse_peering=true) and by stages/1-cluster (cluster
-    # DNS zone VNet links [env_vnet, mgmt_vnet]). Published here so
-    # downstream workflows read it as `${{ vars.MGMT_VNET_RESOURCE_ID }}`.
-    MGMT_VNET_RESOURCE_ID = local.mgmt_vnet_id
+    # PLAN §3.4: per-region mgmt networking ids published as JSON-encoded
+    # `{ region => resource_id }` maps. Downstream workflows parse with
+    # `fromJSON(vars.MGMT_*)` and index by the cluster's region (or, for
+    # non-mgmt envs, by the mgmt region resolved from the cluster's
+    # region via same-region-else-first rule — see
+    # modules/fleet-identity/main.tf `mgmt_regions` / config-loader/load.sh).
+    #
+    #   MGMT_VNET_RESOURCE_IDS   → bootstrap/environment (env=mgmt branch +
+    #                              cross-env reverse-peering target);
+    #                              stages/1-cluster (DNS zone VNet link in
+    #                              the cluster's region)
+    #   MGMT_PE_FLEET_SUBNET_IDS → observability / diagnostics (subnet is
+    #                              consumed internally by bootstrap/fleet)
+    #   MGMT_RUNNERS_SUBNET_IDS  → diagnostics (subnet is consumed
+    #                              internally by bootstrap/fleet)
+    MGMT_VNET_RESOURCE_IDS   = jsonencode(local.mgmt_vnet_ids)
+    MGMT_PE_FLEET_SUBNET_IDS = jsonencode(local.mgmt_snet_pe_fleet_ids)
+    MGMT_RUNNERS_SUBNET_IDS  = jsonencode(local.mgmt_snet_runners_ids)
   }
 }
 

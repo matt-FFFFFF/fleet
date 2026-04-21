@@ -95,12 +95,25 @@ resource "azapi_resource" "state_container_fleet" {
 
 # -----------------------------------------------------------------------------
 # Private endpoint for the blob sub-resource of the tfstate storage account.
-# The PE lands in the mgmt VNet's `snet-pe-shared` subnet (repo-owned,
-# created by main.network.tf via the sub-vending module; PLAN §3.4).
+# The PE lands in the `snet-pe-fleet` subnet of the mgmt VNet in the
+# `state_mgmt_region` (the mgmt region co-located with the state SA via
+# `local.derived.acr_location`). If no mgmt region matches the state
+# SA's location, we fall back to the first mgmt region — the precondition
+# below surfaces a clear error before any PE is created.
 # The A-record registers in the adopter-owned central
 # `privatelink.blob.core.windows.net` zone from
 # `networking.private_dns_zones.blob`.
 # -----------------------------------------------------------------------------
+
+locals {
+  # State SA is co-located with the fleet shared RG (acr_location).
+  # Pick the mgmt region whose location matches; fall back to the first
+  # mgmt region otherwise (the precondition on state_pe surfaces the
+  # mismatch early).
+  state_mgmt_region = contains(keys(local.mgmt_vnet_ids), local.derived.acr_location) ? (
+    local.derived.acr_location
+  ) : keys(local.mgmt_vnet_ids)[0]
+}
 
 resource "azapi_resource" "state_pe" {
   type      = "Microsoft.Network/privateEndpoints@2023-11-01"
@@ -111,7 +124,7 @@ resource "azapi_resource" "state_pe" {
   body = {
     properties = {
       subnet = {
-        id = local.snet_pe_shared_id
+        id = local.mgmt_snet_pe_fleet_ids[local.state_mgmt_region]
       }
       privateLinkServiceConnections = [
         {
@@ -122,6 +135,13 @@ resource "azapi_resource" "state_pe" {
           }
         }
       ]
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = contains(keys(local.mgmt_vnet_ids), local.derived.acr_location)
+      error_message = "clusters/_fleet.yaml: no networking.envs.mgmt.regions.<region> entry matches the fleet shared location (`acr.location` = ${local.derived.acr_location}); the tfstate SA PE cannot land in a co-located mgmt VNet. Add a mgmt region in that location, or change `acr.location`."
     }
   }
 

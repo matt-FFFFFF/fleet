@@ -849,21 +849,28 @@ Design notes:
 
 **Repo variables published (extends §4 Stage 0 / §4 `bootstrap/environment`).**
 
-| Variable                                       | Published by              | Consumed by                                                                                                          |
-| ---------------------------------------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `<ENV>_<REGION>_VNET_RESOURCE_ID`              | `bootstrap/environment`   | Stage 1 (subnet parent, DNS zone link); env observability wiring; cross-env spoke reverse-peering target for mgmt VNets |
-| `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`          | `bootstrap/environment`   | Stage 1 (AKS node-pool ASG attachment, or NSG rule author)                                                           |
-| `MGMT_<REGION>_PE_FLEET_SUBNET_ID`             | `bootstrap/fleet`         | (consumed inside `bootstrap/fleet` for tfstate SA / fleet KV / fleet ACR PEs; published for observability/diagnostics) |
-| `MGMT_<REGION>_RUNNERS_SUBNET_ID`              | `bootstrap/fleet`         | (consumed inside `bootstrap/fleet` for the ACA runner-pool Container App Environment; published for diagnostics)       |
+| Variable                              | Shape                                        | Published by            | Consumed by                                                                                                          |
+| ------------------------------------- | -------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `<ENV>_<REGION>_VNET_RESOURCE_ID`     | scalar ARM id                                | `bootstrap/environment` | Stage 1 (subnet parent, DNS zone link); env observability wiring; cross-env spoke reverse-peering target for mgmt VNets |
+| `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID` | scalar ARM id                                | `bootstrap/environment` | Stage 1 (AKS node-pool ASG attachment, or NSG rule author)                                                           |
+| `MGMT_VNET_RESOURCE_IDS`              | `jsonencode({ <region> = <vnet-resource-id> })` | `bootstrap/fleet`       | `bootstrap/environment` (env=mgmt branch carves cluster-workload subnets as azapi children of these VNets; non-mgmt envs resolve reverse-peering target by `mgmt_environment_for_vnet_peering` + region); Stage 1 (mgmt DNS zone VNet link in the cluster's region) |
+| `MGMT_PE_FLEET_SUBNET_IDS`            | `jsonencode({ <region> = <subnet-resource-id> })` | `bootstrap/fleet`    | (consumed inside `bootstrap/fleet` for tfstate SA / fleet KV / fleet ACR PEs; published for observability/diagnostics) |
+| `MGMT_RUNNERS_SUBNET_IDS`             | `jsonencode({ <region> = <subnet-resource-id> })` | `bootstrap/fleet`    | (consumed inside `bootstrap/fleet` for the ACA runner-pool Container App Environment; published for diagnostics)       |
 
-The variable set is uniform across envs — there is no separate
-`MGMT_VNET_RESOURCE_ID` tier. Stage 1 resolves a cluster's parent
-VNet and node ASG directly from
-`<cluster.env>_<cluster.region>_{VNET_RESOURCE_ID,NODE_ASG_RESOURCE_ID}`.
-Mgmt clusters use the same lookup; the mgmt env-region VNet is
-ordinary env-region state. The `MGMT_<REGION>_*` fleet-plane
-variables exist only for the two subnets `bootstrap/fleet` itself
-owns on the mgmt VNet.
+Non-mgmt env-region variables are scalar because each
+`<env>-bootstrap` workflow run targets a single env, and GitHub
+Actions variable names are the natural fan-out axis. Mgmt fleet-plane
+variables are published as JSON-encoded `{region: id}` maps because
+(a) `bootstrap/fleet` knows every mgmt region at apply time, so a
+single publish is atomic, (b) downstream workflows index by region
+via `fromJSON(vars.MGMT_*)[cluster.region]`, and (c) the map shape
+keeps the variable surface constant regardless of mgmt-region count.
+Stage 1 resolves a cluster's parent VNet and node ASG from
+`<cluster.env>_<cluster.region>_{VNET_RESOURCE_ID,NODE_ASG_RESOURCE_ID}`
+(scalar); mgmt clusters use the same lookup, and the mgmt env-region
+VNet is ordinary env-region state. The `MGMT_*` fleet-plane map
+variables exist only for the fleet-plane subnets `bootstrap/fleet`
+itself owns on the mgmt VNets.
 
 **Pod CIDR (shared, fleet-wide).**
 
