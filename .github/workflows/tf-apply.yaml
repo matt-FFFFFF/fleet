@@ -1,0 +1,318 @@
+name: tf-apply
+
+# Post-merge Terraform apply pipeline. PLAN §10:
+#
+#   - `push` to main; self-hosted runners (private tfstate + KV).
+#   - Change detection identical to `tf-plan.yaml` — same script, same
+#     rules. Re-plans fresh on the merge commit rather than replaying
+#     the PR's plan artefact (safer: base has advanced).
+#   - Stage 0 leg runs first and serially. On success, a
+#     `stage0-publisher` GitHub-App step pushes Stage 0 outputs to
+#     fleet-scope repo variables (`ACR_LOGIN_SERVER`, `ACR_RESOURCE_ID`,
+#     `FLEET_KEYVAULT_ID`, `FLEET_KEYVAULT_NAME`,
+#     `ARGOCD_AAD_APPLICATION_ID`, `KARGO_AAD_APPLICATION_ID`). Per-env
+#     observability outputs are published by `env-bootstrap.yaml` into
+#     each env's GH environment, not here.
+#   - Per-cluster leg runs after Stage 0 (if Stage 0 fired). Each job is
+#     a SINGLE matrix leg that runs Stage 1 apply → pipes Stage 1
+#     outputs into `stage2.auto.tfvars.json` → mints an AAD access token
+#     into `TF_VAR_aks_access_token` → Stage 2 apply. Sequential within
+#     the job; `prod/*` serialised at matrix level (`max-parallel: 1`).
+#
+# Stage 2 is scaffolded below as a commented-out block; enable in
+# lockstep with the `terraform/stages/2-bootstrap/` module landing.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'clusters/**'
+      - 'terraform/stages/**'
+      - 'terraform/modules/**'
+      - '.github/workflows/tf-apply.yaml'
+      - '.github/scripts/detect-affected-clusters.sh'
+
+concurrency:
+  group: tf-apply-main
+  cancel-in-progress: false   # serialise applies; never cancel mid-apply
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  detect:
+    name: detect affected
+    runs-on: ubuntu-24.04
+    outputs:
+      stage0:   ${{ steps.detect.outputs.stage0 }}
+      clusters: ${{ steps.detect.outputs.clusters }}
+      any:      ${{ steps.detect.outputs.any }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Detect
+        id: detect
+        run: |
+          # Diff against the commit that was at HEAD~1 prior to the merge
+          # — every PR merged to main is a merge commit with one
+          # first-parent and one second-parent; `HEAD~1` is the previous
+          # main tip, which is what we want to compare against.
+          result="$(BASE_REF=HEAD~1 HEAD_REF=HEAD .github/scripts/detect-affected-clusters.sh)"
+          echo "$result" | jq .
+          stage0="$(echo "$result" | jq -r .stage0)"
+          clusters="$(echo "$result" | jq -c .clusters)"
+          any="$([[ "$stage0" == "true" ]] && echo true || echo "$(echo "$clusters" | jq 'length > 0')")"
+          echo "stage0=$stage0" >> "$GITHUB_OUTPUT"
+          echo "clusters=$clusters" >> "$GITHUB_OUTPUT"
+          echo "any=$any" >> "$GITHUB_OUTPUT"
+
+  # -------------------------------------------------------------------------
+  # Stage 0 apply.
+  # -------------------------------------------------------------------------
+  stage0:
+    name: stage0 apply
+    needs: detect
+    if: needs.detect.outputs.stage0 == 'true'
+    runs-on: [self-hosted]
+    environment: fleet-stage0
+    outputs:
+      acr_login_server:              ${{ steps.outputs.outputs.acr_login_server }}
+      acr_resource_id:               ${{ steps.outputs.outputs.acr_resource_id }}
+      fleet_keyvault_id:             ${{ steps.outputs.outputs.fleet_keyvault_id }}
+      fleet_keyvault_name:           ${{ steps.outputs.outputs.fleet_keyvault_name }}
+      argocd_aad_application_id:     ${{ steps.outputs.outputs.argocd_aad_application_id }}
+      kargo_aad_application_id:      ${{ steps.outputs.outputs.kargo_aad_application_id }}
+      kargo_mgmt_uami_principal_id:  ${{ steps.outputs.outputs.kargo_mgmt_uami_principal_id }}
+      kargo_aad_application_object_id: ${{ steps.outputs.outputs.kargo_aad_application_object_id }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read Terraform version
+        id: tf_version
+        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ steps.tf_version.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id:       ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: terraform init + apply
+        working-directory: terraform/stages/0-fleet
+        env:
+          ARM_USE_OIDC: "true"
+        run: |
+          terraform init \
+            -backend-config="use_oidc=true" \
+            -backend-config="use_azuread_auth=true"
+          terraform apply -auto-approve
+
+      - name: Capture outputs
+        id: outputs
+        working-directory: terraform/stages/0-fleet
+        run: |
+          j="$(terraform output -json)"
+          for k in \
+            acr_login_server acr_resource_id fleet_keyvault_id fleet_keyvault_name \
+            argocd_aad_application_id argocd_aad_application_object_id \
+            kargo_aad_application_id kargo_aad_application_object_id \
+            kargo_mgmt_uami_principal_id kargo_mgmt_uami_resource_id kargo_mgmt_uami_client_id
+          do
+            v="$(echo "$j" | jq -r --arg k "$k" '.[$k].value // empty')"
+            echo "${k}=${v}" >> "$GITHUB_OUTPUT"
+          done
+
+  # -------------------------------------------------------------------------
+  # Publish Stage 0 outputs to fleet-scope repo variables via the
+  # `stage0-publisher` GitHub App. Runs only if Stage 0 applied.
+  #
+  # The App PEM + credentials live in the fleet KV; this step reads them
+  # via the already-authenticated Azure OIDC session on the self-hosted
+  # runner (the `fleet-stage0` UAMI has `Key Vault Secrets User` on
+  # fleet KV by bootstrap/fleet).
+  #
+  # SCAFFOLD: the `stage0-publisher` App is created by the (deferred)
+  # `init-gh-apps.sh` helper (PLAN §16.4). Until that lands, this step
+  # is a TODO; flip `if: false` → `if: needs.stage0.result == 'success'`
+  # when the App exists and `FLEET_KV_NAME` + `STAGE0_PUBLISHER_APP_ID`
+  # are wired into the fleet-stage0 GH environment.
+  # -------------------------------------------------------------------------
+  publish-stage0:
+    name: publish stage0 outputs → repo vars
+    needs: stage0
+    if: false   # TODO: enable once init-gh-apps.sh + stage0-publisher exists
+    runs-on: [self-hosted]
+    environment: fleet-stage0
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id:       ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Fetch stage0-publisher App PEM from fleet KV
+        id: pem
+        run: |
+          pem="$(az keyvault secret show \
+            --vault-name "${{ vars.FLEET_KV_NAME }}" \
+            --name stage0-publisher-app-pem \
+            --query value -o tsv)"
+          echo "::add-mask::$pem"
+          echo "$pem" > "$RUNNER_TEMP/app.pem"
+
+      - name: Mint installation token
+        id: token
+        env:
+          APP_ID: ${{ vars.STAGE0_PUBLISHER_APP_ID }}
+          PEM_PATH: ${{ runner.temp }}/app.pem
+        run: |
+          # .github/scripts/mint-gh-installation-token.sh is a follow-up
+          # (PLAN §16.4). Produces `$GITHUB_OUTPUT` token with contents:
+          #   token=<gh installation token>
+          .github/scripts/mint-gh-installation-token.sh
+
+      - name: Upsert repo variables
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          OWNER: ${{ github.repository_owner }}
+          REPO:  ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          upsert() {
+            local name="$1" value="$2"
+            if [[ -z "$value" ]]; then
+              echo "skip $name (empty)"; return 0
+            fi
+            if gh api "repos/$OWNER/$REPO/actions/variables/$name" >/dev/null 2>&1; then
+              gh api -X PATCH "repos/$OWNER/$REPO/actions/variables/$name" -f name="$name" -f value="$value"
+            else
+              gh api -X POST "repos/$OWNER/$REPO/actions/variables" -f name="$name" -f value="$value"
+            fi
+          }
+          upsert ACR_LOGIN_SERVER                 "${{ needs.stage0.outputs.acr_login_server }}"
+          upsert ACR_RESOURCE_ID                  "${{ needs.stage0.outputs.acr_resource_id }}"
+          upsert FLEET_KEYVAULT_ID                "${{ needs.stage0.outputs.fleet_keyvault_id }}"
+          upsert FLEET_KEYVAULT_NAME              "${{ needs.stage0.outputs.fleet_keyvault_name }}"
+          upsert ARGOCD_AAD_APPLICATION_ID        "${{ needs.stage0.outputs.argocd_aad_application_id }}"
+          upsert KARGO_AAD_APPLICATION_ID         "${{ needs.stage0.outputs.kargo_aad_application_id }}"
+          upsert KARGO_MGMT_UAMI_PRINCIPAL_ID     "${{ needs.stage0.outputs.kargo_mgmt_uami_principal_id }}"
+          upsert KARGO_AAD_APPLICATION_OBJECT_ID  "${{ needs.stage0.outputs.kargo_aad_application_object_id }}"
+
+  # -------------------------------------------------------------------------
+  # Per-cluster apply. Single job per cluster runs Stage 1 → Stage 2.
+  # -------------------------------------------------------------------------
+  cluster:
+    name: apply ${{ matrix.cluster.env }}/${{ matrix.cluster.region }}/${{ matrix.cluster.name }}
+    needs: [detect, stage0]
+    # Run after Stage 0 (skipped-state counts as success thanks to `always()`).
+    if: |
+      always() &&
+      (needs.stage0.result == 'success' || needs.stage0.result == 'skipped') &&
+      fromJSON(needs.detect.outputs.clusters)[0] != null
+    runs-on: [self-hosted]
+    environment: fleet-${{ matrix.cluster.env }}
+    strategy:
+      fail-fast: false
+      # prod applies serialised to cap blast-radius (PLAN §12 risk row
+      # "Bumping kubernetes.version across many prod clusters").
+      max-parallel: ${{ matrix.cluster.env == 'prod' && 1 || 8 }}
+      matrix:
+        cluster: ${{ fromJSON(needs.detect.outputs.clusters) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read Terraform version
+        id: tf_version
+        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ steps.tf_version.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id:       ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Render tfvars
+        id: tfvars
+        env:
+          CLUSTER_PATH: ${{ matrix.cluster.path }}
+        run: |
+          terraform/config-loader/load.sh "$CLUSTER_PATH" \
+            > "$RUNNER_TEMP/stage1.tfvars.json"
+          echo "file=$RUNNER_TEMP/stage1.tfvars.json" >> "$GITHUB_OUTPUT"
+
+      - name: Stage 1 — init + apply
+        working-directory: terraform/stages/1-cluster
+        env:
+          ARM_USE_OIDC: "true"
+          TFVARS: ${{ steps.tfvars.outputs.file }}
+          REGION: ${{ matrix.cluster.region }}
+          NAME:   ${{ matrix.cluster.name }}
+          TF_VAR_fleet_keyvault_id:                 ${{ vars.FLEET_KEYVAULT_ID }}
+          TF_VAR_acr_resource_id:                   ${{ vars.ACR_RESOURCE_ID }}
+          TF_VAR_kargo_mgmt_uami_principal_id:      ${{ vars.KARGO_MGMT_UAMI_PRINCIPAL_ID }}
+          TF_VAR_kargo_aad_application_object_id:   ${{ vars.KARGO_AAD_APPLICATION_OBJECT_ID }}
+          TF_VAR_fleet_env_uami_principal_id:       ${{ vars.FLEET_ENV_UAMI_PRINCIPAL_ID }}
+          TF_VAR_env_monitor_workspace_id:          ${{ vars.MONITOR_WORKSPACE_ID }}
+          TF_VAR_env_dce_id:                        ${{ vars.DCE_ID }}
+          TF_VAR_env_action_group_id:               ${{ vars.ACTION_GROUP_ID }}
+          TF_VAR_env_region_vnet_resource_id:       ${{ vars[format('{0}_{1}_VNET_RESOURCE_ID', matrix.cluster.env, matrix.cluster.region)] }}
+          TF_VAR_node_asg_resource_id:              ${{ vars[format('{0}_{1}_NODE_ASG_RESOURCE_ID', matrix.cluster.env, matrix.cluster.region)] }}
+          TF_VAR_route_table_resource_id:           ${{ vars[format('{0}_{1}_ROUTE_TABLE_RESOURCE_ID', matrix.cluster.env, matrix.cluster.region)] }}
+          TF_VAR_mgmt_vnet_resource_ids_json:       ${{ vars.MGMT_VNET_RESOURCE_IDS }}
+        run: |
+          terraform init \
+            -backend-config="use_oidc=true" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="key=${REGION}/${NAME}/stage1.tfstate"
+          terraform apply -auto-approve -var-file="$TFVARS"
+
+      # TODO(stage2): uncomment when `terraform/stages/2-bootstrap/` lands.
+      #
+      # - name: Stage 1 outputs → Stage 2 tfvars
+      #   working-directory: terraform/stages/1-cluster
+      #   run: |
+      #     terraform output -json \
+      #       | jq 'with_entries(.value |= .value)' \
+      #       > "$RUNNER_TEMP/stage2.auto.tfvars.json"
+      #     cp "$RUNNER_TEMP/stage2.auto.tfvars.json" \
+      #       ../../../terraform/stages/2-bootstrap/
+      #
+      # - name: Mint AAD access token → TF_VAR_aks_access_token
+      #   env:
+      #     # `.github/scripts/mint-aks-token.sh` performs the curl/jq
+      #     # recipe in PLAN §4 Stage 2. Emits `TF_VAR_aks_access_token`
+      #     # into `$GITHUB_ENV` and `::add-mask::`s it.
+      #   run: .github/scripts/mint-aks-token.sh
+      #
+      # - name: Stage 2 — init + apply
+      #   working-directory: terraform/stages/2-bootstrap
+      #   env:
+      #     ARM_USE_OIDC: "true"
+      #     REGION: ${{ matrix.cluster.region }}
+      #     NAME:   ${{ matrix.cluster.name }}
+      #   run: |
+      #     terraform init \
+      #       -backend-config="use_oidc=true" \
+      #       -backend-config="use_azuread_auth=true" \
+      #       -backend-config="key=${REGION}/${NAME}/stage2.tfstate"
+      #     terraform apply -auto-approve

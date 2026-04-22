@@ -1,0 +1,324 @@
+name: tf-plan
+
+# PR-side Terraform plan pipeline. PLAN §10 specifies:
+#
+#   - PR trigger; self-hosted runners (fleet KV + tfstate SA are
+#     private-only, GitHub-hosted runners cannot reach them).
+#   - Change detection via `.github/scripts/detect-affected-clusters.sh`
+#     emits `{stage0: bool, clusters: [...]}`.
+#   - Stage 0 leg (if `terraform/stages/0-fleet/**` changed): single job
+#     under `environment: fleet-stage0`, OIDC-authed as `uami-fleet-stage0`.
+#   - Per-cluster leg: matrix per affected cluster; `environment:
+#     fleet-<env>` (derived from the cluster path), OIDC-authed as
+#     `uami-fleet-<env>`. Currently runs Stage 1 plan only — Stage 2 is
+#     scaffolded below as a commented-out block; enable when
+#     `terraform/stages/2-bootstrap/` lands.
+#   - Plan artefacts fed into `tf-summarize` for a single consolidated
+#     sticky PR comment.
+#
+# Fleet-scope repo variables read by this workflow's terraform legs come
+# from `bootstrap/fleet` (via `fleet-stage0` env) and `stages/0-fleet`
+# (via `stage0-publisher` App → repo-scope vars). Per-env repo variables
+# (`<ENV>_<REGION>_VNET_RESOURCE_ID`, `FLEET_ENV_UAMI_PRINCIPAL_ID`,
+# etc.) come from `bootstrap/environment` (via `fleet-<env>` env).
+
+on:
+  pull_request:
+    paths:
+      - 'clusters/**'
+      - 'terraform/stages/**'
+      - 'terraform/modules/**'
+      - '.github/workflows/tf-plan.yaml'
+      - '.github/workflows/tf-apply.yaml'
+      - '.github/scripts/detect-affected-clusters.sh'
+
+# Only one concurrent plan per PR — later commits cancel earlier runs.
+concurrency:
+  group: tf-plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write      # required for Azure OIDC federation
+  pull-requests: write # for sticky plan comment
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 1. Discover affected clusters + stage0 flag. Emits `matrix` outputs
+  #    consumed by the per-cluster and stage0 jobs below.
+  # -------------------------------------------------------------------------
+  detect:
+    name: detect affected
+    runs-on: ubuntu-24.04
+    outputs:
+      stage0:   ${{ steps.detect.outputs.stage0 }}
+      clusters: ${{ steps.detect.outputs.clusters }}
+      any:      ${{ steps.detect.outputs.any }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Detect
+        id: detect
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          result="$(BASE_REF=origin/${{ github.base_ref }} HEAD_REF=${{ github.event.pull_request.head.sha }} .github/scripts/detect-affected-clusters.sh)"
+          echo "$result" | jq .
+          stage0="$(echo "$result" | jq -r .stage0)"
+          clusters="$(echo "$result" | jq -c .clusters)"
+          any="$([[ "$stage0" == "true" ]] && echo true || echo "$(echo "$clusters" | jq 'length > 0')")"
+          echo "stage0=$stage0" >> "$GITHUB_OUTPUT"
+          echo "clusters=$clusters" >> "$GITHUB_OUTPUT"
+          echo "any=$any" >> "$GITHUB_OUTPUT"
+
+  # -------------------------------------------------------------------------
+  # 2. Stage 0 plan — fires only when `terraform/stages/0-fleet/**` (or
+  #    anything flagged as "everything") is in the change set.
+  # -------------------------------------------------------------------------
+  stage0:
+    name: stage0 plan
+    needs: detect
+    if: needs.detect.outputs.stage0 == 'true'
+    runs-on: [self-hosted]
+    environment: fleet-stage0
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read Terraform version
+        id: tf_version
+        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ steps.tf_version.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id:       ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: terraform init
+        working-directory: terraform/stages/0-fleet
+        run: |
+          terraform init \
+            -backend-config="use_oidc=true" \
+            -backend-config="use_azuread_auth=true"
+
+      - name: terraform plan
+        working-directory: terraform/stages/0-fleet
+        env:
+          ARM_USE_OIDC: "true"
+        run: |
+          terraform plan -no-color -out plan.tfplan \
+            | tee plan.txt
+          terraform show -no-color plan.tfplan > plan.show.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: plan-stage0
+          path: |
+            terraform/stages/0-fleet/plan.tfplan
+            terraform/stages/0-fleet/plan.show.txt
+          retention-days: 7
+
+  # -------------------------------------------------------------------------
+  # 3. Per-cluster plan matrix. Each leg picks the env-scoped GH environment
+  #    (`fleet-<env>`) and authenticates as `uami-fleet-<env>`.
+  #
+  #    `stages/1-cluster` plan: renders tfvars via config-loader, reads
+  #    fleet-scope `vars.*` for KV/ACR/Kargo + per-env `vars.*` for
+  #    VNet/ASG/RT/UAMI.
+  #
+  #    `stages/2-bootstrap` plan is scaffolded as a commented-out block
+  #    below; enable in lockstep with the Stage 2 module landing. When
+  #    active, it will need the AAD-token mint step (see `tf-apply.yaml`).
+  # -------------------------------------------------------------------------
+  cluster:
+    name: plan ${{ matrix.cluster.env }}/${{ matrix.cluster.region }}/${{ matrix.cluster.name }}
+    needs: detect
+    if: fromJSON(needs.detect.outputs.clusters)[0] != null
+    runs-on: [self-hosted]
+    environment: fleet-${{ matrix.cluster.env }}
+    strategy:
+      fail-fast: false
+      matrix:
+        cluster: ${{ fromJSON(needs.detect.outputs.clusters) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read Terraform version
+        id: tf_version
+        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ steps.tf_version.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id:       ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Render tfvars
+        id: tfvars
+        env:
+          CLUSTER_PATH: ${{ matrix.cluster.path }}
+        run: |
+          terraform/config-loader/load.sh "$CLUSTER_PATH" \
+            > "$RUNNER_TEMP/stage1.tfvars.json"
+          echo "file=$RUNNER_TEMP/stage1.tfvars.json" >> "$GITHUB_OUTPUT"
+
+      - name: Stage 1 — terraform init
+        working-directory: terraform/stages/1-cluster
+        env:
+          REGION: ${{ matrix.cluster.region }}
+          NAME:   ${{ matrix.cluster.name }}
+        run: |
+          terraform init \
+            -backend-config="use_oidc=true" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="key=${REGION}/${NAME}/stage1.tfstate"
+
+      - name: Stage 1 — terraform plan
+        working-directory: terraform/stages/1-cluster
+        env:
+          ARM_USE_OIDC: "true"
+          TFVARS: ${{ steps.tfvars.outputs.file }}
+          # Fleet-scope repo variables (published by stages/0-fleet apply).
+          TF_VAR_fleet_keyvault_id:                 ${{ vars.FLEET_KEYVAULT_ID }}
+          TF_VAR_acr_resource_id:                   ${{ vars.ACR_RESOURCE_ID }}
+          TF_VAR_kargo_mgmt_uami_principal_id:      ${{ vars.KARGO_MGMT_UAMI_PRINCIPAL_ID }}
+          TF_VAR_kargo_aad_application_object_id:   ${{ vars.KARGO_AAD_APPLICATION_OBJECT_ID }}
+          # Per-env repo variables (published by bootstrap/environment).
+          TF_VAR_fleet_env_uami_principal_id:       ${{ vars.FLEET_ENV_UAMI_PRINCIPAL_ID }}
+          TF_VAR_env_monitor_workspace_id:          ${{ vars.MONITOR_WORKSPACE_ID }}
+          TF_VAR_env_dce_id:                        ${{ vars.DCE_ID }}
+          TF_VAR_env_action_group_id:               ${{ vars.ACTION_GROUP_ID }}
+          # Per-(env,region) repo variables (published by bootstrap/environment,
+          # referenced directly from the workflow since GHA doesn't support
+          # dynamic var names; the set is bounded by the region list).
+          TF_VAR_env_region_vnet_resource_id:       ${{ vars[format('{0}_{1}_VNET_RESOURCE_ID', matrix.cluster.env, matrix.cluster.region)] }}
+          TF_VAR_node_asg_resource_id:              ${{ vars[format('{0}_{1}_NODE_ASG_RESOURCE_ID', matrix.cluster.env, matrix.cluster.region)] }}
+          TF_VAR_route_table_resource_id:           ${{ vars[format('{0}_{1}_ROUTE_TABLE_RESOURCE_ID', matrix.cluster.env, matrix.cluster.region)] }}
+          TF_VAR_mgmt_vnet_resource_ids_json:       ${{ vars.MGMT_VNET_RESOURCE_IDS }}
+        run: |
+          terraform plan -no-color \
+            -var-file="$TFVARS" \
+            -out plan.tfplan \
+            | tee plan.txt
+          terraform show -no-color plan.tfplan > plan.show.txt
+
+      # TODO(stage2): uncomment when `terraform/stages/2-bootstrap/` lands.
+      # Stage 2 consumes Stage 1 outputs in-job — no `terraform_remote_state`.
+      # The plan step here needs a minted AAD access token for the in-plan
+      # kubernetes/helm providers; see `tf-apply.yaml` for the mint recipe.
+      #
+      # - name: Stage 1 outputs → Stage 2 tfvars
+      #   working-directory: terraform/stages/1-cluster
+      #   run: |
+      #     terraform output -json \
+      #       | jq 'with_entries(.value |= .value)' \
+      #       > "$RUNNER_TEMP/stage2.auto.tfvars.json"
+      #     cp "$RUNNER_TEMP/stage2.auto.tfvars.json" \
+      #       ../../../terraform/stages/2-bootstrap/
+      #
+      # - name: Mint AAD token → TF_VAR_aks_access_token
+      #   run: .github/scripts/mint-aks-token.sh
+      #
+      # - name: Stage 2 — terraform init + plan
+      #   working-directory: terraform/stages/2-bootstrap
+      #   env:
+      #     ARM_USE_OIDC: "true"
+      #     REGION: ${{ matrix.cluster.region }}
+      #     NAME:   ${{ matrix.cluster.name }}
+      #   run: |
+      #     terraform init \
+      #       -backend-config="use_oidc=true" \
+      #       -backend-config="use_azuread_auth=true" \
+      #       -backend-config="key=${REGION}/${NAME}/stage2.tfstate"
+      #     terraform plan -no-color -out plan.tfplan | tee plan.txt
+      #     terraform show -no-color plan.tfplan > plan.show.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: plan-${{ matrix.cluster.env }}-${{ matrix.cluster.region }}-${{ matrix.cluster.name }}
+          path: |
+            terraform/stages/1-cluster/plan.tfplan
+            terraform/stages/1-cluster/plan.show.txt
+          retention-days: 7
+
+  # -------------------------------------------------------------------------
+  # 4. Consolidate every plan into one tf-summarize-formatted sticky PR
+  #    comment. Runs after detect + stage0 + cluster (whichever fired).
+  # -------------------------------------------------------------------------
+  summarize:
+    name: summarize plans
+    needs: [detect, stage0, cluster]
+    if: always() && needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Download all plan artefacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: plans
+          pattern: plan-*
+          merge-multiple: false
+
+      - name: Install tf-summarize
+        run: |
+          curl -fsSL https://github.com/dineshba/tf-summarize/releases/download/v0.3.10/tf-summarize_Linux_x86_64.tar.gz \
+            | tar -xz -C /usr/local/bin tf-summarize
+          tf-summarize --version
+
+      - name: Build consolidated comment
+        id: comment
+        run: |
+          set -euo pipefail
+          out="comment.md"
+          echo "## Terraform plan" > "$out"
+          echo >> "$out"
+          shopt -s nullglob
+          for d in plans/plan-*; do
+            label="${d#plans/plan-}"
+            echo "### ${label}" >> "$out"
+            echo >> "$out"
+            if [[ -f "$d/plan.tfplan" ]]; then
+              # tf-summarize reads binary plan directly.
+              echo '```' >> "$out"
+              tf-summarize -tree "$d/plan.tfplan" >> "$out" || echo "(tf-summarize failed)" >> "$out"
+              echo '```' >> "$out"
+            fi
+            if [[ -f "$d/plan.show.txt" ]]; then
+              echo >> "$out"
+              echo "<details><summary>Full plan</summary>" >> "$out"
+              echo >> "$out"
+              echo '```terraform' >> "$out"
+              # Truncate to 50k chars to stay under GH's 65k comment cap.
+              head -c 50000 "$d/plan.show.txt" >> "$out"
+              echo >> "$out"
+              echo '```' >> "$out"
+              echo >> "$out"
+              echo "</details>" >> "$out"
+            fi
+            echo >> "$out"
+          done
+
+      - name: Upsert sticky PR comment
+        uses: marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0 # v3.0.4
+        with:
+          header: tf-plan
+          path: comment.md

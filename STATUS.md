@@ -297,7 +297,7 @@
       (`100.64.0.0/16` / `100.127.0.0/16`) in `modules/aks-cluster`.
 - [x] `validate.yaml` subnet_slot PR-check (presence, type, range,
       uniqueness, immutability).
-- [ ] `tf-apply.yaml` workflow (PLAN §10).
+- [x] `tf-apply.yaml` workflow — see §10.
 
 ### Stage 2 — `terraform/stages/2-bootstrap`
 
@@ -330,15 +330,78 @@
 
 ## §10 CI/CD
 
-- [ ] `validate.yaml`, `tf-plan.yaml`, `tf-apply.yaml`,
-      `env-bootstrap.yaml`, `team-bootstrap.yaml` — not yet written.
+- [x] `validate.yaml` — multi-job consolidation: `terraform fmt
+      -check -recursive`, `tflint --recursive` (absorbed from the
+      removed `tflint.yaml`), `yamllint --strict clusters/` with a
+      new top-level `.yamllint` baseline, and the existing
+      subnet-slot validator. Template-vs-adopter mode preserved
+      (template-mode renders `clusters/_fleet.yaml` from the test
+      fixture; adopter-mode asserts the committed file).
+- [x] `tf-plan.yaml` — PR trigger; `detect` job runs
+      `.github/scripts/detect-affected-clusters.sh` (new) emitting
+      `{stage0, clusters}`; conditional `stage0` leg
+      (`environment: fleet-stage0`, self-hosted, OIDC) + per-cluster
+      matrix (`environment: fleet-<env>`, self-hosted, OIDC) rendering
+      tfvars via `config-loader/load.sh` and running Stage 1 plan;
+      `summarize` job downloads all plan artefacts and upserts a
+      single sticky PR comment via `tf-summarize` (tree view) +
+      collapsible full plan. Stage 2 plan block present but
+      commented-out pending `stages/2-bootstrap/`.
+- [x] `tf-apply.yaml` — push-to-main; same `detect` script; Stage 0
+      leg runs first serially and captures every Stage 0 output;
+      `publish-stage0` job scaffolded (`if: false`) to push outputs
+      to fleet-scope repo variables via the `stage0-publisher`
+      GitHub App (PEM from fleet KV) — flip on once
+      `init-gh-apps.sh` + the App land (deferred sub-item below);
+      per-cluster single-job matrix applies Stage 1 with
+      `max-parallel: 1` for `env == prod`. Stage 2 apply block
+      (including Stage 1→2 output pipe + AAD token mint) scaffolded
+      as a commented-out TODO in the same job.
+- [x] `env-bootstrap.yaml` — `workflow_dispatch` with
+      `{env, action: plan|apply}`, `environment: fleet-meta`
+      (2-reviewer gate), self-hosted, runs
+      `terraform/bootstrap/environment` for the named env.
+- [x] `team-bootstrap.yaml` — push-to-main on
+      `platform-gitops/config/teams/*.yaml`; `detect` job
+      `--diff-filter=A` picks up newly-added team YAMLs only; per-team
+      matrix runs `terraform/bootstrap/team` under
+      `environment: fleet-meta`.
+- [x] `.github/scripts/detect-affected-clusters.sh` — shared
+      change-detection helper consumed by `tf-plan` + `tf-apply`.
+      Classifies diff into `stage0=bool` + affected `clusters[]` per
+      PLAN §10 path-filter rules.
 - [x] `.github/workflows/template-selftest.yaml` (template-side only).
 - [x] `.github/workflows/status-check.yaml` (template-side only).
-- [x] `.github/workflows/tflint.yaml` + `.tflint.hcl` recursive
-      enforcement.
+- [-] `.github/workflows/tflint.yaml` — deleted; folded into
+      `validate.yaml` as the `tflint` job.
 - [x] `terraform test` unit suites (template-side): `init/tests/unit/`
       and `modules/fleet-identity/tests/unit/`. **Tests will need
       updating** in lockstep with §3.1/§3.3 schema rework.
+
+### §10 deferred (new sub-items)
+
+- [ ] JSON-schema validation of merged `cluster.yaml` +
+      `platform-gitops/config/teams/*.yaml` (PLAN §10
+      `validate.yaml` bullets 3-4). Needs schema files authored.
+- [ ] `.github/scripts/lint-teams.sh` team-config linter (PLAN §10
+      `validate.yaml` bullet 5 — filename regex, forbidden fields,
+      `oidcGroup` uniqueness, `services[].imageRepo` prefix, cluster
+      path resolution). Needs `platform-gitops/config/teams/` to
+      exist.
+- [ ] `helm lint` over `platform-gitops/components/*` (PLAN §10
+      `validate.yaml` bullet 6). Needs the components directory.
+- [ ] `kargo lint` over `platform-gitops/kargo/**` (PLAN §10
+      `validate.yaml` bullet 7). Needs kargo promotion directory.
+- [ ] `stage0-publisher` GitHub App + `init-gh-apps.sh` helper
+      (PLAN §16.4) — unblocks the `publish-stage0` job in
+      `tf-apply.yaml` (currently `if: false`). Also requires a
+      `.github/scripts/mint-gh-installation-token.sh` helper.
+- [ ] `terraform/stages/2-bootstrap/` module — unblocks the Stage 2
+      plan/apply blocks scaffolded (commented-out) in `tf-plan.yaml`
+      + `tf-apply.yaml`. Also requires
+      `.github/scripts/mint-aks-token.sh` (curl/jq recipe in PLAN §4
+      Stage 2).
+- [ ] Nightly drift-detection workflow (PLAN §10 "Drift detection").
 
 ## §11 Operator UX
 
@@ -412,11 +475,11 @@
         loader itself matches (unit 3); automated diff between
         loader and bootstrap HCL locals still deferred
         (Rework-program item 12).
-  - [ ] CI workflows (`validate`, `tf-plan`, `tf-apply`,
-        `env-bootstrap`).
+  - [x] CI workflows (`validate`, `tf-plan`, `tf-apply`,
+        `env-bootstrap`, `team-bootstrap`) — see §10.
   - [ ] **Exit criterion** (both clusters provision and pull from
         fleet ACR) — not met; blocked on live apply
-        (Rework-program item 10) + CI workflows (item 11).
+        (Rework-program item 10).
 - [ ] Phase 2 (ArgoCD bootstrap).
 - [ ] Phase 3 (Platform services pre-Kargo).
 - [ ] Phase 4 (Kargo install).
@@ -682,7 +745,19 @@ self-contained enough to land in its own PR.
    unconditionally for uniform provider surface across legs).
 10. **Live apply** of `bootstrap/fleet` + `stages/0-fleet` against a
     real tenant (pre-existing `[ ]`; gated by units 1-7).
-11. **CI workflows** (`validate`, `tf-plan`, `tf-apply`,
-    `env-bootstrap`) — unblocks Phase 1 exit criterion.
+11. **CI workflows** — ✅ **Done.** Single PR-sized commit lands
+    five workflows + one shared script. `validate.yaml` consolidated
+    (fmt + tflint + yamllint + subnet-slots); `tflint.yaml` deleted.
+    `tf-plan.yaml` (PR, dynamic per-cluster matrix,
+    `tf-summarize` sticky comment) + `tf-apply.yaml` (push-to-main,
+    Stage 0 leg → scaffolded publish step → per-cluster Stage 1
+    apply with prod-serial) + `env-bootstrap.yaml`
+    (`workflow_dispatch`, `fleet-meta`) + `team-bootstrap.yaml`
+    (push-to-main on new team YAMLs, `fleet-meta`). All
+    state-writing workflows `runs-on: [self-hosted]` per PLAN §10.
+    `detect-affected-clusters.sh` shared between plan + apply.
+    Stage 2 + `stage0-publisher` publish step scaffolded as
+    commented-out / `if: false` TODOs tracked under §10 deferred
+    sub-items. All action `uses:` refs pinned to SHAs via `pinact`.
 12. **Naming-diff CI** between `load.sh` and bootstrap HCL locals
     (deferred, but should land before Phase 2).
