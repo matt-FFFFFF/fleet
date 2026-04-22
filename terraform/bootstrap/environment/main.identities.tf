@@ -12,7 +12,7 @@
 
 locals {
   role_contributor     = "b24988ac-6180-42a0-ab88-20f7382dd24c"
-  role_uaa             = "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9"
+  role_rbac_admin      = "f58310d9-a9f6-439a-9e8d-f62e7b41a168"
   role_blob_data_ctrb  = "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
   role_kv_secrets_user = "4633458b-17de-408a-b874-0445c86b69e6"
 
@@ -90,7 +90,7 @@ resource "azapi_resource" "ra_meta_sub_uaa" {
 
   body = {
     properties = {
-      roleDefinitionId = "/subscriptions/${local.env_sub_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_uaa}"
+      roleDefinitionId = "/subscriptions/${local.env_sub_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_rbac_admin}"
       principalId      = var.fleet_meta_principal_id
       principalType    = "ServicePrincipal"
     }

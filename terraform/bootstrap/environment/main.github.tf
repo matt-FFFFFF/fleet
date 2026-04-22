@@ -88,7 +88,7 @@ module "env_github" {
       scope              = local.fleet_kv_id
     }
     acr_uaa_bounded = {
-      role_definition_id = "/subscriptions/${local.derived.acr_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_uaa}"
+      role_definition_id = "/subscriptions/${local.derived.acr_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_rbac_admin}"
       scope              = local.fleet_acr_id
       condition_version  = "2.0"
       condition          = <<-COND
