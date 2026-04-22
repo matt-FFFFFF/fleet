@@ -37,6 +37,8 @@ on:
       - '.tflint.hcl'
       - '.yamllint'
       - '.github/scripts/validate-subnet-slots.sh'
+      - '.github/scripts/check-naming-parity.sh'
+      - '.github/scripts/naming-parity/**'
       - '.github/workflows/validate.yaml'
       - '.github/fixtures/adopter-test.tfvars'
       - '.terraform-version'
@@ -48,6 +50,8 @@ on:
       - '.tflint.hcl'
       - '.yamllint'
       - '.github/scripts/validate-subnet-slots.sh'
+      - '.github/scripts/check-naming-parity.sh'
+      - '.github/scripts/naming-parity/**'
       - '.terraform-version'
 
 jobs:
@@ -197,3 +201,54 @@ jobs:
         env:
           BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
         run: .github/scripts/validate-subnet-slots.sh
+
+  naming-parity:
+    name: naming parity
+    runs-on: ubuntu-24.04
+    # Diffs `terraform/config-loader/load.sh` (shell) against
+    # `terraform/modules/fleet-identity/` (HCL) over the shared
+    # derivation surface (docs/naming.md). Per AGENTS.md rule 5 the two
+    # implementations are the naming contract; any divergence fails CI.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read Terraform version
+        id: tf_version
+        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ steps.tf_version.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Detect template-mode render inputs
+        id: render_check
+        run: |
+          if [[ -d init && -f .github/fixtures/adopter-test.tfvars ]]; then
+            echo "template_mode=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "template_mode=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Render clusters/_fleet.yaml (template-mode only)
+        if: steps.render_check.outputs.template_mode == 'true'
+        working-directory: init
+        run: |
+          terraform init -backend=false
+          terraform apply -auto-approve \
+            -var-file=../.github/fixtures/adopter-test.tfvars \
+            -target=local_file.fleet_yaml
+
+      - name: Verify committed _fleet.yaml (adopter-mode only)
+        if: steps.render_check.outputs.template_mode == 'false'
+        run: test -f clusters/_fleet.yaml
+
+      - name: Diff load.sh vs fleet-identity
+        run: .github/scripts/check-naming-parity.sh

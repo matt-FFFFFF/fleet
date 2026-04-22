@@ -117,10 +117,12 @@
     `-to-mgmt-<region>`), `create_reverse_peering`,
     `mgmt_environment_for_vnet_peering` uniform. Unit tests rewritten
     to cover new shape (8 runs pass).
-  - Naming parity sub-item (`docs/naming.md` vs bootstrap HCL locals)
-    advanced in unit 8: `docs/naming.md` now matches post-rework
-    derivations. Automated diff CI between `load.sh` and bootstrap
-    HCL locals still `[ ]` (tracked as Rework-program item 12).
+  - [x] Naming parity sub-item (`docs/naming.md` vs bootstrap HCL locals)
+    landed: unit 8 aligned the prose; Rework item 12 added automated
+    CI diff between `load.sh` and `modules/fleet-identity/` over every
+    shared fleet-scope + env-region-scope field (see §10 `naming-parity`
+    job). Cluster-scope fields (snet_aks_api/nodes_*, per-cluster KV)
+    are loader-only by design — fleet-identity has no cluster input.
 - [x] §3.4 Networking topology — spec rewritten in PLAN (commit
       143d18b) to uniform env-region model; implementation landed in
       units 4–7 of the Rework program (per-region mgmt VNets,
@@ -333,10 +335,13 @@
 - [x] `validate.yaml` — multi-job consolidation: `terraform fmt
       -check -recursive`, `tflint --recursive` (absorbed from the
       removed `tflint.yaml`), `yamllint --strict clusters/` with a
-      new top-level `.yamllint` baseline, and the existing
-      subnet-slot validator. Template-vs-adopter mode preserved
-      (template-mode renders `clusters/_fleet.yaml` from the test
-      fixture; adopter-mode asserts the committed file).
+      new top-level `.yamllint` baseline, the existing subnet-slot
+      validator, and (new) a `naming-parity` job that diffs
+      `config-loader/load.sh` against `modules/fleet-identity/` via
+      a throwaway TF harness at `.github/scripts/naming-parity/` +
+      `.github/scripts/check-naming-parity.sh`. Template-vs-adopter
+      mode preserved (template-mode renders `clusters/_fleet.yaml`
+      from the test fixture; adopter-mode asserts the committed file).
 - [x] `tf-plan.yaml` — PR trigger; `detect` job runs
       `.github/scripts/detect-affected-clusters.sh` (new) emitting
       `{stage0, clusters}`; conditional `stage0` leg
@@ -471,10 +476,10 @@
         (per-region via JSON-map index), DNS-link collapse for mgmt
         clusters, and route table association on both api and nodes
         subnets (unit 6). Identity/RBAC follow-up still pending.
-  - [ ] `config-loader/load.sh` naming-derivation parity CI diff —
-        loader itself matches (unit 3); automated diff between
-        loader and bootstrap HCL locals still deferred
-        (Rework-program item 12).
+  - [x] `config-loader/load.sh` naming-derivation parity CI diff —
+        loader itself matches (unit 3); automated diff between loader
+        and `modules/fleet-identity/` HCL locals landed as Rework item
+        12 (`naming-parity` job in `validate.yaml`).
   - [x] CI workflows (`validate`, `tf-plan`, `tf-apply`,
         `env-bootstrap`, `team-bootstrap`) — see §10.
   - [ ] **Exit criterion** (both clusters provision and pull from
@@ -515,7 +520,8 @@
       the tfvars overlay remains TODO.
 - [x] §16.5 GitHub template mechanics; `import` block for fleet repo.
 - [x] §16.6 `docs/naming.md` — reworked in unit 8; see §11.
-  - [ ] CI diff between `load.sh` and bootstrap HCL locals — deferred.
+  - [x] CI diff between `load.sh` and bootstrap HCL locals — Rework
+        item 12 (`naming-parity` job).
 - [x] §16.7 Safety rails (banner, dirty-tree refusal, TF validation).
 - [x] §16.8 Template self-test workflow. Selftest fixture will need
       updating to new schema in lockstep.
@@ -530,7 +536,8 @@
       `hub_network_resource_id` and dropped
       `mgmt_environment_for_vnet_peering`.
 - [x] §16.10.1–9 Execution order complete.
-  - [-] §16.10.10 CI naming-diff — deferred to Phase 2 CI work.
+  - [x] §16.10.10 CI naming-diff — Rework item 12 (`naming-parity`
+        job in `validate.yaml`).
 
 ---
 
@@ -759,5 +766,16 @@ self-contained enough to land in its own PR.
     Stage 2 + `stage0-publisher` publish step scaffolded as
     commented-out / `if: false` TODOs tracked under §10 deferred
     sub-items. All action `uses:` refs pinned to SHAs via `pinact`.
-12. **Naming-diff CI** between `load.sh` and bootstrap HCL locals
-    (deferred, but should land before Phase 2).
+12. **Naming-diff CI** between `load.sh` and `modules/fleet-identity/`
+    HCL locals — ✅ **Done.** Single commit lands a throwaway TF
+    harness at `.github/scripts/naming-parity/main.tf` (consumes
+    `modules/fleet-identity/` and emits `derived` + `networking_derived`
+    as JSON), a diff script `.github/scripts/check-naming-parity.sh`
+    (runs loader per cluster, compares shared fleet-scope +
+    env-region-scope fields, exits non-zero on any mismatch with a
+    labelled diff), and a new `naming-parity` job in `validate.yaml`
+    that renders `_fleet.yaml` (template-mode) or verifies the
+    committed file (adopter-mode) before running the check. Verified
+    locally: passes clean on both example clusters; injecting a
+    deliberate fleet-identity name mutation reproduces the expected
+    mismatch output. Portable across GNU + BSD `find` (no `-printf`).
