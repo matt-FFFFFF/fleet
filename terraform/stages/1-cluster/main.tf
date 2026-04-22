@@ -4,41 +4,43 @@
 # `config-loader/load.sh <clusters/<env>/<region>/<name>>` → merged
 # tfvars.json. See PLAN §4 Stage 1.
 #
-# **Scope of the current implementation** — Phase E of PLAN §3.4 landed
-# the *networking* half of Stage 1:
+# **Layout** (files in this directory):
 #
-#   - main.network.tf : per-cluster /28 api + /25 nodes subnets as
+#   main.tf           : locals, network preconditions (this file)
+#   main.network.tf   : per-cluster /28 api + /25 nodes subnets as
 #                       children of the env VNet
-#   - modules/aks-cluster : thin wrapper around
-#                       Azure/avm-res-containerservice-managedcluster/azurerm
-#                       with the networking inputs (subnets, node-pool ASG)
-#                       wired; pod CIDR is a fleet-wide constant
-#                       (100.64.0.0/16) hard-coded inside the module
-#   - modules/cluster-dns : private DNS zone + virtualNetworkLinks to
-#                       [env VNet, mgmt VNet]
+#   main.aks.tf       : AKS cluster (via modules/aks-cluster) + per-cluster
+#                       private DNS zone (via modules/cluster-dns)
+#   main.kv.tf        : cluster Key Vault + mgmt-only Kargo OIDC secret
+#                       rotation (azuread_application_password + time_rotating
+#                       + KV secret writes)
+#   main.identities.tf: per-cluster UAMIs (external-dns, ESO, team-<team>)
+#   main.rbac.tf      : role assignments on every scope this stage touches
+#                       (cluster KV, fleet KV, fleet ACR, this AKS resource,
+#                       the per-cluster private DNS zone, the env AMW)
+#   main.monitoring.tf: managed Prometheus DCR/DCRA + recording rule groups
+#                       (gated on `platform.observability.managed_prometheus.enabled`)
 #
-# **Still TODO** (tracked in STATUS.md §4 Stage 1) — these land when
-# Stage 1 is promoted out of Phase E:
-#   - Cluster Key Vault (+ KV Secrets User on ESO UAMI)
-#   - UAMIs: external-dns, ESO, per-team
-#   - Role assignments: AcrPull (kubelet), fleet KV Secrets User (ESO),
-#     RBAC Cluster Admin (fleet-<env> UAMI), RBAC Reader (Kargo mgmt UAMI),
-#     Monitoring Metrics Publisher (AKS addon → env AMW)
-#   - Managed Prometheus wiring (DCR, DCRA, prometheusRuleGroups)
-#   - Mgmt-cluster-only: Kargo RP secret rotation + KV write
+# Hard-coded in modules/aks-cluster (NOT overridable per cluster):
+# Entra-only auth (`disable_local_accounts` + `aad_profile.managed` +
+# `enable_azure_rbac`), CNI Overlay + Cilium, private cluster with
+# API-server VNet integration on the /28 subnet this stack creates,
+# OIDC issuer + workload identity on, pod CIDR 100.64.0.0/16,
+# service CIDR 100.127.0.0/16.
 #
 # Inputs arrive via the loader-produced tfvars.json; no provider data
 # sources at plan time (PLAN §10). Cross-stage values
 # (`MGMT_VNET_RESOURCE_IDS` JSON map on `fleet-meta`,
 # `<ENV>_<REGION>_{VNET,NODE_ASG,ROUTE_TABLE}_RESOURCE_ID` on the
-# per-env GH Environment) flow in as repo/env variables (TF_VAR_*)
-# published directly by `bootstrap/fleet` and `bootstrap/environment` —
-# Stage 0 does **not** proxy them (see PLAN §4 Stage -1 "Implementation
-# status 2026-04-19" for the cycle-break rationale). `tf-apply.yaml`
-# resolves the cluster's mgmt peer region
-# (`derived.networking.peer_mgmt_region`, same-region-else-first from
-# `networking.envs.mgmt.regions.*`) and indexes the JSON map to set
-# `TF_VAR_mgmt_region_vnet_resource_id` per cluster.
+# per-env GH Environment, fleet-scope ids like `FLEET_KEYVAULT_ID` /
+# `ACR_RESOURCE_ID` / `KARGO_*` from Stage 0) flow in as repo/env
+# variables (TF_VAR_*) — Stage 0 does **not** proxy the env-scope
+# values (see PLAN §4 Stage -1 "Implementation status 2026-04-19" for
+# the cycle-break rationale). `tf-apply.yaml` resolves the cluster's
+# mgmt peer region (`derived.networking.peer_mgmt_region`,
+# same-region-else-first from `networking.envs.mgmt.regions.*`) and
+# indexes the JSON map to set `TF_VAR_mgmt_region_vnet_resource_id`
+# per cluster.
 
 locals {
   # Whole fleet doc + per-cluster merged doc. `var.doc` is the loader
@@ -68,6 +70,24 @@ locals {
   # would still fire if a future schema change allowed non-mgmt envs
   # to share the mgmt VNet).
   mgmt_cluster = var.env_region_vnet_resource_id == var.mgmt_region_vnet_resource_id
+
+  # Management-cluster detection for Kargo-specific secret rotation
+  # (PLAN §4 Stage 1 lines 1769-1784). Driven by a cluster-yaml opt-in
+  # (`cluster.role == "management"`) rather than the VNet-collapse
+  # heuristic above, because role is the operator-intent signal: a
+  # mgmt-env cluster that isn't marked role=management should NOT
+  # host the Kargo control plane. Default "workload" keeps the
+  # rotation resources dormant on every other cluster.
+  mgmt_role_cluster = try(local.cluster.role, "workload") == "management"
+
+  # Managed Prometheus enablement — default ON per PLAN §4 Stage 1. The
+  # per-cluster opt-out lives at `platform.observability.managed_prometheus.enabled`
+  # (documented in PLAN §4.1). Drives both the AVM module input
+  # (`azureMonitorProfile.metrics.enabled`) and whether
+  # modules/cluster-monitoring is instantiated.
+  managed_prometheus_enabled = try(
+    var.doc.platform.observability.managed_prometheus.enabled, true
+  )
 
   # Preconditions fire against these via a terraform_data null resource.
   # Keeping the check list local so the error message can name the

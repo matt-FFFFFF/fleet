@@ -29,3 +29,16 @@ output "cluster_identity" {
     principal_id = azapi_resource.cluster_uami.output.properties.principalId
   }
 }
+
+output "kubelet_identity" {
+  description = <<-EOT
+    AKS-managed kubelet identity — the principal that pulls images
+    from the fleet ACR (AcrPull assignee). Shape:
+    `{ client_id, object_id, resource_id }`. Surfaced from the AVM
+    module's `kubelet_identity` output (read from
+    `properties.identityProfile.kubeletidentity`). Stage 1 uses
+    `object_id` (the principalId) as the AcrPull role-assignment
+    principal; `resource_id` is informational.
+  EOT
+  value       = try(module.aks.kubelet_identity, null)
+}

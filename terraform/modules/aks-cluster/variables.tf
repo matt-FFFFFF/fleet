@@ -234,6 +234,21 @@ variable "apps_pool" {
   default = null
 }
 
+variable "managed_prometheus_enabled" {
+  description = <<-EOT
+    Toggle AKS `azureMonitorProfile.metrics.enabled` for Managed
+    Prometheus. When true (default) the AKS-managed metrics addon
+    scrapes kube-state-metrics + node-exporter and ingests via the
+    DCR/DCE pair Stage 1 wires in `modules/cluster-monitoring`.
+    Setting `platform.observability.managed_prometheus.enabled=false`
+    in cluster YAML flips this off and also skips the cluster-monitoring
+    module call in Stage 1 — both sides must agree.
+  EOT
+  type        = bool
+  default     = true
+  nullable    = false
+}
+
 variable "tags" {
   description = "Tags applied to the AKS resource. Node-pool-level tags inherit from this map today; broaden later if a per-pool split is needed."
   type        = map(string)

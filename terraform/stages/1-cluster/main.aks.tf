@@ -59,6 +59,14 @@ module "aks" {
   system_pool = try(var.doc.node_pools.system, {})
   apps_pool   = try(var.doc.node_pools.apps, null)
 
+  # Managed Prometheus addon — gated on
+  # `platform.observability.managed_prometheus.enabled` (defaults true).
+  # When true, the AVM input flips
+  # `properties.azureMonitorProfile.metrics.enabled=true`, which causes
+  # AKS to surface an addon data-collection identity that
+  # modules/cluster-monitoring then drives via the per-cluster DCR.
+  managed_prometheus_enabled = local.managed_prometheus_enabled
+
   tags = {
     fleet       = local.fleet.name
     environment = local.cluster.env

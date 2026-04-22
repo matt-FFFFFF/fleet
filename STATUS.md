@@ -256,12 +256,43 @@
       `main.github.tf` publishes `<ENV>_<REGION>_ROUTE_TABLE_RESOURCE_ID`
       alongside the existing VNet/NodeASG/PE-subnet vars.
       `terraform validate` + `fmt -recursive` pass on both dirs.
-  - [ ] Identity/RBAC follow-up: cluster KV, UAMIs (external-dns,
-        ESO, per-team), role assignments (AcrPull on kubelet, RBAC
-        Cluster Admin for `fleet-<env>` + AAD groups, RBAC Reader
-        for Kargo mgmt, Private DNS Zone Contributor, Monitoring
-        Metrics Publisher), managed Prometheus DCR/DCRA + rules,
-        Kargo mgmt OIDC secret rotation. Not affected by drift.
+  - [x] Identity/RBAC follow-up (rework unit 9): cluster KV
+        (`modules/cluster-kv`); UAMIs (`uami-{external-dns,eso,team-<team>}-<cluster>`)
+        in `main.identities.tf`; role assignments in `main.rbac.tf`
+        (Private DNS Zone Contributor on cluster zone → external-dns
+        UAMI; KV Secrets User on cluster KV + fleet KV → ESO UAMI;
+        AcrPull on fleet ACR → kubelet identity; AKS RBAC Cluster
+        Admin on this cluster → `fleet-<env>` UAMI + every
+        `envs.<env>.aks.rbac_cluster_admins` group; AKS RBAC Reader →
+        every `rbac_readers` group; AKS Cluster User Role → union of
+        both group lists; AKS RBAC Reader → Kargo mgmt UAMI on every
+        non-mgmt cluster; Monitoring Metrics Publisher on env AMW →
+        cluster UAMI when managed-prometheus is enabled). Managed
+        Prometheus DCR/DCRA + 3 recording rule groups
+        (`modules/cluster-monitoring`) wired in `main.monitoring.tf`,
+        gated on `platform.observability.managed_prometheus.enabled`
+        (default true). AVM `azureMonitorProfile.metrics.enabled`
+        plumbed through `modules/aks-cluster` (new
+        `managed_prometheus_enabled` var); `kubelet_identity` exposed
+        as a passthrough output. Mgmt-cluster-only Kargo OIDC secret
+        rotation in `main.kv.tf` (`time_rotating` 60d +
+        `azuread_application_password` `create_before_destroy` 90d
+        end_date + azapi KV secret write); gated on
+        `cluster.role == "management"`. New Stage 1 inputs:
+        `fleet_keyvault_id`, `acr_resource_id`,
+        `kargo_mgmt_uami_principal_id`, `kargo_aad_application_object_id`
+        (nullable), `fleet_env_uami_principal_id`,
+        `env_monitor_workspace_id`, `env_dce_id`, `env_action_group_id`.
+        `bootstrap/environment/main.github.tf` publishes
+        `FLEET_ENV_UAMI_PRINCIPAL_ID` env-scope. Outputs filled out to
+        the full PLAN §4 Stage 1 surface (cluster_keyvault_*,
+        external_dns_identity_*, eso_identity_*, team_identities,
+        prometheus_dcr_id, env_*_id passthroughs).
+        `providers.tf` reintroduces `azuread ~> 3.0` + `time ~> 0.12`
+        (mgmt-only resources, declared unconditionally for uniform
+        provider surface). `docs/naming.md` extended with
+        external-dns / ESO / team UAMI rows + Prometheus DCR /
+        DCRA / DCEA / 3 rule-group rows.
 - [x] Pod CIDR / service CIDR hard-coded fleet-wide constants
       (`100.64.0.0/16` / `100.127.0.0/16`) in `modules/aks-cluster`.
 - [x] `validate.yaml` subnet_slot PR-check (presence, type, range,
@@ -631,8 +662,24 @@ self-contained enough to land in its own PR.
    `fromJSON(vars.MGMT_VNET_RESOURCE_IDS)` and mgmt-cluster
    id-equality collapse; Stage 1 bullets reference
    `ROUTE_TABLE_RESOURCE_ID` on per-cluster subnets).
-9. **Identity/RBAC Stage 1 follow-up** (pre-existing `[ ]`; gated
-   by unit 6).
+9. **Identity/RBAC Stage 1 follow-up** — done. Single PR-sized
+   commit lands cluster KV, per-cluster UAMIs (external-dns + ESO +
+   per-team), every role assignment listed in PLAN §4 Stage 1
+   (Private DNS Zone Contributor, KV Secrets User × 2, AcrPull, AKS
+   RBAC Cluster Admin/Reader/User × group-set, Kargo Reader on
+   workload clusters, Monitoring Metrics Publisher on env AMW),
+   managed Prometheus DCR/DCRA/DCEA + 3 recording rule groups (node,
+   k8s, UX), AVM `azureMonitorProfile.metrics` wiring, mgmt-only
+   Kargo OIDC client-secret rotation (60d). New tfvars:
+   `fleet_keyvault_id`, `acr_resource_id`,
+   `kargo_mgmt_uami_principal_id`, `kargo_aad_application_object_id`,
+   `fleet_env_uami_principal_id`, `env_{monitor_workspace,dce,action_group}_id`.
+   `FLEET_ENV_UAMI_PRINCIPAL_ID` published env-scope by
+   `bootstrap/environment`. Outputs filled to the full PLAN §4
+   Stage 1 surface. `docs/naming.md` extended with the new UAMI +
+   Prometheus DCR/DCRA + rule-group rows. `providers.tf` reintroduces
+   `azuread ~> 3.0` + `time ~> 0.12` (mgmt-only resources, declared
+   unconditionally for uniform provider surface across legs).
 10. **Live apply** of `bootstrap/fleet` + `stages/0-fleet` against a
     real tenant (pre-existing `[ ]`; gated by units 1-7).
 11. **CI workflows** (`validate`, `tf-plan`, `tf-apply`,

@@ -79,6 +79,17 @@ module "aks" {
   oidc_issuer_profile = { enabled = true }
   security_profile    = { workload_identity = { enabled = true } }
 
+  # --- Managed Prometheus addon (when enabled) -----------------------------
+  #
+  # Flipping `azureMonitorProfile.metrics.enabled=true` causes AKS to
+  # surface a system-managed data-collection identity on the cluster
+  # (visible as the `addonIdentities["azure-monitor-metrics"]`
+  # principalId after apply). The DCR/DCRA pair in
+  # modules/cluster-monitoring binds this cluster to the env-scope AMW.
+  azure_monitor_profile = var.managed_prometheus_enabled ? {
+    metrics = { enabled = true }
+  } : null
+
   # --- Entra-only auth ----------------------------------------------------
   enable_rbac            = true
   disable_local_accounts = true

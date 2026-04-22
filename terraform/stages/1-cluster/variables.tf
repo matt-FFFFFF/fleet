@@ -127,3 +127,121 @@ variable "route_table_resource_id" {
   type        = string
   nullable    = false
 }
+
+# --- Fleet-scope passthroughs (published by Stage 0) -----------------------
+#
+# These piggyback on the Stage 0 → repo-variable publishing path (PLAN §4
+# Stage 0 Outputs). `tf-apply.yaml` wires each to a `TF_VAR_*` of the
+# same snake-case name for every Stage 1 leg. No remote state, no
+# plan-time data sources — everything arrives as a string.
+
+variable "fleet_keyvault_id" {
+  description = <<-EOT
+    Full ARM id of the fleet-shared Key Vault (`kv-<fleet.name>-fleet`),
+    owned by `bootstrap/fleet`. Stage 1 assigns `Key Vault Secrets User`
+    on this KV to the cluster's ESO UAMI so fleet-wide secrets (GH App
+    PEMs, etc.) flow through External Secrets Operator. Published as
+    the `FLEET_KEYVAULT_ID` fleet-scope repo variable (Stage 0 output
+    `fleet_keyvault_id`).
+  EOT
+  type        = string
+  nullable    = false
+}
+
+variable "acr_resource_id" {
+  description = <<-EOT
+    Full ARM id of the fleet-shared ACR (`acr<fleet.name>shared`), owned
+    by `bootstrap/fleet`. Stage 1 assigns `AcrPull` on this ACR to the
+    cluster's AKS-managed kubelet identity (read from the AVM module's
+    `kubelet_identity.object_id` output). Published as the
+    `ACR_RESOURCE_ID` fleet-scope repo variable (Stage 0 output
+    `acr_resource_id`).
+  EOT
+  type        = string
+  nullable    = false
+}
+
+variable "kargo_mgmt_uami_principal_id" {
+  description = <<-EOT
+    Principal id of the fleet-wide singleton Kargo UAMI
+    (`uami-kargo-mgmt`), owned by Stage 0. Stage 1 assigns `Azure
+    Kubernetes Service RBAC Reader` on every **workload** cluster's AKS
+    resource to this principalId so Kargo (running in the mgmt cluster)
+    can read Argo `Application` CRs on every other cluster for health
+    verification. Assignment is SKIPPED on the management cluster
+    itself (`cluster.role == "management"`). Published as the
+    `KARGO_MGMT_UAMI_PRINCIPAL_ID` fleet-scope repo variable.
+  EOT
+  type        = string
+  nullable    = false
+}
+
+variable "kargo_aad_application_object_id" {
+  description = <<-EOT
+    Directory object id of the Kargo AAD application, owned by Stage 0.
+    Consumed ONLY by the **management cluster's** Stage 1 plan as the
+    `application_id` of the `azuread_application_password` resource
+    that mints the `kargo-oidc-client-secret` written into the cluster
+    KV (PLAN §4 Stage 1 lines 1769-1782). Workload clusters accept a
+    null value here — the secret-rotation resources are gated on
+    `local.mgmt_cluster`.
+  EOT
+  type        = string
+  nullable    = true
+}
+
+variable "fleet_env_uami_principal_id" {
+  description = <<-EOT
+    Principal id of the `uami-fleet-<env>` UAMI owned by
+    `bootstrap/environment`. Stage 1 assigns `Azure Kubernetes Service
+    RBAC Cluster Admin` on this cluster's AKS resource to this
+    principalId so Stage 2 (which runs under the same identity) can
+    apply kubernetes_* / helm_release resources via an AAD bearer token
+    exchange against a local-accounts-disabled cluster (PLAN §4 Stage 1
+    lines 1812-1817). Published as the `FLEET_ENV_UAMI_PRINCIPAL_ID`
+    env-scope GH Environment variable.
+  EOT
+  type        = string
+  nullable    = false
+}
+
+variable "env_monitor_workspace_id" {
+  description = <<-EOT
+    Full ARM id of the env-scope Azure Monitor Workspace
+    (`amw-<fleet.name>-<env>`), owned by `bootstrap/environment`. Stage
+    1 binds the per-cluster Prometheus DCR to it and assigns
+    `Monitoring Metrics Publisher` on it to the cluster UAMI so the
+    AKS managed-prometheus addon can push scraped metrics. Published
+    as the `MONITOR_WORKSPACE_ID` env-scope GH Environment variable.
+  EOT
+  type        = string
+  nullable    = false
+}
+
+variable "env_dce_id" {
+  description = <<-EOT
+    Full ARM id of the env-scope Data Collection Endpoint
+    (`dce-<fleet.name>-<env>`), owned by `bootstrap/environment`. Stage
+    1's per-cluster Prometheus DCR references it as
+    `dataCollectionEndpointId`; the paired DCE association on the AKS
+    resource (name `configurationAccessEndpoint`) tells the scraper
+    where to push. Published as the `DCE_ID` env-scope GH Environment
+    variable.
+  EOT
+  type        = string
+  nullable    = false
+}
+
+variable "env_action_group_id" {
+  description = <<-EOT
+    Full ARM id of the env-scope Action Group (`ag-<fleet.name>-<env>`),
+    owned by `bootstrap/environment`. Passed through to
+    `modules/cluster-monitoring` for alerting rule wiring (today the
+    module ships recording rules only; the Action Group id is a
+    no-op placeholder until the alert rule bodies land — PLAN §4
+    Stage 1 lines 1872-1878). Published as the `ACTION_GROUP_ID`
+    env-scope GH Environment variable.
+  EOT
+  type        = string
+  nullable    = false
+}

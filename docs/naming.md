@@ -67,6 +67,9 @@ from the cluster.yaml itself (required, immutable — see PLAN §3.4).
 | UAMI — Kargo mgmt         | `uami-kargo-mgmt`                                                     |                      |
 | UAMI — cluster CP         | `uami-<cluster.name>-cp`                                              |                      |
 | UAMI — cluster kubelet    | `uami-<cluster.name>-kubelet`                                         |                      |
+| UAMI — external-dns       | `uami-external-dns-<cluster.name>`                                    | per-cluster          |
+| UAMI — ESO                | `uami-eso-<cluster.name>`                                             | per-cluster          |
+| UAMI — team (per cluster) | `uami-team-<team>-<cluster.name>`                                     | one per team in `cluster.yaml.teams`; team name == `platform-gitops/config/teams/<team>.yaml` basename |
 | UAMI — workload (per svc) | `uami-<cluster.name>-workload-<svc>`                                  |                      |
 | AMW (Azure Monitor WS)    | `amw-<fleet.name>-<env>`                                              |                      |
 | DCE                       | `dce-<fleet.name>-<env>`                                              |                      |
@@ -74,6 +77,12 @@ from the cluster.yaml itself (required, immutable — see PLAN §3.4).
 | NSP                       | `nsp-<fleet.name>-<env>`                                              |                      |
 | Grafana PE                | `pe-amg-<fleet.name>-<env>`                                           |                      |
 | Action Group              | `ag-<fleet.name>-<env>`                                               |                      |
+| Prometheus DCR (cluster)  | `dcr-prom-<cluster.name>`                                             | per-cluster; binds env DCE → env AMW |
+| Prometheus DCRA           | `dcr-<cluster.name>` (on AKS resource)                                | per-cluster DCR association |
+| Prometheus DCE assoc      | `configurationAccessEndpoint` (on AKS resource, fixed name per ARM)   | per-cluster DCE association |
+| Prometheus rule group — node  | `NodeRecordingRulesRuleGroup-<cluster.name>`                      | per-cluster recording rules (node_exporter baseline) |
+| Prometheus rule group — k8s   | `KubernetesRecordingRulesRuleGroup-<cluster.name>`                | per-cluster recording rules (kube-state-metrics + cadvisor) |
+| Prometheus rule group — UX    | `UXRecordingRulesRuleGroup-<cluster.name>`                        | per-cluster recording rules (container insights compat) |
 | Runner ACR (per-pool)     | `acrfleetrunners` (module-derived from `postfix = "fleet-runners"`, hyphens stripped) | ≤ 50 chars, a-z0-9 |
 | Runner ACA environment    | `cae-fleet-runners`                                                   |                      |
 | Cluster DNS zone FQDN     | `<cluster.name>.<cluster.region>.<cluster.env>.<dns.fleet_root>`      |                      |

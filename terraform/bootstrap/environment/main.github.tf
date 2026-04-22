@@ -129,13 +129,22 @@ module "env_github" {
 locals {
   env_vars = merge(
     {
-      AZURE_CLIENT_ID         = module.env_github.identity.client_id
-      AZURE_TENANT_ID         = local.fleet.tenant_id
-      AZURE_SUBSCRIPTION_ID   = local.env_sub_id
-      TFSTATE_CONTAINER       = local.state_container_name
-      TFSTATE_STORAGE_ACCOUNT = local.derived.state_storage_account
-      TFSTATE_RESOURCE_GROUP  = local.derived.state_resource_group
-      FLEET_NAME              = local.fleet.name
+      AZURE_CLIENT_ID       = module.env_github.identity.client_id
+      AZURE_TENANT_ID       = local.fleet.tenant_id
+      AZURE_SUBSCRIPTION_ID = local.env_sub_id
+
+      # Fleet-env UAMI principalId — consumed by Stage 1 as the
+      # `Azure Kubernetes Service RBAC Cluster Admin` assignee so this
+      # same identity (which Stage 2 then runs as) can apply
+      # kubernetes_*/helm_release resources against a
+      # local-accounts-disabled cluster. Exposing principalId (not just
+      # clientId) avoids a Stage-1 `azuread_service_principal` data
+      # source lookup.
+      FLEET_ENV_UAMI_PRINCIPAL_ID = module.env_github.identity.principal_id
+      TFSTATE_CONTAINER           = local.state_container_name
+      TFSTATE_STORAGE_ACCOUNT     = local.derived.state_storage_account
+      TFSTATE_RESOURCE_GROUP      = local.derived.state_resource_group
+      FLEET_NAME                  = local.fleet.name
 
       # Env observability IDs — informational only; Stage 1 looks these up by
       # derived name at plan time (see PLAN §4.1 / Stage 1 azapi data sources).
