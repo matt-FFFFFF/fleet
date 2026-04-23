@@ -38,10 +38,12 @@ locals {
 
 # --- Entra directory role assignments ---------------------------------------
 #
-# Both UAMIs need `Application Administrator` in Entra to CRUD AAD apps
-# (Stage 0 uses fleet-stage0; env/team bootstrap flows use fleet-meta).
-# The Entra role assignments reference the module-created UAMIs via the
-# `environments["<key>"].identity.principal_id` outputs.
+# `fleet-stage0` needs `Application Administrator` in Entra to CRUD the Argo
+# + Kargo AAD apps it creates in Stage 0. `fleet-meta` does not: every
+# workflow it drives (env-bootstrap, team-bootstrap) creates UAMIs +
+# federated credentials, not AAD apps, so it holds no Entra role.
+# The role assignment references the module-created UAMI via the
+# `environments["stage0"].identity.principal_id` output.
 
 data "azuread_directory_role_templates" "all" {
 }
@@ -56,9 +58,4 @@ resource "azuread_directory_role" "app_admin" {
 resource "azuread_directory_role_assignment" "stage0_app_admin" {
   role_id             = azuread_directory_role.app_admin.object_id
   principal_object_id = module.fleet_repo.environments["stage0"].identity.principal_id
-}
-
-resource "azuread_directory_role_assignment" "meta_app_admin" {
-  role_id             = azuread_directory_role.app_admin.object_id
-  principal_object_id = module.fleet_repo.environments["meta"].identity.principal_id
 }

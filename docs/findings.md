@@ -5,44 +5,6 @@ Open design/implementation concerns that don't fit `PLAN.md` (intent) or
 work queued in the Rework program in `STATUS.md`. Close a finding by
 deleting its section when the matching rework item is completed.
 
-## F1 — Drop `Entra AppAdmin` from `fleet-meta`
-
-Tracked: Rework item 13.
-
-**Observation.** `terraform/bootstrap/fleet/main.identities.tf` grants
-the Entra directory role `Application Administrator` to both
-`fleet-stage0` and `fleet-meta`. The grant on `fleet-meta` is
-unexercised.
-
-**Evidence.** `grep -r "azuread_application\|azuread_service_principal"
-terraform/bootstrap/team terraform/bootstrap/environment` returns zero
-matches. The workflows `fleet-meta` drives (env-bootstrap,
-team-bootstrap) create UAMIs + federated credentials, not AAD apps.
-Per-team and per-env compute identity across the whole repo is pure
-UAMI + workload-identity FIC (GitHub OIDC → UAMI, Kubernetes
-ServiceAccount → UAMI).
-
-**Root cause.** The grant is symmetric-with-`fleet-stage0`
-placeholder, not a requirement. The commit that added it anticipated
-per-team AAD apps that never materialised because GitHub Actions
-supports UAMI-based OIDC federation natively — per-team/env service
-principals should never be the default.
-
-**Action.**
-
-1. Delete `azuread_directory_role_assignment.meta_app_admin` from
-   `terraform/bootstrap/fleet/main.identities.tf`.
-2. Delete the comment line in that file claiming "Both UAMIs need
-   Application Administrator".
-3. Strike "Entra AppAdmin" from the `fleet-meta` row in `PLAN.md`
-   §10 identities table.
-
-**Future.** If a workflow driven by `fleet-meta` ever legitimately
-needs AAD-app CRUD (e.g. a CSP integration that can't federate),
-prefer the Graph app-role `Application.ReadWrite.OwnedBy`
-(`18a4783c-866b-4cc7-a460-3d5e5662c884`) over the directory-wide
-`Application Administrator` role. See F2 for the pattern.
-
 ## F2 — Replace `Entra AppAdmin` on `fleet-stage0` with Graph `Application.ReadWrite.OwnedBy`
 
 Tracked: Rework item 14. Also fixes a latent bug.
