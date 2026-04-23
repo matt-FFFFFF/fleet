@@ -1,0 +1,100 @@
+name: env-bootstrap
+
+# PLAN §10: `workflow_dispatch`, inputs `{env}`. Runs
+# `terraform/bootstrap/environment` for a named env under the `fleet-meta`
+# GitHub environment (2-reviewer gate, `uami-fleet-meta` UAMI).
+#
+# Rare, high-blast-radius — used once per env at onboarding and again only
+# when the env-scope surface changes (address_space, hub_network_resource_id,
+# subscription move, new region under an existing env). Not a CI path.
+#
+# Produces the per-env repo variables consumed by Stage 1 apply:
+# `FLEET_ENV_UAMI_PRINCIPAL_ID`, `<ENV>_<REGION>_VNET_RESOURCE_ID`,
+# `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`,
+# `<ENV>_<REGION>_ROUTE_TABLE_RESOURCE_ID`, `MONITOR_WORKSPACE_ID`,
+# `DCE_ID`, `ACTION_GROUP_ID`. Those writes are owned by
+# `bootstrap/environment/main.github.tf` itself (it has the PAT-equivalent
+# via `uami-fleet-meta`'s GH App install), so no post-apply publish step
+# is needed in this workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: Environment to bootstrap (e.g. mgmt, nonprod, prod)
+        required: true
+        type: string
+      action:
+        description: Terraform action
+        required: true
+        default: plan
+        type: choice
+        options: [plan, apply]
+
+concurrency:
+  group: env-bootstrap-${{ inputs.env }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  bootstrap:
+    name: bootstrap env=${{ inputs.env }} (${{ inputs.action }})
+    runs-on: [self-hosted]
+    environment: fleet-meta
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read Terraform version
+        id: tf_version
+        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ steps.tf_version.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id:       ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: terraform init
+        working-directory: terraform/bootstrap/environment
+        env:
+          ENV: ${{ inputs.env }}
+        run: |
+          terraform init \
+            -backend-config="use_oidc=true" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="key=bootstrap/environment/${ENV}.tfstate"
+
+      - name: terraform ${{ inputs.action }}
+        working-directory: terraform/bootstrap/environment
+        env:
+          ARM_USE_OIDC: "true"
+          ENV: ${{ inputs.env }}
+          ACTION: ${{ inputs.action }}
+          TF_VAR_mgmt_vnet_resource_ids_json: ${{ vars.MGMT_VNET_RESOURCE_IDS }}
+        run: |
+          set -euo pipefail
+          case "$ACTION" in
+            plan)  terraform plan  -no-color -var "env=$ENV" ;;
+            apply) terraform apply -auto-approve       -var "env=$ENV" ;;
+            *) echo "unknown action: $ACTION" >&2; exit 1 ;;
+          esac
+
+      - name: Summarise outputs
+        if: inputs.action == 'apply'
+        working-directory: terraform/bootstrap/environment
+        run: |
+          echo "### env=${{ inputs.env }} outputs" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          terraform output -json | jq 'with_entries(.value |= .value)' \
+            >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

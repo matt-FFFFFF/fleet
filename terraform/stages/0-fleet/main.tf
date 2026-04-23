@@ -35,6 +35,11 @@ locals {
   aad   = local.fleet_doc.aad
   dns   = local.fleet_doc.dns
 
+  # Central BYO private DNS zone ids (PLAN §3.4). Stage 0 only needs the
+  # azurecr zone for the fleet ACR PE; other zones (blob, vaultcore,
+  # grafana) are consumed by bootstrap/fleet + bootstrap/environment.
+  pdz_azurecr = try(local.fleet_doc.networking.private_dns_zones.azurecr, null)
+
   # Derived names — must match docs/naming.md and the bootstrap HCL locals.
   derived = {
     acr_name = coalesce(
@@ -57,6 +62,16 @@ locals {
     # by name, not resource id, so its full id is reconstructed here.
     fleet_shared_rg_id = "/subscriptions/${local.fleet_doc.acr.subscription_id}/resourceGroups/${local.fleet_doc.acr.resource_group}"
   }
+
+  # Mgmt region co-located with the fleet ACR. Mirrors the
+  # `state_mgmt_region` / `fleet_kv_mgmt_region` / `runner_mgmt_region`
+  # selectors in `bootstrap/fleet` (same-region-else-first). Used by
+  # `main.acr.tf` to land the ACR PE in the co-located mgmt VNet's
+  # `snet-pe-fleet`. A precondition on the PE surfaces a mismatch early
+  # if no mgmt region matches `acr.location`.
+  acr_mgmt_region = contains(keys(var.mgmt_pe_fleet_subnet_ids), local.derived.acr_location) ? (
+    local.derived.acr_location
+  ) : keys(var.mgmt_pe_fleet_subnet_ids)[0]
 
   # --- Cluster inventory scan ------------------------------------------------
   #

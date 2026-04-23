@@ -1,0 +1,235 @@
+# modules/aks-cluster/main.tf
+#
+# Thin wrapper around `Azure/avm-res-containerservice-managedcluster/azurerm`
+# (azapi-based AVM module; keeps the repo provider-set invariant).
+#
+# Scope today (Phase E of PLAN §3.4) is the *networking* slice of
+# Stage 1: private cluster + api-server VNet integration on the /28
+# subnet, agent pools attached to the env-region ASG, Azure CNI
+# Overlay + Cilium with a fleet-wide shared pod CIDR
+# (100.64.0.0/16). Everything else (cluster
+# KV, UAMIs, role assignments, managed Prometheus DCR/DCRA + rules,
+# Kargo mgmt rotation) is deferred — see STATUS §4 Stage 1 TODOs and
+# PLAN §4 Stage 1 for the full surface.
+#
+# Hard-coded policy (NOT overridable per cluster — see variables.tf
+# header for the full list): Entra-only auth, OIDC issuer on, workload
+# identity on, CNI Overlay + Cilium, private cluster with VNet
+# integration, user-assigned managed identity (created here).
+
+# --- User-assigned managed identity for the cluster -------------------------
+#
+# Kubelet identity stays the AKS-managed default (needed for AcrPull
+# role assignment in the identity/RBAC phase); the *cluster* identity
+# is a fleet-owned UAMI so its principal id is stable and referenceable
+# across stage boundaries without an Azure data-source call. Name per
+# docs/naming.md: `uami-<cluster.name>-cp`.
+
+resource "azapi_resource" "cluster_uami" {
+  type      = "Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31"
+  name      = "uami-${var.cluster_name}-cp"
+  parent_id = var.parent_id
+  location  = var.location
+
+  body = {}
+
+  response_export_values = ["id", "properties.principalId", "properties.clientId"]
+
+  tags = var.tags
+}
+
+# --- Managed cluster --------------------------------------------------------
+
+module "aks" {
+  source  = "Azure/avm-res-containerservice-managedcluster/azurerm"
+  version = "~> 0.5"
+
+  enable_telemetry = false
+
+  name      = var.cluster_name
+  location  = var.location
+  parent_id = var.parent_id
+  tags      = var.tags
+
+  kubernetes_version = var.kubernetes_version
+
+  sku = {
+    name = "Base"
+    tier = var.sku_tier
+  }
+
+  # DNS prefix for the private cluster. Derived from the cluster name
+  # (AKS requires [a-z0-9-]{1,54}); truncate defensively.
+  dns_prefix = substr(var.cluster_name, 0, 54)
+
+  # --- Private cluster + API-server VNet integration -----------------------
+  api_server_access_profile = {
+    enable_private_cluster             = true
+    enable_private_cluster_public_fqdn = false
+    enable_vnet_integration            = true
+    subnet_id                          = var.api_subnet_id
+    # private_dns_zone left unset → AKS manages a system-owned private
+    # DNS zone for the apiserver FQDN. The per-cluster app-ingress zone
+    # authored by modules/cluster-dns is orthogonal (it resolves ingress
+    # hostnames, not the apiserver).
+    disable_run_command = false
+  }
+
+  # --- OIDC + workload identity (both required for Stage 2 FICs) ----------
+  oidc_issuer_profile = { enabled = true }
+  security_profile    = { workload_identity = { enabled = true } }
+
+  # --- Managed Prometheus addon (when enabled) -----------------------------
+  #
+  # Flipping `azureMonitorProfile.metrics.enabled=true` causes AKS to
+  # surface a system-managed data-collection identity on the cluster
+  # (visible as the `addonIdentities["azure-monitor-metrics"]`
+  # principalId after apply). The DCR/DCRA pair in
+  # modules/cluster-monitoring binds this cluster to the env-scope AMW.
+  azure_monitor_profile = var.managed_prometheus_enabled ? {
+    metrics = { enabled = true }
+  } : null
+
+  # --- Entra-only auth ----------------------------------------------------
+  enable_rbac            = true
+  disable_local_accounts = true
+  aad_profile = {
+    managed                = true
+    enable_azure_rbac      = true
+    tenant_id              = var.aad.tenant_id
+    admin_group_object_ids = var.aad.admin_group_object_ids
+  }
+
+  # --- Identity ----------------------------------------------------------
+  managed_identities = {
+    system_assigned            = false
+    user_assigned_resource_ids = [azapi_resource.cluster_uami.output.id]
+  }
+
+  # --- Upgrade / autoscaler passthrough ----------------------------------
+  auto_upgrade_profile = var.auto_upgrade_profile
+  auto_scaler_profile  = var.auto_scaler_profile
+
+  # --- Network profile: CNI Overlay + Cilium, shared CGNAT pod_cidr ------
+  network_profile = {
+    network_plugin      = "azure"
+    network_plugin_mode = "overlay"
+    network_dataplane   = "cilium"
+    network_policy      = "cilium"
+    # Egress is forced through the hub via userDefinedRouting (UDR): the
+    # node subnet's route table (authored in Stage 1) points 0.0.0.0/0
+    # at the hub firewall's private IP, and AKS must be told not to
+    # provision a cluster-owned outbound Load Balancer / NAT Gateway for
+    # egress. Setting this to "userDefinedRouting" is the only value
+    # that is compatible with a hub-and-spoke topology where the spoke
+    # has no public egress of its own. This is set at cluster creation
+    # and cannot be changed later (ARM-level immutability).
+    outbound_type     = "userDefinedRouting"
+    load_balancer_sku = "standard"
+    # Pod CIDR is fleet-wide constant. Pod IPs are non-routable outside
+    # the cluster (CNI Overlay SNATs to the node IP on egress), so
+    # cross-cluster uniqueness buys nothing: Log Analytics / Prometheus
+    # queries key on `_ResourceId` / cluster name rather than source IP.
+    # Dropping per-cluster uniqueness collapses the Phase-B pod_cidr_slot
+    # machinery (`/12` envelope, loader derivation, fleet-identity
+    # passthrough). If ClusterMesh or cross-cluster pod routing is
+    # introduced later, this constant becomes an input again. See
+    # PLAN §3.4 Implementation status + docs/naming.md.
+    pod_cidr = "100.64.0.0/16"
+    # service_cidr is the in-cluster virtual ClusterIP pool. It never
+    # appears on any wire — kube-proxy (here: Cilium) DNATs ClusterIP
+    # → pod IP at dispatch. BUT: if service_cidr overlaps any VNet
+    # address_space reachable from pods, the cluster DNATs real traffic
+    # to random pods (e.g. service_cidr=10.0.0.0/16 collides with any
+    # adopter VNet addressed out of RFC-1918 10/8). To guarantee
+    # disjointness from any adopter VNet, service_cidr is reserved
+    # inside the fleet's CGNAT envelope at 100.127.0.0/16 (the top /16
+    # of 100.64.0.0/10). Disjoint from the shared pod /16 above. See
+    # PLAN §3.4 + docs/networking.md.
+    service_cidr   = "100.127.0.0/16"
+    dns_service_ip = "100.127.0.10"
+  }
+
+  # --- System (default) node pool ----------------------------------------
+  default_agent_pool = {
+    name                = "systempool"
+    vm_size             = var.system_pool.vm_size
+    vnet_subnet_id      = var.node_subnet_id
+    enable_auto_scaling = var.system_pool.enable_auto_scaling
+    min_count           = var.system_pool.min_count
+    max_count           = var.system_pool.max_count
+    availability_zones  = var.system_pool.zones
+    os_disk_size_gb     = var.system_pool.os_disk_size_gb
+    os_disk_type        = var.system_pool.os_disk_type
+    max_pods            = var.system_pool.max_pods
+    mode                = "System"
+    node_labels         = var.system_pool.node_labels
+    node_taints         = var.system_pool.node_taints
+    network_profile = {
+      application_security_groups = var.node_asg_ids
+    }
+    tags = var.tags
+  }
+}
+
+# --- Optional apps node pool -----------------------------------------------
+#
+# Separate submodule call per AVM v0.5.x — the parent module exposes only
+# `default_agent_pool`. Additional pools are created via the sibling
+# `modules/agentpool` submodule; `parent_id` points at the cluster
+# resource and an explicit `depends_on` ensures it runs after the
+# cluster creates (the ARM API rejects early pool submissions).
+
+module "apps_pool" {
+  source  = "Azure/avm-res-containerservice-managedcluster/azurerm//modules/agentpool"
+  version = "~> 0.5"
+
+  count = var.apps_pool == null ? 0 : 1
+
+  name      = "appspool"
+  parent_id = module.aks.resource_id
+
+  vm_size             = var.apps_pool.vm_size
+  mode                = "User"
+  vnet_subnet_id      = var.node_subnet_id
+  enable_auto_scaling = var.apps_pool.enable_auto_scaling
+  min_count           = var.apps_pool.min_count
+  max_count           = var.apps_pool.max_count
+  availability_zones  = var.apps_pool.zones
+  os_disk_size_gb     = var.apps_pool.os_disk_size_gb
+  os_disk_type        = var.apps_pool.os_disk_type
+  os_sku              = "AzureLinux"
+  os_type             = "Linux"
+  node_labels         = var.apps_pool.node_labels
+  node_taints         = var.apps_pool.node_taints
+
+  network_profile = {
+    application_security_groups = var.node_asg_ids
+  }
+
+  tags = var.tags
+
+  depends_on = [module.aks]
+}
+
+# --- Optional scheduled maintenance window ---------------------------------
+#
+# Authored via the sibling `modules/maintenanceconfiguration` AVM
+# submodule; `parent_id` points at the cluster and an explicit
+# `depends_on` defers submission until the cluster is ready. Named
+# `aksManagedAutoUpgradeSchedule` — the magic name AKS expects for
+# the control-plane + node-image auto-upgrade schedule (governed by
+# `auto_upgrade_profile` above).
+
+module "maintenance" {
+  source  = "Azure/avm-res-containerservice-managedcluster/azurerm//modules/maintenanceconfiguration"
+  version = "~> 0.5"
+
+  count = var.maintenance_window == null ? 0 : 1
+
+  name               = "aksManagedAutoUpgradeSchedule"
+  parent_id          = module.aks.resource_id
+  maintenance_window = var.maintenance_window
+
+  depends_on = [module.aks]
+}

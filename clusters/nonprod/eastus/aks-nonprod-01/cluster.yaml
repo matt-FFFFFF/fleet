@@ -3,11 +3,7 @@ cluster:
   resource_group: rg-aks-nonprod-eastus-01
 
 networking:
-  vnet_id: <vnet-nonprod-resource-id>
-  subnet_name: snet-aks
-  dns_linked_vnet_ids:
-    - <vnet-hub-nonprod-resource-id>
-    - <vnet-nonprod-resource-id>
+  subnet_slot: 0                                    # /24 slot inside nonprod-eastus VNet (PLAN §3.4)
 
 platform:
   argocd:

@@ -25,19 +25,70 @@ tenant_id          = "__PROMPT__" # Entra tenant GUID
 # ---- GitHub -----------------------------------------------------------------
 
 github_org         = "__PROMPT__"
-github_repo        = "__PROMPT__"         # fleet repo name
-team_template_repo = "__PROMPT__"         # team template repo name
-codeowners_owner   = ""                   # CODEOWNERS owner: empty → @<github_org>; else `<org>/<team>` or `<user>`
+github_repo        = "__PROMPT__" # fleet repo name
+team_template_repo = "__PROMPT__" # team template repo name
+codeowners_owner   = ""           # CODEOWNERS owner: empty → @<github_org>; else `<org>/<team>` or `<user>`
 
 # ---- Azure ------------------------------------------------------------------
 
 primary_region = "eastus"
 
-sub_shared  = "__PROMPT__" # subscription GUID — shared (ACR / tfstate / fleet KV)
-sub_mgmt    = "__PROMPT__" # subscription GUID — mgmt environment
-sub_nonprod = "__PROMPT__" # subscription GUID — nonprod environment
-sub_prod    = "__PROMPT__" # subscription GUID — prod environment
-
 # ---- DNS --------------------------------------------------------------------
 
 dns_fleet_root = "__PROMPT__" # e.g. int.acme.example — parent of every per-cluster private zone
+
+# ---- Networking: central BYO private DNS zones (PLAN §3.4) ------------------
+#
+# BYO privatelink zones — never created by this repo, only referenced by id.
+# Every PE (tfstate SA, fleet KV, fleet ACR, env Grafana) registers into the
+# matching central zone.
+
+networking_pdz_blob      = "__PROMPT__" # BYO privatelink.blob.core.windows.net zone id
+networking_pdz_vaultcore = "__PROMPT__" # BYO privatelink.vaultcore.azure.net zone id
+networking_pdz_azurecr   = "__PROMPT__" # BYO privatelink.azurecr.io zone id
+networking_pdz_grafana   = "__PROMPT__" # BYO privatelink.grafana.azure.com zone id
+
+# ---- Environments (PLAN §3.1 / §3.4) ----------------------------------------
+#
+# Per-env identity + networking, keyed by env name. Edit this map directly:
+# add entries (e.g. `dev`, `stage`, `qa`) as needed, remove any you don't
+# want. The init-fleet.sh prompt flow does not walk nested map values —
+# fill in GUIDs and hub resource IDs here before running init, or after a
+# first selftest run.
+#
+# Each entry:
+#   subscription_id           Azure subscription GUID for this env.
+#   address_space             VNet CIDR in `primary_region`. RFC1918, /20
+#                             or wider, strictly aligned. Minimum /20.
+#                             Per-cluster subnets carved by Stage 1.
+#   hub_network_resource_id   (nullable on every env, incl. mgmt) ARM id
+#                             of the adopter hub VNet this env-region
+#                             peers to. Set to `null` to opt out of hub
+#                             peering for this env-region (adopter-
+#                             managed routing). Mgmt↔env peering is
+#                             implicit via bootstrap/environment
+#                             iterating networking.envs.mgmt.regions —
+#                             no selector variable needed.
+#
+# Minimum shape: one entry keyed `mgmt` plus at least one non-mgmt env.
+# Pod CIDR is the same /16 in every cluster (100.64.0.0/16, hard-coded in
+# modules/aks-cluster). Pod IPs are non-routable via CNI Overlay + Cilium;
+# cross-cluster disambiguation comes from _ResourceId / cluster name.
+
+environments = {
+  mgmt = {
+    subscription_id         = "__PROMPT__" # GUID — mgmt subscription
+    address_space           = "10.50.0.0/20"
+    hub_network_resource_id = "__PROMPT__" # /subscriptions/.../virtualNetworks/<vnet-hub-mgmt>, or null to opt out
+  }
+  nonprod = {
+    subscription_id         = "__PROMPT__" # GUID — nonprod subscription
+    address_space           = "10.70.0.0/20"
+    hub_network_resource_id = "__PROMPT__" # /subscriptions/.../virtualNetworks/<vnet-hub-nonprod>, or null to opt out
+  }
+  prod = {
+    subscription_id         = "__PROMPT__" # GUID — prod subscription
+    address_space           = "10.80.0.0/20"
+    hub_network_resource_id = "__PROMPT__" # /subscriptions/.../virtualNetworks/<vnet-hub-prod>, or null to opt out
+  }
+}

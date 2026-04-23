@@ -1,0 +1,254 @@
+name: validate
+
+# Light-weight structural + syntactic checks on every PR. No Azure or
+# GitHub-App credentials — checks are safe on `ubuntu-latest` and cheap
+# enough to be a required status check without gating on cloud flakiness.
+#
+# PLAN §10 lists many more checks under `validate.yaml` (JSON-schema for
+# cluster.yaml + teams/*.yaml, team-config linter, helm lint, kargo lint).
+# Those require inputs that don't exist yet (schemas, team directory,
+# platform-gitops/components, kargo promotion directory). Each is tracked
+# as a STATUS.md §10 sub-item and will land in its own unit of work when
+# the required inputs materialise.
+#
+# What this workflow does today:
+#
+#   - `terraform fmt -check -recursive`                 — style gate.
+#   - `tflint --recursive`                              — naming + unused
+#                                                         + version-pin
+#                                                         enforcement.
+#   - `yamllint clusters/`                              — YAML well-formed.
+#   - `validate-subnet-slots.sh`                        — networking §3.4
+#                                                         Phase F sanity.
+#
+# Template vs. adopter mode: `init-fleet.sh` leaves this workflow in the
+# adopter repo (it's genuinely useful post-adoption). The template-only
+# render step (`clusters/_fleet.yaml` from `.github/fixtures/adopter-
+# test.tfvars`) is gated on the presence of `init/` + the fixture, so
+# adopter runs skip it and instead assert the committed `_fleet.yaml`
+# exists.
+
+on:
+  pull_request:
+    paths:
+      - 'clusters/**'
+      - 'terraform/**'
+      - 'init/**'
+      - '.tflint.hcl'
+      - '.yamllint'
+      - '.github/scripts/validate-subnet-slots.sh'
+      - '.github/scripts/check-naming-parity.sh'
+      - '.github/scripts/naming-parity/**'
+      - '.github/workflows/validate.yaml'
+      - '.github/fixtures/adopter-test.tfvars'
+      - '.terraform-version'
+  push:
+    branches: [main]
+    paths:
+      - 'clusters/**'
+      - 'terraform/**'
+      - '.tflint.hcl'
+      - '.yamllint'
+      - '.github/scripts/validate-subnet-slots.sh'
+      - '.github/scripts/check-naming-parity.sh'
+      - '.github/scripts/naming-parity/**'
+      - '.terraform-version'
+
+jobs:
+  fmt:
+    name: terraform fmt
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read Terraform version
+        id: tf_version
+        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ steps.tf_version.outputs.version }}
+          terraform_wrapper: false
+
+      - name: terraform fmt -check -recursive
+        run: terraform fmt -check -recursive -diff terraform/ init/
+
+  tflint:
+    name: tflint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read Terraform version
+        id: tf_version
+        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ steps.tf_version.outputs.version }}
+          terraform_wrapper: false
+
+      # tflint parses HCL; the bootstrap stacks' `yamldecode(file(...))`
+      # calls need `clusters/_fleet.yaml` to exist. In template-mode (init/
+      # + fixture present) we render from the test fixture; adopter repos
+      # assert the committed file is present.
+      - name: Detect template-mode render inputs
+        id: render_check
+        run: |
+          if [[ -d init && -f .github/fixtures/adopter-test.tfvars ]]; then
+            echo "template_mode=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "template_mode=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Render clusters/_fleet.yaml (template-mode only)
+        if: steps.render_check.outputs.template_mode == 'true'
+        working-directory: init
+        run: |
+          terraform init -backend=false
+          terraform apply -auto-approve \
+            -var-file=../.github/fixtures/adopter-test.tfvars \
+            -target=local_file.fleet_yaml
+
+      - name: Verify committed _fleet.yaml (adopter-mode only)
+        if: steps.render_check.outputs.template_mode == 'false'
+        run: test -f clusters/_fleet.yaml
+
+      - name: Setup tflint
+        uses: terraform-linters/setup-tflint@b480b8fcdaa6f2c577f8e4fa799e89e756bb7c93 # v6.2.2
+        with:
+          tflint_version: v0.61.0
+
+      - name: Cache tflint plugins
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.tflint.d/plugins
+          key: tflint-${{ runner.os }}-${{ hashFiles('.tflint.hcl') }}
+          restore-keys: |
+            tflint-${{ runner.os }}-
+
+      - name: Install plugins
+        run: tflint --init --config=$PWD/.tflint.hcl
+
+      - name: Run tflint (recursive)
+        run: tflint --recursive --config=$PWD/.tflint.hcl --color
+
+  yamllint:
+    name: yamllint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install yamllint
+        run: pip install --quiet yamllint==1.35.1
+
+      - name: Run yamllint
+        # Scope to cluster config + fleet-wide yamls — the surface that
+        # templating + `config-loader/load.sh` operate on. Platform
+        # gitops config (platform-gitops/) is expected under a future
+        # sub-item (see STATUS §10) with its own targeted lint.
+        run: yamllint --strict clusters/
+
+  subnet-slots:
+    name: subnet slots
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Full history so the `BASE_REF` immutability check can
+          # `git show <base>:clusters/<env>/<region>/<name>/cluster.yaml`
+          # without partial-clone misses.
+          fetch-depth: 0
+
+      - name: Read Terraform version
+        id: tf_version
+        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ steps.tf_version.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Detect template-mode render inputs
+        id: render_check
+        run: |
+          if [[ -d init && -f .github/fixtures/adopter-test.tfvars ]]; then
+            echo "template_mode=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "template_mode=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Render clusters/_fleet.yaml (template-mode only)
+        if: steps.render_check.outputs.template_mode == 'true'
+        working-directory: init
+        run: |
+          terraform init -backend=false
+          terraform apply -auto-approve \
+            -var-file=../.github/fixtures/adopter-test.tfvars \
+            -target=local_file.fleet_yaml
+
+      - name: Verify committed _fleet.yaml (adopter-mode only)
+        if: steps.render_check.outputs.template_mode == 'false'
+        run: test -f clusters/_fleet.yaml
+
+      - name: Verify yq
+        run: yq --version
+
+      - name: Validate subnet slots
+        env:
+          BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
+        run: .github/scripts/validate-subnet-slots.sh
+
+  naming-parity:
+    name: naming parity
+    runs-on: ubuntu-24.04
+    # Diffs `terraform/config-loader/load.sh` (shell) against
+    # `terraform/modules/fleet-identity/` (HCL) over the shared
+    # derivation surface (docs/naming.md). Per AGENTS.md rule 5 the two
+    # implementations are the naming contract; any divergence fails CI.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read Terraform version
+        id: tf_version
+        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ steps.tf_version.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Detect template-mode render inputs
+        id: render_check
+        run: |
+          if [[ -d init && -f .github/fixtures/adopter-test.tfvars ]]; then
+            echo "template_mode=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "template_mode=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Render clusters/_fleet.yaml (template-mode only)
+        if: steps.render_check.outputs.template_mode == 'true'
+        working-directory: init
+        run: |
+          terraform init -backend=false
+          terraform apply -auto-approve \
+            -var-file=../.github/fixtures/adopter-test.tfvars \
+            -target=local_file.fleet_yaml
+
+      - name: Verify committed _fleet.yaml (adopter-mode only)
+        if: steps.render_check.outputs.template_mode == 'false'
+        run: test -f clusters/_fleet.yaml
+
+      - name: Diff load.sh vs fleet-identity
+        run: .github/scripts/check-naming-parity.sh

@@ -12,14 +12,21 @@
 # For Phase 1 the values default to placeholder strings.
 
 locals {
-  amw_name     = "amw-${local.fleet.name}-${var.env}"
-  dce_name     = "dce-${local.fleet.name}-${var.env}"
-  amg_name     = "amg-${local.fleet.name}-${var.env}"
-  nsp_name     = "nsp-${local.fleet.name}-${var.env}"
-  pe_name      = "pe-amg-${local.fleet.name}-${var.env}"
-  ag_name      = "ag-${local.fleet.name}-${var.env}"
-  ag_short     = substr("${local.observ.action_group.short_name_prefix}${var.env}", 0, 12)
-  pdns_grafana = local.observ.network_isolation.grafana_private_dns_zone
+  amw_name = "amw-${local.fleet.name}-${var.env}"
+  dce_name = "dce-${local.fleet.name}-${var.env}"
+  amg_name = "amg-${local.fleet.name}-${var.env}"
+  nsp_name = "nsp-${local.fleet.name}-${var.env}"
+  pe_name  = "pe-amg-${local.fleet.name}-${var.env}"
+  ag_name  = "ag-${local.fleet.name}-${var.env}"
+  ag_short = substr("${local.observ.action_group.short_name_prefix}${var.env}", 0, 12)
+
+  # Grafana stack is single-region per env (anchored at local.location).
+  # Pin its PE to that region's `snet-pe-env`. The region must appear
+  # in `networking.envs.<env>.regions` — this is asserted in
+  # main.network.tf's `terraform_data.network_preconditions`, but we
+  # add a focused precondition on the PE itself so a missing region
+  # fails with an obvious error rather than `null` indexing later.
+  grafana_pe_subnet_id = lookup(local.env_snet_pe_env_id_by_region, local.env_location, null)
 }
 
 # --- NSP ---------------------------------------------------------------------
@@ -172,7 +179,12 @@ resource "azapi_resource" "amg" {
   response_export_values = ["id", "identity.principalId", "properties.endpoint"]
 }
 
-# Grafana PE + PDNS
+# Grafana PE + central DNS zone registration (PLAN §3.4 / Phase D).
+# Anchored to the env's `snet-pe-env` in `local.env_location`. The
+# `pdns_grafana` central BYO zone is provided by the adopter under
+# `networking.private_dns_zones.grafana` and linked once at the fleet
+# scope (out of repo); this stage only registers the PE's A-record
+# into it via the dnsZoneGroup below.
 resource "azapi_resource" "amg_pe" {
   type      = "Microsoft.Network/privateEndpoints@2023-11-01"
   name      = local.pe_name
@@ -181,7 +193,7 @@ resource "azapi_resource" "amg_pe" {
 
   body = {
     properties = {
-      subnet = { id = local.environment.networking.grafana_pe_subnet_id }
+      subnet = { id = local.grafana_pe_subnet_id }
       privateLinkServiceConnections = [{
         name = "amg"
         properties = {
@@ -192,29 +204,15 @@ resource "azapi_resource" "amg_pe" {
     }
   }
   response_export_values = ["id"]
-}
 
-resource "azapi_resource" "pdns_grafana" {
-  type      = "Microsoft.Network/privateDnsZones@2020-06-01"
-  name      = local.pdns_grafana
-  parent_id = azapi_resource.rg_env_obs.id
-  location  = "global"
-
-  body = { properties = {} }
-}
-
-resource "azapi_resource" "pdns_grafana_links" {
-  for_each = toset(local.environment.networking.grafana_pe_linked_vnet_ids)
-
-  type      = "Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01"
-  name      = "link-${basename(each.value)}"
-  parent_id = azapi_resource.pdns_grafana.id
-  location  = "global"
-
-  body = {
-    properties = {
-      registrationEnabled = false
-      virtualNetwork      = { id = each.value }
+  lifecycle {
+    precondition {
+      condition     = local.grafana_pe_subnet_id != null
+      error_message = "bootstrap/environment: Grafana PE region (${local.env_location}) has no `snet-pe-env` subnet. Either declare networking.envs.${var.env}.regions.${local.env_location} in clusters/_fleet.yaml or set var.location to a declared region. PLAN §3.4."
+    }
+    precondition {
+      condition     = local.networking_central.pdz_grafana != null
+      error_message = "clusters/_fleet.yaml: networking.private_dns_zones.grafana is required for Grafana PE A-record registration. See docs/adoption.md §5.1."
     }
   }
 }
@@ -229,7 +227,7 @@ resource "azapi_resource" "amg_pe_dns_zone_group" {
       privateDnsZoneConfigs = [{
         name = "grafana"
         properties = {
-          privateDnsZoneId = azapi_resource.pdns_grafana.id
+          privateDnsZoneId = local.networking_central.pdz_grafana
         }
       }]
     }

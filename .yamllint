@@ -1,0 +1,30 @@
+# yamllint config — baseline. Strict but practical for the cluster config
+# surface (`clusters/**`). Extended or split per-scope when other YAML
+# surfaces (platform-gitops/) come online.
+extends: default
+
+rules:
+  line-length:
+    max: 160
+    level: warning
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: disable
+  document-start: disable
+  truthy:
+    allowed-values: ['true', 'false', 'null', '~']
+    check-keys: false
+  indentation:
+    spaces: 2
+    indent-sequences: consistent
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  brackets:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+
+# Skip rendered/fixture outputs + .terraform state.
+ignore: |
+  clusters/_fleet.yaml
+  **/.terraform/**

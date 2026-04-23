@@ -39,6 +39,21 @@ output "fleet_repo_full_name" {
   value = module.fleet_repo.full_name
 }
 
+output "mgmt_vnet_resource_ids" {
+  description = "Per-region mgmt VNet resource ids, keyed by region (e.g. { eastus = \"/subscriptions/.../virtualNetworks/vnet-<fleet>-mgmt-eastus\" }). Consumed by bootstrap/environment (env=mgmt branch carves cluster-workload subnets as azapi children; non-mgmt envs resolve reverse-peering target via same-region-else-first over the mgmt regions this map lists) and stages/1-cluster (cluster DNS zone VNet link in the cluster's region). Published on the fleet-meta GH environment as MGMT_VNET_RESOURCE_IDS (jsonencoded)."
+  value       = local.mgmt_vnet_ids
+}
+
+output "mgmt_snet_pe_fleet_ids" {
+  description = "Per-region mgmt VNet snet-pe-fleet subnet resource ids (tfstate SA / fleet KV / fleet ACR PE landing subnets), keyed by region. Published as MGMT_PE_FLEET_SUBNET_IDS (jsonencoded)."
+  value       = local.mgmt_snet_pe_fleet_ids
+}
+
+output "mgmt_snet_runners_ids" {
+  description = "Per-region mgmt VNet snet-runners subnet resource ids (ACA-delegated self-hosted GitHub Actions runner pool subnets), keyed by region. Published as MGMT_RUNNERS_SUBNET_IDS (jsonencoded)."
+  value       = local.mgmt_snet_runners_ids
+}
+
 output "team_template_repo_full_name" {
   value = module.team_template_repo.full_name
 }

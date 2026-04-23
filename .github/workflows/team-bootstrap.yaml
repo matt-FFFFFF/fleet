@@ -1,0 +1,105 @@
+name: team-bootstrap
+
+# PLAN §10: push-to-main trigger on new `platform-gitops/config/teams/*.yaml`
+# files only. Detects newly-added team YAMLs (diff against previous main).
+# Derives team name from the filename basename (no `name:` field in the
+# file — see PLAN §7). Runs `terraform/bootstrap/team` per new team under
+# the `fleet-meta` environment.
+#
+# Non-new edits (modifications to an existing team file) do NOT trigger
+# this workflow — team updates flow through the regular `validate.yaml`
+# lint + Argo reconcile path. Only creation triggers Terraform (repo
+# creation, branch protection, Kargo App install are one-shot).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'platform-gitops/config/teams/*.yaml'
+      - '.github/workflows/team-bootstrap.yaml'
+
+concurrency:
+  group: team-bootstrap-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  detect:
+    name: detect new teams
+    runs-on: ubuntu-24.04
+    outputs:
+      teams: ${{ steps.detect.outputs.teams }}
+      any:   ${{ steps.detect.outputs.any }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Detect newly-added team YAMLs
+        id: detect
+        run: |
+          set -euo pipefail
+          # --diff-filter=A → Added files only. HEAD~1..HEAD is the merge
+          # commit; any team YAML that is new at HEAD and absent at HEAD~1
+          # lands in the list.
+          added="$(git diff --diff-filter=A --name-only HEAD~1 HEAD -- \
+            'platform-gitops/config/teams/*.yaml' || true)"
+          # Emit `{name: <basename-without-.yaml>, path: <full>}` per entry.
+          teams="$(
+            echo "$added" \
+              | while IFS= read -r p; do
+                  [[ -z "$p" ]] && continue
+                  name="$(basename "$p" .yaml)"
+                  jq -cn --arg name "$name" --arg path "$p" \
+                    '{name:$name, path:$path}'
+                done \
+              | jq -cs .
+          )"
+          echo "$teams" | jq .
+          echo "teams=$teams" >> "$GITHUB_OUTPUT"
+          echo "any=$(echo "$teams" | jq 'length > 0')" >> "$GITHUB_OUTPUT"
+
+  bootstrap:
+    name: bootstrap team=${{ matrix.team.name }}
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: [self-hosted]
+    environment: fleet-meta
+    strategy:
+      fail-fast: false
+      matrix:
+        team: ${{ fromJSON(needs.detect.outputs.teams) }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read Terraform version
+        id: tf_version
+        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ steps.tf_version.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id:       ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: terraform init + apply
+        working-directory: terraform/bootstrap/team
+        env:
+          ARM_USE_OIDC: "true"
+          TEAM: ${{ matrix.team.name }}
+        run: |
+          terraform init \
+            -backend-config="use_oidc=true" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="key=bootstrap/team/${TEAM}.tfstate"
+          terraform apply -auto-approve -var "team=${TEAM}"

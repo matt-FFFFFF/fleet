@@ -47,7 +47,7 @@ vendored copy.
 
 Rewritten to the repo-wide convention (pessimistic-minor, per AGENTS.md §6):
 
-- Terraform `~> 1.11`
+- Terraform `~> 1.14`
 - `integrations/github ~> 6.11`
 - `Azure/azapi ~> 2.9`
 - `hashicorp/random ~> 3.8`

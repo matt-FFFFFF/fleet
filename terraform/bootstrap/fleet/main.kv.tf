@@ -57,16 +57,23 @@ resource "azapi_resource" "fleet_kv" {
   }
 
   response_export_values = ["id", "properties.vaultUri"]
-
-  lifecycle {
-    precondition {
-      condition     = local.networking.fleet_kv_pe_subnet_id != null && local.networking.fleet_kv_pe_subnet_id != ""
-      error_message = "networking.fleet_kv.private_endpoint.subnet_id must be set in clusters/_fleet.yaml before applying bootstrap/fleet. See docs/adoption.md §5.1."
-    }
-  }
 }
 
 # --- Private endpoint --------------------------------------------------------
+#
+# Lands in the `snet-pe-fleet` subnet of the mgmt VNet co-located with
+# the fleet KV (by `fleet_kv_location`, defaulting to mgmt's scalar
+# location). PLAN §3.4. A-record registers in the adopter-owned central
+# `privatelink.vaultcore.azure.net` zone from
+# `networking.private_dns_zones.vaultcore`.
+
+locals {
+  # Pick the mgmt region matching the KV's location; fall back to the
+  # first mgmt region. The precondition below surfaces a mismatch early.
+  fleet_kv_mgmt_region = contains(keys(local.mgmt_vnet_ids), local.derived.fleet_kv_location) ? (
+    local.derived.fleet_kv_location
+  ) : keys(local.mgmt_vnet_ids)[0]
+}
 
 resource "azapi_resource" "fleet_kv_pe" {
   type      = "Microsoft.Network/privateEndpoints@2023-11-01"
@@ -77,7 +84,7 @@ resource "azapi_resource" "fleet_kv_pe" {
   body = {
     properties = {
       subnet = {
-        id = local.networking.fleet_kv_pe_subnet_id
+        id = local.mgmt_snet_pe_fleet_ids[local.fleet_kv_mgmt_region]
       }
       privateLinkServiceConnections = [
         {
@@ -91,12 +98,17 @@ resource "azapi_resource" "fleet_kv_pe" {
     }
   }
 
+  lifecycle {
+    precondition {
+      condition     = contains(keys(local.mgmt_vnet_ids), local.derived.fleet_kv_location)
+      error_message = "clusters/_fleet.yaml: no networking.envs.mgmt.regions.<region> entry matches the fleet KV location (`keyvault.location` resolves to ${local.derived.fleet_kv_location}); the fleet KV PE cannot land in a co-located mgmt VNet."
+    }
+  }
+
   response_export_values = ["id"]
 }
 
 resource "azapi_resource" "fleet_kv_pe_dns_zone_group" {
-  count = local.networking.fleet_kv_pe_dns_zone_id != null && local.networking.fleet_kv_pe_dns_zone_id != "" ? 1 : 0
-
   type      = "Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01"
   name      = "default"
   parent_id = azapi_resource.fleet_kv_pe.id
@@ -107,7 +119,7 @@ resource "azapi_resource" "fleet_kv_pe_dns_zone_group" {
         {
           name = "privatelink-vaultcore-azure-net"
           properties = {
-            privateDnsZoneId = local.networking.fleet_kv_pe_dns_zone_id
+            privateDnsZoneId = local.networking_central.pdz_vaultcore
           }
         }
       ]
@@ -126,7 +138,7 @@ resource "azapi_resource" "fleet_kv_pe_dns_zone_group" {
 # graph as the UAMI, so the PUT succeeds in a single apply.
 
 locals {
-  role_kv_secrets_user_guid = "4633458b-17de-4321-8a42-03b4c0a0ebb2"
+  role_kv_secrets_user_guid = "4633458b-17de-408a-b874-0445c86b69e6"
 }
 
 resource "azapi_resource" "ra_runner_kv_secrets_user" {
@@ -151,4 +163,44 @@ output "fleet_kv_id" {
 output "fleet_kv_vault_uri" {
   description = "Data-plane URI of the fleet Key Vault (https://<name>.vault.azure.net/)."
   value       = azapi_resource.fleet_kv.output.properties.vaultUri
+}
+
+# --- Seed fleet-runners GitHub App PEM --------------------------------------
+#
+# The runner Container App Job (main.runner.tf) references
+# `<kv>/secrets/fleet-runners-app-pem` as a KV reference. ACA validates
+# the reference at PUT time by attempting to fetch the secret via the
+# attached UAMI, so the secret must exist before the job is created.
+#
+# Seeded via the KV data-plane API (7.4) so the PEM travels over the PE
+# and never touches ARM / state. `sensitive_body` is a write-only schema
+# attribute: the value is sent on create/update but never stored in
+# Terraform state. `sensitive_body_version` is the only change-detection
+# signal; bump `var.fleet_runners_app_pem_version` on rotation.
+#
+# Requires the executor (operator workstation or a runner) to have
+# private-network reach to `<vault>.vault.azure.net`. With the KV
+# PE + DNS zone group in place, a VPN / jump host / Bastion session
+# into the mgmt VNet is sufficient.
+
+resource "azapi_data_plane_resource" "fleet_runners_pem_secret" {
+  type      = "Microsoft.KeyVault/vaults/secrets@7.4"
+  parent_id = azapi_resource.fleet_kv.output.properties.vaultUri
+  name      = local.github_app_fleet_runners.private_key_kv_secret
+
+  body = {
+    contentType = "application/x-pem-file"
+  }
+
+  sensitive_body = {
+    value = var.fleet_runners_app_pem
+  }
+
+  sensitive_body_version = {
+    value = var.fleet_runners_app_pem_version
+  }
+
+  depends_on = [
+    azapi_resource.fleet_kv_pe_dns_zone_group,
+  ]
 }

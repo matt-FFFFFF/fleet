@@ -17,11 +17,16 @@ locals {
     github_repo        = var.github_repo
     team_template_repo = var.team_template_repo
     primary_region     = var.primary_region
-    sub_shared         = var.sub_shared
-    sub_mgmt           = var.sub_mgmt
-    sub_nonprod        = var.sub_nonprod
-    sub_prod           = var.sub_prod
     dns_fleet_root     = var.dns_fleet_root
+    # Networking (PLAN §3.1 / §3.4) — BYO central PDZs; per-env subscription
+    # IDs, VNet address_space values, per-env hub resource IDs, and the
+    # mgmt env's peering-target env all travel inside `environments`.
+    # The template iterates with %{ for env, cfg in environments } blocks.
+    environments             = var.environments
+    networking_pdz_blob      = var.networking_pdz_blob
+    networking_pdz_vaultcore = var.networking_pdz_vaultcore
+    networking_pdz_azurecr   = var.networking_pdz_azurecr
+    networking_pdz_grafana   = var.networking_pdz_grafana
     # CODEOWNERS default-rule owner. Empty input falls back to the org/user
     # itself (guaranteed to resolve); adopters can override with a team spec
     # like `acme/platform-engineers`.

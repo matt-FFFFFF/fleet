@@ -61,10 +61,9 @@ resource "azapi_resource" "state_sa" {
   response_export_values = ["id", "properties.primaryEndpoints.blob"]
 }
 
-resource "azapi_resource" "state_blob_service" {
-  type      = "Microsoft.Storage/storageAccounts/blobServices@2023-05-01"
-  name      = "default"
-  parent_id = azapi_resource.state_sa.id
+resource "azapi_update_resource" "state_blob_service" {
+  type        = "Microsoft.Storage/storageAccounts/blobServices@2023-05-01"
+  resource_id = "${azapi_resource.state_sa.id}/blobServices/default"
 
   body = {
     properties = {
@@ -84,25 +83,38 @@ resource "azapi_resource" "state_blob_service" {
 resource "azapi_resource" "state_container_fleet" {
   type      = "Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01"
   name      = local.derived.state_container
-  parent_id = azapi_resource.state_blob_service.id
+  parent_id = "${azapi_resource.state_sa.id}/blobServices/default"
 
   body = {
     properties = {
       publicAccess = "None"
     }
   }
+
+  depends_on = [azapi_update_resource.state_blob_service]
 }
 
 # -----------------------------------------------------------------------------
 # Private endpoint for the blob sub-resource of the tfstate storage account.
-# The PE subnet is expected to live in rg-fleet-shared (or the hub) and is
-# referenced by id from _fleet.yaml.networking.tfstate.private_endpoint.
-#
-# When networking.tfstate.private_endpoint.private_dns_zone_id is set, a
-# privateDnsZoneGroups child resource registers the PE's A-record in the
-# central privatelink.blob.core.windows.net zone; otherwise the adopter is
-# responsible for DNS.
+# The PE lands in the `snet-pe-fleet` subnet of the mgmt VNet in the
+# `state_mgmt_region` (the mgmt region co-located with the state SA via
+# `local.derived.acr_location`). If no mgmt region matches the state
+# SA's location, we fall back to the first mgmt region — the precondition
+# below surfaces a clear error before any PE is created.
+# The A-record registers in the adopter-owned central
+# `privatelink.blob.core.windows.net` zone from
+# `networking.private_dns_zones.blob`.
 # -----------------------------------------------------------------------------
+
+locals {
+  # State SA is co-located with the fleet shared RG (acr_location).
+  # Pick the mgmt region whose location matches; fall back to the first
+  # mgmt region otherwise (the precondition on state_pe surfaces the
+  # mismatch early).
+  state_mgmt_region = contains(keys(local.mgmt_vnet_ids), local.derived.acr_location) ? (
+    local.derived.acr_location
+  ) : keys(local.mgmt_vnet_ids)[0]
+}
 
 resource "azapi_resource" "state_pe" {
   type      = "Microsoft.Network/privateEndpoints@2023-11-01"
@@ -113,7 +125,7 @@ resource "azapi_resource" "state_pe" {
   body = {
     properties = {
       subnet = {
-        id = local.networking.tfstate_pe_subnet_id
+        id = local.mgmt_snet_pe_fleet_ids[local.state_mgmt_region]
       }
       privateLinkServiceConnections = [
         {
@@ -127,24 +139,17 @@ resource "azapi_resource" "state_pe" {
     }
   }
 
-  response_export_values = ["id"]
-
   lifecycle {
     precondition {
-      # Reject null / empty / legacy `<...>` sentinel / anything that isn't
-      # a recognisable ARM resource id. The shape check catches adopters
-      # upgrading from the old template who left `<resource-id>` verbatim —
-      # without it the azurerm/azapi providers fail much later with a cryptic
-      # "parsing the Subnet ID: segments didn't match" dump.
-      condition     = local.networking.tfstate_pe_subnet_id != null && local.networking.tfstate_pe_subnet_id != "" && !startswith(local.networking.tfstate_pe_subnet_id, "<") && startswith(local.networking.tfstate_pe_subnet_id, "/subscriptions/")
-      error_message = "clusters/_fleet.yaml: networking.tfstate.private_endpoint.subnet_id is unset, still a `<...>` placeholder, or not a /subscriptions/... resource id. Replace it with the full /subscriptions/.../subnets/<name> id of the subnet that will host the tfstate storage account's private endpoint. See docs/adoption.md §3 + §5.1."
+      condition     = contains(keys(local.mgmt_vnet_ids), local.derived.acr_location)
+      error_message = "clusters/_fleet.yaml: no networking.envs.mgmt.regions.<region> entry matches the fleet shared location (`acr.location` = ${local.derived.acr_location}); the tfstate SA PE cannot land in a co-located mgmt VNet. Add a mgmt region in that location, or change `acr.location`."
     }
   }
+
+  response_export_values = ["id"]
 }
 
 resource "azapi_resource" "state_pe_dns_zone_group" {
-  count = local.networking.tfstate_pe_private_dns_zone_id != null && local.networking.tfstate_pe_private_dns_zone_id != "" ? 1 : 0
-
   type      = "Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-11-01"
   name      = "default"
   parent_id = azapi_resource.state_pe.id
@@ -155,7 +160,7 @@ resource "azapi_resource" "state_pe_dns_zone_group" {
         {
           name = "privatelink-blob-core-windows-net"
           properties = {
-            privateDnsZoneId = local.networking.tfstate_pe_private_dns_zone_id
+            privateDnsZoneId = local.networking_central.pdz_blob
           }
         }
       ]

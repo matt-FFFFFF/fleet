@@ -38,20 +38,38 @@ Terraform root module in `init/`:
 
 Prompted fields:
 
-| Variable               | Description                                         |
-| ---------------------- | --------------------------------------------------- |
-| `fleet_name`           | Short slug, ≤12 chars, used in resource naming.     |
-| `fleet_display_name`   | Human-friendly name for README + Grafana.           |
-| `tenant_id`            | Entra tenant GUID.                                  |
-| `github_org`           | GitHub org/user owning the fleet repo.              |
-| `github_repo`          | Fleet repo name (default `platform-fleet`).         |
-| `team_template_repo`   | Team template repo name (default `team-repo-template`). |
-| `primary_region`       | Default Azure region (default `eastus`).            |
-| `sub_shared`           | Subscription GUID for shared (ACR, state, fleet KV).|
-| `sub_mgmt`             | Subscription GUID for mgmt env.                     |
-| `sub_nonprod`          | Subscription GUID for nonprod env.                  |
-| `sub_prod`             | Subscription GUID for prod env.                     |
-| `dns_fleet_root`       | Parent private DNS zone (e.g. `int.acme.example`).  |
+| Variable                                      | Description                                                                               |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `fleet_name`                                  | Short slug, ≤12 chars, used in resource naming.                                           |
+| `fleet_display_name`                          | Human-friendly name for README + Grafana.                                                 |
+| `tenant_id`                                   | Entra tenant GUID.                                                                        |
+| `github_org`                                  | GitHub org/user owning the fleet repo.                                                    |
+| `github_repo`                                 | Fleet repo name (default `platform-fleet`).                                               |
+| `team_template_repo`                          | Team template repo name (default `team-repo-template`).                                   |
+| `primary_region`                              | Default Azure region (default `eastus`). Used as the single region for the initial per-env VNets; adopters add more regions by editing `clusters/_fleet.yaml` post-init. |
+| `dns_fleet_root`                              | Parent private DNS zone (e.g. `int.acme.example`).                                        |
+| `networking_pdz_blob`                         | BYO `privatelink.blob.core.windows.net` private DNS zone id.                              |
+| `networking_pdz_vaultcore`                    | BYO `privatelink.vaultcore.azure.net` private DNS zone id.                                |
+| `networking_pdz_azurecr`                      | BYO `privatelink.azurecr.io` private DNS zone id.                                         |
+| `networking_pdz_grafana`                      | BYO `privatelink.grafana.azure.com` private DNS zone id.                                  |
+| `environments` (map)                          | Per-env identity + networking inputs. Map key is the env name (`mgmt`, `nonprod`, `prod`, … — `mgmt` is required). Each entry carries: `subscription_id` (GUID), `address_space` (CIDR, min `/20`, RFC1918, strictly aligned, pairwise disjoint across envs), and optional `hub_network_resource_id` (full ARM VNet id; null ⇒ that env-region opts out of hub peering). Rendered into `envs.<env>.subscription_id` and `networking.envs.<env>.regions.<primary_region>.{address_space, hub_network_resource_id}`. Fleet-shared resources (ACR, tfstate SA, fleet KV) land in the **`mgmt`** subscription — no separate `sub_shared` prompt. |
+
+The `environments` map is entered interactively one env at a time
+(each prompt asks for that env's three fields in sequence). Adopters
+who want env names beyond the default `{mgmt, nonprod, prod}` —
+`dev`, `stage`, `qa`, `preprod`, etc. — edit
+`init/inputs.auto.tfvars` before running `init-fleet.sh` to add map
+entries.
+
+Pod IPs use a shared fleet-wide `/16` in CGNAT (`100.64.0.0/16`) hard-
+coded in `modules/aks-cluster`, so there is no per-region pod-CIDR slot
+to pick; see `docs/networking.md` § "Pod CIDR (shared)" for rationale.
+
+Pairwise-distinct and CIDR-syntax validators run at `terraform apply`
+time inside `init/`; malformed inputs are rejected before anything
+lands in `_fleet.yaml`. See `docs/networking.md` for the two-pool
+subnet layout carved out of each address space (and, on mgmt
+env-regions, the additional fleet-plane zone in the upper `/(N+1)`).
 
 Non-interactive alternative (for CI / testing):
 
@@ -76,43 +94,6 @@ first Terraform apply — the file documents each with a `TODO` or
 - `aad.argocd.owners`, `aad.kargo.owners` — AAD object IDs of app owners.
 - Per-env `aks.admin_groups`, `rbac_cluster_admins`, `rbac_readers`.
 - Per-env `grafana.admins`, `grafana.editors`.
-- Per-env `networking.grafana_pe_subnet_id`, `grafana_pe_linked_vnet_ids`.
-- `networking.tfstate.private_endpoint.subnet_id` — subnet that will
-  host the private endpoint for the fleet tfstate storage account
-  (typically `snet-pe-shared` in `rg-fleet-shared` or a peered hub
-  subnet). The `Microsoft.Network/privateEndpoints` resource itself
-  is created in the **shared subscription** (`rg-fleet-tfstate`);
-  cross-subscription PE-to-subnet references are supported, but the
-  subnet must be in the same Azure region as the storage account,
-  and the operator running `bootstrap/fleet` needs `Network
-  Contributor` (or the narrower `Microsoft.Network/virtualNetworks/
-  subnets/join/action` permission) on the target subnet.
-- `networking.tfstate.private_endpoint.private_dns_zone_id` — central
-  `privatelink.blob.core.windows.net` zone (usually in the hub
-  connectivity subscription). Optional; leave `null` to skip automatic
-  A-record wiring and register DNS out-of-band.
-- `networking.runner.subnet_id` — subnet that hosts the fleet runner
-  pool's Azure Container Apps environment (typically `snet-runners`
-  in `rg-fleet-shared`). Must be delegated to
-  `Microsoft.App/environments`; hub-firewall egress via UDR.
-- `networking.runner.container_registry_pe_subnet_id` — subnet for
-  the runner pool's per-pool private ACR private endpoint. May be the
-  same subnet as `networking.tfstate.private_endpoint.subnet_id`.
-- `networking.runner.container_registry_private_dns_zone_id` — central
-  `privatelink.azurecr.io` zone (symmetric with the tfstate zone
-  above; typically in the hub connectivity subscription). The runner
-  pool **does not create this zone** — it must pre-exist, and the
-  operator running `bootstrap/fleet` needs **Private DNS Zone
-  Contributor** on it so the module can register the per-pool ACR
-  PE's A record via the private endpoint's DNS zone group.
-- `networking.fleet_kv.private_endpoint.subnet_id` — subnet that
-  hosts the private endpoint for the **fleet Key Vault** (created
-  by `bootstrap/fleet`; see §5 below for the ownership change from
-  Stage 0). May reuse the tfstate PE subnet.
-- `networking.fleet_kv.private_endpoint.private_dns_zone_id` — central
-  `privatelink.vaultcore.azure.net` zone. Optional; leave `null` to
-  register DNS out-of-band. Same operator-permission model as the
-  two zones above.
 - `github_app.fleet_runners.{app_id, installation_id}` — numeric IDs
   of the `fleet-runners` GitHub App (KEDA polling; created by §4
   below). The private key PEM is seeded into the fleet Key Vault by
@@ -121,6 +102,22 @@ first Terraform apply — the file documents each with a `TODO` or
   private, `init-gh-apps.sh` must run from a host with data-plane
   reach to the vault (jump host, VPN, Bastion, or the fleet runners
   themselves once online).
+
+Networking (everything under `networking.*` and the per-env
+`envs.<env>.subscription_id` in `_fleet.yaml`) was prompted in §2
+and is already fully populated — the four central private DNS zones
+(blob / vaultcore / azurecr / grafana), every env's subscription id,
+and every env's per-region `address_space` + optional
+`hub_network_resource_id`. Pod IPs use a shared fleet-wide `/16`
+(`100.64.0.0/16`) hard-coded in `modules/aks-cluster`, so there is no
+per-region pod-CIDR slot to set. There is **no** per-service BYO
+subnet id to fill in: `bootstrap/fleet` carves the mgmt-only
+fleet-plane subnets (`snet-pe-fleet`, `snet-runners`), and
+`bootstrap/environment` carves the env-plane subnets (`snet-pe-env`,
+api pool, nodes pool) on every env-region — mgmt included — from
+those address spaces. See `docs/networking.md` for the two-pool
+layout and `docs/onboarding-cluster.md` for the single-PR new-cluster
+flow (picking `subnet_slot`).
 
 Commit the initialized repo:
 
@@ -240,30 +237,39 @@ GitHub items must be arranged out-of-band by the adopter org.
 
 **Networking (Stage -1 runner pool + private tfstate SA)**
 
-- Pre-existing VNet in `rg-fleet-shared` (or the hub connectivity
-  subscription, peered to the fleet subscription).
-- Subnet for the runner pool (`snet-runners` by convention),
-  delegated to `Microsoft.App/environments`, with a UDR that routes
-  egress through the hub firewall. `nat_gateway_creation_enabled` and
-  `public_ip_creation_enabled` are both **off** at the module
-  callsite — there is no runner-local NAT or public IP.
-- Subnet for the tfstate private endpoint (`snet-pe-shared` by
-  convention).
+- Hub VNet (adopter-owned) — one reference per env-region via
+  `networking.envs.<env>.regions.<region>.hub_network_resource_id`.
+  Each entry is nullable: null opts that env-region out of hub
+  peering (adopter-managed routing). When set, `bootstrap/fleet`
+  peers the mgmt VNet for that region to the hub, and
+  `bootstrap/environment` peers each non-mgmt env VNet for that
+  region. Neither stage creates the hub itself.
+  `bootstrap/fleet` authors the mgmt VNet shell
+  (`vnet-<fleet>-mgmt-<region>` in `rg-net-mgmt-<region>`) from
+  `networking.envs.mgmt.regions.<region>.address_space` and carves
+  `snet-pe-fleet` (`/26`) + `snet-runners` (`/23`) out of the upper
+  `/(N+1)` of that address space. The runner subnet is delegated to
+  `Microsoft.App/environments` and egresses via the hub firewall
+  when `egress_next_hop_ip` is set on that region (UDR ownership is
+  in-repo as the per-env-region route table `rt-aks-<env>-<region>`;
+  see `docs/networking.md` § "Route table / UDR egress").
 - Central `privatelink.blob.core.windows.net` private DNS zone
   (typically in the hub connectivity subscription; shared with every
-  other storage account in the tenant). `bootstrap/fleet` references
-  it by resource id when registering the PE's A-record; leave
-  `networking.tfstate.private_endpoint.private_dns_zone_id = null`
-  to skip and register the A-record out-of-band.
-- Central `privatelink.azurecr.io` private DNS zone (same hub/
-  connectivity sub as the blob zone; shared with every other ACR PE
-  in the tenant). The runner pool **does not create this zone**; it
-  only registers the per-pool ACR PE's A-record into it via the
-  PE's DNS zone group.
-- Role assignment: **`Private DNS Zone Contributor`** on the central
-  blob zone *and* on the central ACR zone — for the operator on the
-  first apply, **and** for the `fleet-stage0` UAMI for every
-  subsequent re-run.
+  other storage account in the tenant). Referenced by id in
+  `_fleet.yaml.networking.private_dns_zones.blob`; `bootstrap/fleet`
+  registers the tfstate SA's PE A-record there.
+- Central `privatelink.vaultcore.azure.net` private DNS zone. Same
+  ownership model; referenced as `networking.private_dns_zones.vaultcore`;
+  carries the fleet KV's PE A-record.
+- Central `privatelink.azurecr.io` private DNS zone. Same ownership
+  model; referenced as `networking.private_dns_zones.azurecr`;
+  carries the fleet ACR and per-pool runner ACR PE A-records.
+- Central `privatelink.grafana.azure.com` private DNS zone.
+  Referenced as `networking.private_dns_zones.grafana`;
+  `bootstrap/environment` registers each env's Grafana PE A-record.
+- Role assignment: **`Private DNS Zone Contributor`** on all four
+  central zones — for the operator on the first apply, **and** for
+  the `fleet-stage0` / `fleet-meta` UAMIs for every subsequent re-run.
 - **VNet-reachable workstation for every re-run**: jump host,
   Azure Bastion, or VPN into the fleet VNet. The tfstate SA is
   private-only after the first apply — Terraform cannot reach it

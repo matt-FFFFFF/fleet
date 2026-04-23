@@ -79,8 +79,16 @@ if [[ -f "$marker" && $FORCE -eq 0 ]]; then
 fi
 
 if [[ $FORCE -eq 0 ]] && git rev-parse --git-dir >/dev/null 2>&1; then
-  if ! git diff-index --quiet HEAD -- 2>/dev/null; then
-    die "worktree is dirty; commit or stash first, or pass --force."
+  # `git diff-index --quiet HEAD --` catches modifications + staged changes
+  # to tracked files, but NOT untracked files. Since self-cleanup below
+  # rm -rf's init/ (and deletes init-fleet.sh, the selftest workflow, and
+  # .github/fixtures/), any uncommitted edit in those paths would be
+  # destroyed silently. `git status --porcelain` catches both modified
+  # tracked files AND untracked files — its output is empty iff the
+  # worktree is truly clean.
+  if ! git diff-index --quiet HEAD -- 2>/dev/null \
+     || [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+    die "worktree is dirty (modified or untracked files); commit or stash first, or pass --force. Note: --force will still run self-cleanup, which rm -rf's init/ + init-fleet.sh — uncommitted edits in those paths will be lost."
   fi
 fi
 
@@ -90,35 +98,18 @@ fi
 
 # ---- overlay --values-file (CI path) ----------------------------------------
 #
-# If the caller passed --values-file, merge it on top of inputs.auto.tfvars by
-# running a trivial key=value overlay: for each `key = "value"` line in the
-# overlay file, replace the matching line in inputs.auto.tfvars. This avoids
-# a second HCL parser and keeps the "one auto.tfvars is the input" contract.
+# If the caller passed --values-file, replace inputs.auto.tfvars outright
+# with the supplied file. The values file is expected to be a complete set
+# of adopter inputs (matching the shape of inputs.auto.tfvars, including
+# the `environments` map block); CI (.github/workflows/template-selftest.yaml)
+# feeds .github/fixtures/adopter-test.tfvars this way to drive init
+# non-interactively. This avoids having to parse HCL map/object literals
+# in shell: the fixture already carries every top-level variable the
+# module declares.
 
 if [[ -n "$VALUES_FILE" ]]; then
-  info "Overlaying values from $VALUES_FILE"
-  while IFS= read -r line; do
-    # Match:  key = "value"   (ignore comments / blanks)
-    if [[ "$line" =~ ^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*=[[:space:]]*\"(.*)\"[[:space:]]*$ ]]; then
-      key="${BASH_REMATCH[1]}"
-      val="${BASH_REMATCH[2]}"
-      # Replace or append in the main tfvars. Use a python one-liner to avoid
-      # sed's quoting hell on arbitrary values.
-      python3 - "$tfvars" "$key" "$val" <<'PY'
-import pathlib, re, sys
-path, key, val = sys.argv[1], sys.argv[2], sys.argv[3]
-p = pathlib.Path(path)
-text = p.read_text()
-pattern = re.compile(rf'^(\s*){re.escape(key)}(\s*=\s*)"[^"]*"', re.MULTILINE)
-replacement = rf'\g<1>{key}\g<2>"{val}"'
-new_text, n = pattern.subn(replacement, text)
-if n == 0:
-    # Variable not present — append.
-    new_text = text.rstrip() + f'\n{key} = "{val}"\n'
-p.write_text(new_text)
-PY
-    fi
-  done < "$VALUES_FILE"
+  info "Overlaying values from $VALUES_FILE (replacing inputs.auto.tfvars)"
+  cp "$VALUES_FILE" "$tfvars"
 fi
 
 # ---- prompt for __PROMPT__ sentinels ----------------------------------------
@@ -130,9 +121,13 @@ fi
 # regexes.
 
 remaining_prompts() {
-  # Prints each key that still equals "__PROMPT__".
-  grep -E '^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*=[[:space:]]*"__PROMPT__"' "$tfvars" \
-    | sed -E 's/^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*=.*$/\1/'
+  # Prints each top-level (column-0) key that still equals "__PROMPT__".
+  # Intentionally does NOT match indented assignments inside map/object
+  # literals (e.g. `environments = { mgmt = { subscription_id = "__PROMPT__" } }`):
+  # those are edited by the adopter directly before running init-fleet.sh.
+  # See init/inputs.auto.tfvars for the `environments` map shape.
+  grep -E '^[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*=[[:space:]]*"__PROMPT__"' "$tfvars" \
+    | sed -E 's/^([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*=.*$/\1/'
 }
 
 pending="$(remaining_prompts || true)"
@@ -148,7 +143,9 @@ if [[ -n "$pending" ]]; then
   echo "" >&2
   for key in $pending; do
     # Pull the inline # comment from the tfvars line for use as the prompt.
-    hint="$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$tfvars" \
+    # Anchor at column 0 so we only inspect top-level assignments (map
+    # interiors are intentionally excluded from the prompt flow).
+    hint="$(grep -E "^${key}[[:space:]]*=" "$tfvars" \
             | awk -F'#' 'NF>1 { sub(/^[[:space:]]+/, "", $2); print $2; exit }' || true)"
     while true; do
       if [[ -n "$hint" ]]; then
@@ -167,8 +164,11 @@ import pathlib, re, sys
 path, key, val = sys.argv[1], sys.argv[2], sys.argv[3]
 p = pathlib.Path(path)
 text = p.read_text()
-pattern = re.compile(rf'^(\s*){re.escape(key)}(\s*=\s*)"__PROMPT__"', re.MULTILINE)
-replacement = rf'\g<1>{key}\g<2>"{val}"'
+# Anchor at start-of-line (column 0). Map-interior assignments are
+# intentionally out of scope for the prompt flow — the shell does not
+# traverse nested literals.
+pattern = re.compile(rf'^{re.escape(key)}(\s*=\s*)"__PROMPT__"', re.MULTILINE)
+replacement = rf'{key}\g<1>"{val}"'
 new_text, n = pattern.subn(replacement, text)
 assert n == 1, f"failed to substitute {key}"
 p.write_text(new_text)
@@ -222,10 +222,12 @@ rm -rf "$repo_root/.github/fixtures"
 # iteration of the template, is no longer needed.
 rm -f "$repo_root/clusters/_fleet.yaml.template"
 
-# Un-ignore Terraform lock files. The template gitignores them to avoid
-# churn from local/CI `terraform init` runs in the template repo, but
-# adopter repos should commit lock files for reproducibility (HashiCorp's
-# recommendation). Drop the line if present.
+# Un-ignore Terraform lock files and `clusters/_fleet.yaml`. The
+# template gitignores lock files to avoid churn from local/CI
+# `terraform init` runs, and gitignores `_fleet.yaml` because it is a
+# rendered byproduct in the template (never committed upstream).
+# Adopter repos commit both for reproducibility / single-source-of-
+# truth. Drop the lines if present.
 if [ -f "$repo_root/.gitignore" ]; then
   # Portable temp file creation (GNU + BSD/macOS mktemp).
   if ! tmp=$(mktemp 2>/dev/null); then
@@ -234,7 +236,7 @@ if [ -f "$repo_root/.gitignore" ]; then
   # grep exits 0 (matches found) or 1 (no matches) — both mean the
   # output in $tmp is valid; only exit >=2 signals a real error that
   # must not clobber the original .gitignore.
-  if grep -v '^\*\*/\.terraform\.lock\.hcl$' "$repo_root/.gitignore" > "$tmp"; then
+  if grep -Ev '^(\*\*/\.terraform\.lock\.hcl|/clusters/_fleet\.yaml)$' "$repo_root/.gitignore" > "$tmp"; then
     mv "$tmp" "$repo_root/.gitignore"
   else
     grep_status=$?

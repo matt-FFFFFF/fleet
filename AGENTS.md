@@ -8,10 +8,8 @@ full before proposing or writing any change.
 - **`PLAN.md`** is **the** source of truth for intent, design, and
   deviations. It answers "what should be." Sections are stable and
   numbered; cite them when explaining work (e.g. "per §4 Stage 0").
-  When an implementation deviates from PLAN, record the deviation in a
-  short *Implementation status* paragraph at the top of the affected
-  section (PLAN §16 is the reference pattern). Do not rewrite PLAN
-  opportunistically.
+  When an implementation deviates from PLAN, update the plan.
+  Do not provide history or rationale in PLAN; it is a design document, not a journal.
 - **`STATUS.md`** is a **tracking aid** for the plan — a one-line-per-
   sub-item index mirroring PLAN's section numbers. It is **not**
   exhaustive and is **not** a changelog: routine file-level edits,
@@ -35,13 +33,17 @@ full before proposing or writing any change.
    - Read the matching STATUS lines.
    - Read any "Implementation status" callout inside the relevant PLAN
      section (e.g. PLAN §16 has one).
-2. **Keep PLAN clean.** PLAN records intent. Never sprinkle progress
-   checkboxes across it. If the implementation deviates from PLAN, add
-   a short *Implementation status* paragraph at the top of the affected
-   section AND update STATUS.md. §16 is the reference pattern.
+2. **Keep PLAN clean.** PLAN records intent.
+   - If you are proposing a change to the intended design, update PLAN
+     with the new intent. Don't record the rationale or history in PLAN;
+     it is a design document, not a journal.
+   - If you are implementing the existing intent, do not edit PLAN.
 3. **Update STATUS in the same commit.** Any commit that closes or
    advances a PLAN sub-item updates the matching line in STATUS.md as
    part of the same commit. Partial progress uses `[~]`.
+   Status only tacks the completion state of PLAN sub-items,
+   not file-level changes or unnecessary detail.
+   If the implementation changed from the plan, update the plan.
 4. **One source for fleet identity.** Adopter identity lives in
    `clusters/_fleet.yaml` (rendered by `init/` on first run). Bootstrap
    and stage TF `yamldecode(file(...))` it. **Never** reintroduce
@@ -50,8 +52,17 @@ full before proposing or writing any change.
    touch all three: `docs/naming.md`, `config-loader/load.sh`, and
    the HCL `local.derived` in the affected bootstrap/stage module.
 6. **Version constraints.** Pessimistic-minor everywhere
-   (`~> X.Y`). Terraform: `~> 1.11`. Providers pinned in
-   `providers.tf` per module; see existing files for the set.
+   (`~> X.Y`). Module `required_version` floor: `~> 1.14` (minimum
+   Terraform supported by the codebase; required for reliable
+   short-circuit evaluation of `||` in `validation {}` blocks). The
+   **exact** Terraform version used by CI and local dev is pinned in
+   `.terraform-version` at the repo root — all three workflows
+   (`template-selftest.yaml`, `tflint.yaml`, `validate.yaml`) read it
+   via a `tf_version` step. Bump `.terraform-version` to upgrade CI;
+   bump the `~> 1.14` floor only when raising the minimum (touch every
+   `required_version` in `terraform/**/providers.tf` + `terraform.tf`
+   - module READMEs). Providers pinned in `providers.tf` per module;
+     see existing files for the set.
 7. **Template machinery is self-destructing.** `init/`, `init-fleet.sh`,
    `.github/workflows/template-selftest.yaml`,
    `.github/workflows/status-check.yaml`, `.github/fixtures/` are deleted
@@ -77,6 +88,7 @@ terraform/
   config-loader/load.sh                yq deep-merge → tfvars.json
 docs/
   adoption.md naming.md                contracts
+  findings.md                          open design/implementation findings (detailed rationale for STATUS Rework items)
   onboarding-*.md upgrades.md promotion.md   operator UX
 .github/
   workflows/                           CI
@@ -87,9 +99,20 @@ docs/
 - Adding provider resources to `init/` — it is a renderer, not infra.
 - Re-duplicating subscription IDs into env `_defaults.yaml`.
 - Hard-coding fleet name in TF (`local.fleet.name` / derived only).
-- Silent PLAN edits without a corresponding STATUS update.
 - Running `terraform apply` on `bootstrap/*` without the adopter
   explicitly requesting it; these affect live tenants.
+- Passing `--force` to `init-fleet.sh`. The flag bypasses the
+  dirty-tree guard, which is the last line of defense before
+  self-cleanup `rm -rf`'s `init/`, `init-fleet.sh`, the selftest
+  workflow, and `.github/fixtures/`. Any uncommitted or untracked
+  file in those paths is silently destroyed. If the guard fires,
+  the correct response is to clean the worktree first (commit,
+  stash, or `rm` the untracked noise — typically stray `.terraform/`
+  directories from ad-hoc `terraform init` runs), then re-run
+  without `--force`. `--force` is reserved for adopters re-running
+  init against an already-initialized repo (where `.fleet-initialized`
+  exists) and should never be used by agents during template
+  development.
 
 ## When unsure, ask
 

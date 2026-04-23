@@ -41,7 +41,7 @@ Full details in `VENDORING.md`. Summary:
 - **Telemetry stripped**: no `modtm` provider, no `enable_telemetry`
   variable, no `main.telemetry.tf`.
 - **Provider pins** rewritten to the repo-wide convention
-  (pessimistic-minor, per AGENTS.md §6): Terraform `~> 1.11`,
+  (pessimistic-minor, per AGENTS.md §6): Terraform `~> 1.14`,
   `hashicorp/azurerm ~> 4.20`, `Azure/azapi ~> 2.9`,
   `hashicorp/random ~> 3.8`, `hashicorp/time ~> 0.13`.
 
@@ -57,7 +57,7 @@ Full details in `VENDORING.md`. Summary:
 
 | Name | Version |
 |------|---------|
-| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | ~> 1.11 |
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | ~> 1.14 |
 | <a name="requirement_azapi"></a> [azapi](#requirement\_azapi) | ~> 2.9 |
 | <a name="requirement_azurerm"></a> [azurerm](#requirement\_azurerm) | ~> 4.20 |
 | <a name="requirement_random"></a> [random](#requirement\_random) | ~> 3.8 |
