@@ -204,8 +204,9 @@ module "team_template_repo" {
 # The helper creates all three Apps (`fleet-meta`, `stage0-publisher`,
 # `fleet-runners`), records their installation metadata in
 # `./.gh-apps.state.json`, and writes a narrow per-module overlay at
-# `terraform/bootstrap/fleet/.gh-apps.auto.tfvars` carrying only the
-# `fleet-runners` PEM that this stage consumes. It also patches
+# `terraform/bootstrap/fleet/.gh-apps.auto.tfvars` carrying
+# `fleet_runners_app_pem` + `fleet_runners_app_pem_version` — the two
+# variables this stage declares (see `variables.tf`). It also patches
 # `clusters/_fleet.yaml` with `github_app.fleet_runners.{app_id,
 # installation_id}` so this stage's runner module validation passes.
 # The installation's repository selection must include the fleet repo

@@ -1086,15 +1086,21 @@ messages; the rest must be arranged out-of-band by the adopter org.
   the `fleet-runners` PEM that `bootstrap/fleet` consumes. Stage 0
   derives its own tfvars from `.gh-apps.state.json` when §16.4
   lands the matching `variable` blocks.
-  **Today (Phase 1):** GH Apps are **not required** to
-  `terraform apply` `bootstrap/fleet` — this stage does not
-  consume App credentials. Adopters who want env/team-bootstrap
-  workflows to function end-to-end must create the Apps manually
-  via *Organization settings → Developer settings → GitHub Apps*
-  with the permissions listed in §4 Stage 0; Stage 0 does not yet
-  declare input variables for them, so the credentials currently
-  have no TF consumer (they're supplied directly to workflow
-  secrets by the operator).
+  **Today (Phase 1):** `bootstrap/fleet` **does** require the
+  `fleet-runners` GitHub App — it seeds the App's PEM into the fleet
+  Key Vault as the `fleet-runners-app-pem` secret via
+  `azapi_data_plane_resource` (the `fleet_runners_app_pem` variable in
+  `terraform/bootstrap/fleet/variables.tf` is `nullable = false`).
+  Until `init-gh-apps.sh` lands, adopters must create the three Apps
+  manually via *Organization settings → Developer settings → GitHub
+  Apps* with the permissions listed in §4 Stage 0, and supply the
+  `fleet-runners` PEM directly via `TF_VAR_fleet_runners_app_pem` or a
+  hand-written `terraform/bootstrap/fleet/.gh-apps.auto.tfvars`. The
+  `fleet-meta` and `stage0-publisher` Apps are **not** required for
+  `bootstrap/fleet` apply — Stage 0 does not yet declare input
+  variables for them, so their credentials currently have no TF
+  consumer (they're supplied directly to workflow secrets by the
+  operator).
 - Repo `<github_org>/<team_template_repo>` (default
   `team-repo-template`) must **not** pre-exist; it is created
   fresh by `bootstrap/fleet` with `prevent_destroy = true`.
