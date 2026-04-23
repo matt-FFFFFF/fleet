@@ -814,3 +814,22 @@ self-contained enough to land in its own PR.
     favour of the narrower Graph app-role assignment, so the
     template-vs-instance id divergence that drove the churn is
     no longer present in the config.
+16. **Document `-var-file` requirement for `bootstrap/fleet`** —
+    ✅ **Done.** `bootstrap/fleet` now consumes
+    `fleet_runners_app_pem` from the root `.gh-apps.auto.tfvars`
+    (F4-class runner-PEM seeding into the fleet KV data plane), but
+    `*.auto.tfvars` only auto-loads from the module root being
+    applied. `docs/adoption.md §5.1` gains a GH-App PEM prerequisite
+    bullet spelling out the explicit
+    `-var-file="$(git rev-parse --show-toplevel)/.gh-apps.auto.tfvars"`
+    flag and documenting that the six Stage-0-only fields in the
+    file produce benign `Value for undeclared variable` warnings
+    (suppressed by Terraform's warning-vs-error semantics) until
+    PLAN §16.4 lands the Stage-0 variable blocks. §5.2 worked
+    command block updated to include the flag on both the
+    first-apply and steady-state invocations. §4 sweep: rewrote the
+    stale "`init-gh-apps.sh` seeds the KV via `az keyvault secret
+    set`" sentence to match reality (the seeding happens inside
+    `bootstrap/fleet` via the `azapi_data_plane_resource` introduced
+    by the F4-class work). F5 finding deleted from
+    `docs/findings.md` per AGENTS.md lifecycle rule.

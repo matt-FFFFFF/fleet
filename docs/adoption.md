@@ -182,19 +182,23 @@ export GH_TOKEN=<PAT with repo + admin:org>
 ```
 
 The script writes the resulting App IDs / PEMs / webhook secrets to
-`./.gh-apps.auto.tfvars` (gitignored) at the repo root. `bootstrap/
-fleet` (Stage -1) owns the fleet Key Vault, and the `fleet-runners`
-PEM is seeded into it by this script via `az keyvault secret set`
-after bootstrap completes (script host must have private-network
-reach to the KV). Stage 0 seeds the remaining PEMs + webhook secrets
-and publishes the App IDs / client IDs as repo variables.
-`bootstrap/fleet` itself does **not** touch GH App credentials
-directly — its only GH-App involvement is provisioning the vault the
-PEM lands in and the `fleet-stage0` / `fleet-meta` GitHub environments
-that Stage 0 later populates. The on-disk `.gh-apps.auto.tfvars` and
-`.gh-apps.state.json` remain on disk (both gitignored) after Stage 0
-applies; the adopter may delete them manually once the fleet KV
-holds authoritative copies.
+`./.gh-apps.auto.tfvars` (gitignored, mode 0600) at the repo root.
+`bootstrap/fleet` (Stage -1) owns the fleet Key Vault and seeds the
+`fleet-runners` PEM into it during its apply, consuming the
+`fleet_runners_app_pem` variable declared in
+`terraform/bootstrap/fleet/variables.tf` (ephemeral + sensitive; never
+lands in state) and writing the secret via the Key Vault data-plane
+API. Because `*.auto.tfvars` only auto-loads from the Terraform module
+root being applied, the `bootstrap/fleet` apply must pass the repo-root
+file explicitly via `-var-file` — see §5.1 and §5.2 below. The executor
+running the apply must have private-network reach to the KV
+(`<vault>.vault.azure.net`).
+Stage 0 seeds the remaining PEMs + webhook secrets and publishes the
+App IDs / client IDs as repo variables; its workflow
+(`tf-apply.yaml`) already passes `-var-file` explicitly to `stages/
+0-fleet`. The on-disk `.gh-apps.auto.tfvars` and `.gh-apps.state.json`
+remain on disk (both gitignored) after Stage 0 applies; the adopter may
+delete them manually once the fleet KV holds authoritative copies.
 
 ### Today (manual)
 
@@ -301,9 +305,38 @@ GitHub items must be arranged out-of-band by the adopter org.
   when `authentication_method = "github_app"`, so
   `clusters/_fleet.yaml` must carry both numeric IDs before the
   first `bootstrap/fleet` apply. The PEM itself is resolved at
-  runtime via Key Vault reference (Stage 0 seeds it), so its
-  absence does not block the first apply — only scale-out of the
-  runner pool.
+  runtime by the runner Container App via a Key Vault reference;
+  `bootstrap/fleet` seeds that KV secret from the
+  `fleet_runners_app_pem` tfvar (see the next bullet). If the tfvars
+  file is not present at first apply, `bootstrap/fleet` fails at plan
+  time — the variable is `nullable = false`.
+- **`fleet-runners` PEM tfvars (`-var-file` required on every
+  `bootstrap/fleet` apply).** `init-gh-apps.sh` writes
+  `<repo-root>/.gh-apps.auto.tfvars` carrying the PEMs + IDs for all
+  three Apps. `bootstrap/fleet` consumes one field from it —
+  `fleet_runners_app_pem` (declared
+  `sensitive`/`ephemeral`/`nullable = false` in
+  `terraform/bootstrap/fleet/variables.tf`) — which it writes into the
+  fleet KV as the `fleet-runners-app-pem` secret via the KV data plane.
+  Because `*.auto.tfvars` auto-loads only from the module root being
+  applied (not from the repo root), the file must be passed
+  explicitly:
+
+  ```sh
+  terraform apply \
+    -var-file="$(git rev-parse --show-toplevel)/.gh-apps.auto.tfvars" \
+    [other flags]
+  ```
+
+  Terraform emits `Warning: Value for undeclared variable` for the
+  six Stage-0-only fields in that file
+  (`fleet_meta_app_id`, `fleet_meta_app_pem`,
+  `fleet_meta_webhook_secret`, `stage0_publisher_app_id`,
+  `stage0_publisher_app_pem`, `stage0_publisher_webhook_secret`) —
+  these are warnings, not errors, and are expected until Stage 0 grows
+  the matching `variable` blocks (PLAN §16.4). Stage 0's own workflow
+  (`.github/workflows/tf-apply.yaml`) already passes `-var-file`
+  explicitly, so no extra plumbing is required there.
 - The team-template repo (`<github_org>/<team_template_repo>`,
   default `team-repo-template`) must **not** pre-exist; it is
   created fresh with `prevent_destroy = true`.
@@ -320,12 +353,21 @@ GitHub items must be arranged out-of-band by the adopter org.
 cd terraform/bootstrap/fleet
 terraform init
 
+# `.gh-apps.auto.tfvars` lives at the repo root (written by
+# `init-gh-apps.sh`); `bootstrap/fleet` needs `fleet_runners_app_pem`
+# from it. Pass it explicitly — `*.auto.tfvars` does not auto-load
+# across module boundaries. Undeclared-variable warnings for the
+# Stage-0-only fields are benign; see §5.1.
+GH_APPS_TFVARS="$(git rev-parse --show-toplevel)/.gh-apps.auto.tfvars"
+
 # First apply — leave the tfstate SA's public endpoint Enabled long
 # enough to seed the private endpoint + DNS zone group.
-terraform apply -var allow_public_state_during_bootstrap=true
+terraform apply \
+  -var-file="$GH_APPS_TFVARS" \
+  -var allow_public_state_during_bootstrap=true
 
 # Every subsequent apply (from a VNet-reachable workstation):
-terraform apply
+terraform apply -var-file="$GH_APPS_TFVARS"
 ```
 
 The fleet repo you created via "Use this template" already exists on
