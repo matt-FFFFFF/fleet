@@ -5,12 +5,13 @@
 #     fleet-meta UAMIs all live here),
 #   * Azure role-GUID locals (used both here and in main.github.tf's
 #     `identity_role_assignments` map),
-#   * Entra directory role assignments (the module cannot assign Entra roles).
+#   * Microsoft Graph app-role assignments on `fleet-stage0` and
+#     `fleet-meta` (the module cannot assign Entra roles).
 #
 # The fleet-stage0 + fleet-meta UAMIs, their federated credentials, and
 # their Azure RBAC assignments are created by `module.fleet_repo` (see
-# main.github.tf). The Entra role assignments here reference that module's
-# environment outputs for the principal IDs.
+# main.github.tf). The Graph app-role assignments here reference that
+# module's environment outputs for the principal IDs.
 
 # --- Fleet shared resource group (for ACR / fleet KV / shared state) ---------
 
@@ -36,33 +37,47 @@ locals {
   role_blob_data_ctrb = "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
 }
 
-# --- Entra directory role assignments ---------------------------------------
+# --- Microsoft Graph app-role assignments -----------------------------------
 #
-# `fleet-stage0` needs `Application Administrator` in Entra to CRUD the Argo
-# + Kargo AAD apps it creates in Stage 0. `fleet-meta` does not: every
-# workflow it drives (env-bootstrap, team-bootstrap) creates UAMIs +
-# federated credentials, not AAD apps, so it holds no Entra role.
-# The role assignment references the module-created UAMI via the
-# `environments["stage0"].identity.principal_id` output.
+# `fleet-stage0` holds `Application.ReadWrite.OwnedBy` on the Microsoft
+# Graph SP: scoped CRUD on any AAD application where the assignee is listed
+# as an owner. Stage 0 creates the Argo + Kargo apps (auto-owning them on
+# create), writes the Argo RP client-secret, and — via Stage 1 mgmt
+# (`uami-fleet-mgmt`) and Stage 2 per-cluster (`uami-fleet-<env>`) — grants
+# those peers owner-scoped access too. See `docs/adoption.md` and the F2
+# entry in STATUS.md (item 14).
+#
+# `fleet-meta` holds `AppRoleAssignment.ReadWrite.All` on Graph: lets it
+# create the per-env `azuread_app_role_assignment` resources inside
+# `bootstrap/environment` (itself running under `uami-fleet-meta`). This
+# role grants only the ability to assign/unassign app-roles on service
+# principals — it does NOT grant the ability to CRUD applications, rotate
+# secrets, or write FICs (those remain scoped to the app-owners list).
+#
+# Both grants require Entra tenant-admin consent on first apply, same as
+# the directory-role assignment they replace; no regression in operator
+# burden. See `docs/adoption.md §5.1`.
 
-data "azuread_directory_role_templates" "all" {
+# Microsoft Graph service principal in this tenant. Required as the
+# `resource_object_id` for every `azuread_app_role_assignment` below.
+data "azuread_service_principal" "msgraph" {
+  client_id = "00000003-0000-0000-c000-000000000000"
 }
 
-resource "azuread_directory_role" "app_admin" {
-  template_id = one([
-    for tmpl in data.azuread_directory_role_templates.all.role_templates :
-    tmpl.object_id if tmpl.display_name == "Application Administrator"
-  ])
+locals {
+  # Graph app-role ids (stable across tenants).
+  msgraph_role_application_readwrite_ownedby   = "18a4783c-866b-4cc7-a460-3d5e5662c884"
+  msgraph_role_approleassignment_readwrite_all = "06b708a9-e830-4db3-a914-8e69da51d44f"
 }
 
-resource "azuread_directory_role_assignment" "stage0_app_admin" {
-  # Use `template_id` rather than `object_id` for `role_id`. Graph's
-  # Create accepts either form for directory-role assignments, but the
-  # provider's Read path normalises `role_id` to the roleTemplate id
-  # (the tenant-agnostic GUID) regardless of what Create was given.
-  # Writing the instance id here produces a spurious force-new diff on
-  # every subsequent plan; writing the template id keeps config in sync
-  # with what Read returns. See `STATUS.md` item 15.
-  role_id             = azuread_directory_role.app_admin.template_id
+resource "azuread_app_role_assignment" "stage0_app_rw_owned_by" {
+  app_role_id         = local.msgraph_role_application_readwrite_ownedby
   principal_object_id = module.fleet_repo.environments["stage0"].identity.principal_id
+  resource_object_id  = data.azuread_service_principal.msgraph.object_id
+}
+
+resource "azuread_app_role_assignment" "meta_approle_rw_all" {
+  app_role_id         = local.msgraph_role_approleassignment_readwrite_all
+  principal_object_id = module.fleet_repo.environments["meta"].identity.principal_id
+  resource_object_id  = data.azuread_service_principal.msgraph.object_id
 }

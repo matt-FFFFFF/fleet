@@ -26,12 +26,57 @@
 # mgmt cluster's Stage 1 (alongside the mgmt cluster KV that stores it),
 # per PLAN §4 Stage 0/Stage 1.
 
+# --- Owner-principal lookups ------------------------------------------------
+#
+# Per STATUS item 14, the Argo + Kargo apps list every Fleet UAMI that needs
+# owner-scoped CRUD (via Graph `Application.ReadWrite.OwnedBy`) as an owner:
+#
+#   * `uami-fleet-stage0` — Stage 0 itself (auto-owner on create, but the
+#     explicit entry makes re-applies idempotent and survives future
+#     refactors that might split creation from rotation).
+#   * `uami-fleet-<env>` for every env present in the cluster inventory —
+#     Stage 1 mgmt (Kargo password rotation on `uami-fleet-mgmt`) and
+#     Stage 2 every cluster (Argo per-cluster FIC writes on the env UAMI;
+#     Kargo FIC on mgmt only under `uami-fleet-mgmt`).
+#
+# The UAMIs are authored by `bootstrap/fleet` (stage0) and
+# `bootstrap/environment` (per-env). Stage 0 looks them up by display name
+# at plan time; a missing UAMI surfaces as a plan-time data-source error,
+# which is the desired failure mode on a fresh tenant where an env has not
+# yet been bootstrapped.
+
+data "azuread_service_principal" "stage0_uami" {
+  display_name = "uami-fleet-stage0"
+}
+
+data "azuread_service_principal" "env_uami" {
+  for_each     = toset(local.envs)
+  display_name = "uami-fleet-${each.key}"
+}
+
+locals {
+  # Sorted + de-duplicated owners list. Sorting pins iteration order to
+  # prevent spurious plan diffs from set-iteration nondeterminism; distinct
+  # absorbs the case where an adopter has also listed the UAMI by hand in
+  # `clusters/_fleet.yaml`'s `aad.<app>.owners`.
+  aad_app_owners_argocd = sort(distinct(concat(
+    try(local.aad.argocd.owners, []),
+    [data.azuread_service_principal.stage0_uami.object_id],
+    [for sp in data.azuread_service_principal.env_uami : sp.object_id],
+  )))
+  aad_app_owners_kargo = sort(distinct(concat(
+    try(local.aad.kargo.owners, []),
+    [data.azuread_service_principal.stage0_uami.object_id],
+    [for sp in data.azuread_service_principal.env_uami : sp.object_id],
+  )))
+}
+
 # --- Argo AAD app ------------------------------------------------------------
 
 resource "azuread_application" "argocd" {
   display_name     = local.aad.argocd.display_name
   sign_in_audience = "AzureADMyOrg"
-  owners           = try(local.aad.argocd.owners, [])
+  owners           = local.aad_app_owners_argocd
 
   group_membership_claims = ["SecurityGroup"]
 
@@ -61,7 +106,7 @@ resource "azuread_application" "argocd" {
 resource "azuread_service_principal" "argocd" {
   client_id                    = azuread_application.argocd.client_id
   app_role_assignment_required = false
-  owners                       = try(local.aad.argocd.owners, [])
+  owners                       = local.aad_app_owners_argocd
 }
 
 # --- Argo RP client_secret rotation -----------------------------------------
@@ -129,7 +174,7 @@ resource "azapi_resource" "argocd_oidc_client_secret" {
 resource "azuread_application" "kargo" {
   display_name     = local.aad.kargo.display_name
   sign_in_audience = "AzureADMyOrg"
-  owners           = try(local.aad.kargo.owners, [])
+  owners           = local.aad_app_owners_kargo
 
   group_membership_claims = ["SecurityGroup"]
 
@@ -157,5 +202,5 @@ resource "azuread_application" "kargo" {
 resource "azuread_service_principal" "kargo" {
   client_id                    = azuread_application.kargo.client_id
   app_role_assignment_required = false
-  owners                       = try(local.aad.kargo.owners, [])
+  owners                       = local.aad_app_owners_kargo
 }

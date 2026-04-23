@@ -220,9 +220,10 @@ GitHub items must be arranged out-of-band by the adopter org.
   `_fleet.yaml.fleet.tenant_id`. Both providers run with
   `use_cli = true`; no service-principal env vars are read.
 - Tenant role: **Privileged Role Administrator** (or Global
-  Administrator) — required to grant the
-  `Application Administrator` directory role to the
-  `fleet-stage0` and `fleet-meta` UAMIs.
+  Administrator) — required to consent to the Microsoft Graph
+  app-role assignments that grant `fleet-stage0`
+  `Application.ReadWrite.OwnedBy` and `fleet-meta`
+  `AppRoleAssignment.ReadWrite.All`.
 - Subscription role on `_fleet.yaml.acr.subscription_id`:
   **Owner** (or Contributor + User Access Administrator).
 - Resource provider registrations on the shared subscription:

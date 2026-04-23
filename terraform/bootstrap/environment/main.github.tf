@@ -190,3 +190,37 @@ resource "github_actions_environment_variable" "env_vars" {
   variable_name = each.key
   value         = each.value
 }
+
+# -----------------------------------------------------------------------------
+# Microsoft Graph app-role assignment — `Application.ReadWrite.OwnedBy` on
+# the per-env UAMI. Lets Stage 1 (mgmt cluster; Kargo password rotation) and
+# Stage 2 (every cluster; Argo per-cluster FIC writes + Kargo FIC on mgmt)
+# perform owner-scoped CRUD on the Argo + Kargo AAD apps, provided the env
+# UAMI is listed in each app's `owners` attribute (see
+# `terraform/stages/0-fleet/main.aad.tf`). Replaces the tenant-wide
+# `Application Administrator` directory role previously held by
+# `fleet-stage0` (STATUS item 14).
+#
+# The caller (`uami-fleet-meta`) needs `AppRoleAssignment.ReadWrite.All` on
+# Graph to create this resource; that grant is authored by `bootstrap/fleet`
+# (main.identities.tf `meta_approle_rw_all`) and must apply before this
+# stage runs.
+# -----------------------------------------------------------------------------
+
+data "azuread_service_principal" "msgraph" {
+  client_id = "00000003-0000-0000-c000-000000000000"
+}
+
+locals {
+  # Graph app-role id (stable across tenants). Mirrors the same-named local
+  # in `terraform/bootstrap/fleet/main.identities.tf`; kept as a named
+  # constant here rather than a literal so additions of further Graph roles
+  # to this module stay consistent and grep-able.
+  msgraph_role_application_readwrite_ownedby = "18a4783c-866b-4cc7-a460-3d5e5662c884"
+}
+
+resource "azuread_app_role_assignment" "env_app_rw_owned_by" {
+  app_role_id         = local.msgraph_role_application_readwrite_ownedby
+  principal_object_id = module.env_github.identity.principal_id
+  resource_object_id  = data.azuread_service_principal.msgraph.object_id
+}
