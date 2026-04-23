@@ -50,11 +50,21 @@
 # script re-emits the tfvars overlay + _fleet.yaml patch and exits 0
 # without prompting. The tfvars file is overwritten in place on each run.
 #
+# NOTE ON RE-RUNS: by default this script self-deletes on a successful
+# run (see --keep below). Adopters who expect to re-run it later — e.g.
+# to rotate the `fleet-runners` App's private key via
+# `gh api -X POST /apps/<slug>/keys` and regenerate the narrow tfvars
+# overlay — must either pass `--keep` on the initial run, or restore
+# the script from git history (`git show <template-commit>:init-gh-apps.sh`)
+# before re-running. The rotation-detection logic in the tfvars writer
+# assumes the script is available; it cannot run without it.
+#
 # Usage:
 #   ./init-gh-apps.sh              # interactive: opens browser, waits for clicks
 #   ./init-gh-apps.sh --no-open    # don't shell out to open(1) — print URL only
 #   ./init-gh-apps.sh --port N     # bind listener to a specific port
-#   ./init-gh-apps.sh --keep       # don't self-delete on success (debug aid)
+#   ./init-gh-apps.sh --keep       # don't self-delete on success — required
+#                                    if you want to re-run later for key rotation
 #
 # Prereqs:
 #   - clusters/_fleet.yaml exists (run ./init-fleet.sh first).
@@ -707,6 +717,13 @@ echo "    3. After Stage 0 has applied, you may delete:"
 echo "         $state_file"
 echo "         $tfvars_file"
 echo ""
+if [[ $KEEP -eq 0 ]]; then
+  echo "  This script will self-delete on exit. If you need to re-run it"
+  echo "  later (e.g. to rotate the fleet-runners PEM), restore it from git"
+  echo "  history first — or re-run with --keep next time to avoid the"
+  echo "  restore step."
+  echo ""
+fi
 
 if [[ $KEEP -eq 0 ]]; then
   # Best-effort self-delete. If the script can't remove itself (read-only

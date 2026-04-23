@@ -18,16 +18,16 @@
 #  `stage0_publisher_app_client_id`)
 # to be consumed from a tfvars file derived at apply time from
 # `<repo-root>/.gh-apps.state.json` (the authoritative on-disk record
-# written at the repo root by the (not-yet-implemented)
-# `init-gh-apps.sh` helper, PLAN §16.4; implementation-status callout
-# in §16 flags §16.4 as Phase 1 spec-only). From Stage 0's working
-# directory (`terraform/stages/0-fleet/`) that file lives three
-# levels up; the apply-time derivation step must reference it via
-# an explicit path (`$(git rev-parse --show-toplevel)/.gh-apps.state.json`
-# in the workflow, or `../../../.gh-apps.state.json` relative to the
-# module root). Those `variable` blocks — and the KV-seed / repo-
-# variable-publish resources that consume them — land together with
-# §16.4's helper; they intentionally do not ship in this scaffold.
+# written at the repo root by the implemented `init-gh-apps.sh`
+# helper described in PLAN §16.4). From Stage 0's working directory
+# (`terraform/stages/0-fleet/`) that file lives three levels up; the
+# apply-time derivation step must reference it via an explicit path
+# (`$(git rev-parse --show-toplevel)/.gh-apps.state.json` in the
+# workflow, or `../../../.gh-apps.state.json` relative to the module
+# root). The deferred work here is the Stage 0 `variable` blocks and
+# the KV-seed / repo-variable-publish resources that consume tfvars
+# derived from that file at apply time; those pieces intentionally do
+# not ship in this scaffold yet.
 
 variable "mgmt_pe_fleet_subnet_ids" {
   description = <<-EOT

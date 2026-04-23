@@ -1077,27 +1077,30 @@ messages; the rest must be arranged out-of-band by the adopter org.
   PEM, and webhook secret captured. This is **not**
   `terraform apply`-able from the platform's API — the GitHub App
   Manifest flow requires a one-time browser handshake.
-  **Future (once §16.4 lands):** the adopter runs
+  **Helper script (implemented — §16.4):** the adopter runs
   `./init-gh-apps.sh` (repo root, next to `init-fleet.sh`), which
   automates everything *except* the click-to-create step. It
   persists the full GitHub App payload to `./.gh-apps.state.json`
   and writes a narrow per-module overlay at
   `terraform/bootstrap/fleet/.gh-apps.auto.tfvars` carrying only
-  the `fleet-runners` PEM that `bootstrap/fleet` consumes. Stage 0
-  derives its own tfvars from `.gh-apps.state.json` when §16.4
-  lands the matching `variable` blocks.
+  the `fleet-runners` PEM that `bootstrap/fleet` consumes.
+  **Deferred (§16.4 Stage 0 wiring):** Stage 0's `variable` blocks
+  for `fleet-meta` / `stage0-publisher` credentials and the
+  KV-seed / repo-variable-publish resources that consume them are
+  not yet present. When they land, Stage 0 will derive its tfvars
+  from `./.gh-apps.state.json` at apply time.
   **Today (Phase 1):** `bootstrap/fleet` **does** require the
   `fleet-runners` GitHub App — it seeds the App's PEM into the fleet
   Key Vault as the `fleet-runners-app-pem` secret via
   `azapi_data_plane_resource` (the `fleet_runners_app_pem` variable in
   `terraform/bootstrap/fleet/variables.tf` is `nullable = false`).
-  Until `init-gh-apps.sh` lands, adopters must create the three Apps
-  manually via *Organization settings → Developer settings → GitHub
-  Apps* with the permissions listed in §4 Stage 0, and supply the
-  `fleet-runners` PEM directly via `TF_VAR_fleet_runners_app_pem` or a
-  hand-written `terraform/bootstrap/fleet/.gh-apps.auto.tfvars`. The
-  `fleet-meta` and `stage0-publisher` Apps are **not** required for
-  `bootstrap/fleet` apply — Stage 0 does not yet declare input
+  Adopters who opt not to run `init-gh-apps.sh` must create the three
+  Apps manually via *Organization settings → Developer settings →
+  GitHub Apps* with the permissions listed in §4 Stage 0, and supply
+  the `fleet-runners` PEM directly via `TF_VAR_fleet_runners_app_pem`
+  or a hand-written `terraform/bootstrap/fleet/.gh-apps.auto.tfvars`.
+  The `fleet-meta` and `stage0-publisher` Apps are **not** required
+  for `bootstrap/fleet` apply — Stage 0 does not yet declare input
   variables for them, so their credentials currently have no TF
   consumer (they're supplied directly to workflow secrets by the
   operator).
@@ -1138,9 +1141,12 @@ messages; the rest must be arranged out-of-band by the adopter org.
   the vault). `bootstrap/fleet` does not write or manage the GitHub
   App credentials beyond seeding the `fleet-runners` PEM that its
   own runner pool consumes.
-  **Today (Phase 1):** not a prerequisite — `bootstrap/fleet` has
-  no GH App input variables and Stage 0 has not yet added the
-  §16.4 GH App input variables / KV-seed resources either.
+  **Today (Phase 1):** the broader §16.4 GH App bootstrap is not yet
+  a prerequisite, but `bootstrap/fleet` **does** already require the
+  `fleet-runners` PEM input (via `fleet_runners_app_pem` in
+  `terraform/bootstrap/fleet/variables.tf`, `nullable = false`) and
+  seeds only that one Key Vault secret; Stage 0 has not yet added
+  the broader §16.4 GH App input variables / KV-seed resources.
 
 Creates:
 
