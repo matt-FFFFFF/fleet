@@ -779,8 +779,11 @@ self-contained enough to land in its own PR.
     locally: passes clean on both example clusters; injecting a
     deliberate fleet-identity name mutation reproduces the expected
     mismatch output. Portable across GNU + BSD `find` (no `-printf`).
-13. **Drop `Entra AppAdmin` from `fleet-meta`** — `[ ]` Not started.
-    See `docs/findings.md` F1.
+13. **Drop `Entra AppAdmin` from `fleet-meta`** — ✅ **Done.** Deleted
+    `azuread_directory_role_assignment.meta_app_admin` from
+    `terraform/bootstrap/fleet/main.identities.tf`; comment rewritten to
+    reflect that only `fleet-stage0` holds the role. PLAN §10 identities
+    table updated (`fleet-meta` row no longer lists Entra AppAdmin).
 14. **Replace `Application Administrator` on `fleet-stage0` with
     `Application.ReadWrite.OwnedBy`** — `[ ]` Not started.
     See `docs/findings.md` F2. Also fixes a latent bug where Stage 1

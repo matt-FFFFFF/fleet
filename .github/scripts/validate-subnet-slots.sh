@@ -77,10 +77,11 @@ capacity_for_prefix() {
 
 # address_space_for_env_region <env> <region>
 # Reads `_fleet.yaml.networking.envs.<env>.regions.<region>.address_space`.
-# Emits the scalar CIDR or empty string if absent.
+# That key is a YAML list (first element is authoritative per PLAN §3.1);
+# emits the scalar CIDR or empty string if absent.
 address_space_for_env_region() {
   local env="$1" region="$2"
-  yq -r ".networking.envs.\"$env\".regions.\"$region\".address_space // \"\"" "$FLEET_YAML"
+  yq -r ".networking.envs.\"$env\".regions.\"$region\".address_space[0] // \"\"" "$FLEET_YAML"
 }
 
 require yq

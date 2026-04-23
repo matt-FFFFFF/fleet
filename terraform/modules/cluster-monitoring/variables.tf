@@ -36,12 +36,6 @@ variable "amw_id" {
   nullable    = false
 }
 
-variable "action_group_id" {
-  description = "Env Action Group ARM id. Informational today (ruleGroups ship recording rules only in this module); once alerting rules are added they'll reference this AG via `actions[].actionGroupId`."
-  type        = string
-  nullable    = false
-}
-
 variable "tags" {
   description = "Tags applied to every resource in this module."
   type        = map(string)

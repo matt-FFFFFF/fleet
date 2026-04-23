@@ -16,8 +16,11 @@
 #   - Three Prometheus recording rule groups (node/k8s/UX) scoped to
 #     the env AMW
 #
-# The env DCE + env AMW + env Action Group are owned by
-# `bootstrap/environment` (ids arrive as `TF_VAR_env_*`).
+# The env DCE + env AMW are owned by `bootstrap/environment` (ids arrive
+# as `TF_VAR_env_*`). The env Action Group id is still published by
+# `bootstrap/environment` and passed through Stage 1's outputs for
+# downstream alerting consumers, but it is not consumed by this module
+# — ruleGroups here ship recording rules only.
 
 module "cluster_monitoring" {
   source = "../../modules/cluster-monitoring"
@@ -29,9 +32,8 @@ module "cluster_monitoring" {
   location       = local.cluster.region
   parent_id      = "/subscriptions/${local.cluster.subscription_id}/resourceGroups/${local.cluster.resource_group}"
 
-  dce_id          = var.env_dce_id
-  amw_id          = var.env_monitor_workspace_id
-  action_group_id = var.env_action_group_id
+  dce_id = var.env_dce_id
+  amw_id = var.env_monitor_workspace_id
 
   tags = {
     fleet       = local.fleet.name

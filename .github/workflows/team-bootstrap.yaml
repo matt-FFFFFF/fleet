@@ -31,17 +31,31 @@ jobs:
     name: detect new teams
     runs-on: ubuntu-24.04
     outputs:
-      teams: ${{ steps.detect.outputs.teams }}
-      any:   ${{ steps.detect.outputs.any }}
+      teams:       ${{ steps.detect.outputs.teams }}
+      any:         ${{ steps.detect.outputs.any }}
+      initialized: ${{ steps.init_guard.outputs.initialized }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
+      - name: Initialisation guard
+        id: init_guard
+        uses: ./.github/actions/fleet-initialized
+
       - name: Detect newly-added team YAMLs
         id: detect
+        env:
+          INITIALIZED: ${{ steps.init_guard.outputs.initialized }}
         run: |
           set -euo pipefail
+          if [[ "$INITIALIZED" != "true" ]]; then
+            # Emit valid-JSON defaults so downstream `fromJSON(...)`
+            # expressions don't hard-fail on empty strings.
+            echo 'teams=[]'   >> "$GITHUB_OUTPUT"
+            echo 'any=false'  >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # --diff-filter=A → Added files only. HEAD~1..HEAD is the merge
           # commit; any team YAML that is new at HEAD and absent at HEAD~1
           # lands in the list.
@@ -65,7 +79,7 @@ jobs:
   bootstrap:
     name: bootstrap team=${{ matrix.team.name }}
     needs: detect
-    if: needs.detect.outputs.any == 'true'
+    if: needs.detect.outputs.initialized == 'true' && needs.detect.outputs.any == 'true'
     runs-on: [self-hosted]
     environment: fleet-meta
     strategy:

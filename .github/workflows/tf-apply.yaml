@@ -45,22 +45,39 @@ jobs:
     name: detect affected
     runs-on: ubuntu-24.04
     outputs:
-      stage0:   ${{ steps.detect.outputs.stage0 }}
-      clusters: ${{ steps.detect.outputs.clusters }}
-      any:      ${{ steps.detect.outputs.any }}
+      stage0:      ${{ steps.detect.outputs.stage0 }}
+      clusters:    ${{ steps.detect.outputs.clusters }}
+      any:         ${{ steps.detect.outputs.any }}
+      initialized: ${{ steps.init_guard.outputs.initialized }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
+      - name: Initialisation guard
+        id: init_guard
+        uses: ./.github/actions/fleet-initialized
+
       - name: Detect
         id: detect
+        env:
+          INITIALIZED: ${{ steps.init_guard.outputs.initialized }}
+          BASE_REF: HEAD~1
+          HEAD_REF: HEAD
         run: |
+          if [[ "$INITIALIZED" != "true" ]]; then
+            # Emit valid-JSON defaults so downstream `fromJSON(...)`
+            # expressions don't hard-fail on empty strings.
+            echo 'stage0=false'   >> "$GITHUB_OUTPUT"
+            echo 'clusters=[]'    >> "$GITHUB_OUTPUT"
+            echo 'any=false'      >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # Diff against the commit that was at HEAD~1 prior to the merge
           # — every PR merged to main is a merge commit with one
           # first-parent and one second-parent; `HEAD~1` is the previous
           # main tip, which is what we want to compare against.
-          result="$(BASE_REF=HEAD~1 HEAD_REF=HEAD .github/scripts/detect-affected-clusters.sh)"
+          result="$(.github/scripts/detect-affected-clusters.sh)"
           echo "$result" | jq .
           stage0="$(echo "$result" | jq -r .stage0)"
           clusters="$(echo "$result" | jq -c .clusters)"
@@ -75,7 +92,7 @@ jobs:
   stage0:
     name: stage0 apply
     needs: detect
-    if: needs.detect.outputs.stage0 == 'true'
+    if: needs.detect.outputs.initialized == 'true' && needs.detect.outputs.stage0 == 'true'
     runs-on: [self-hosted]
     environment: fleet-stage0
     outputs:
@@ -220,6 +237,7 @@ jobs:
     # Run after Stage 0 (skipped-state counts as success thanks to `always()`).
     if: |
       always() &&
+      needs.detect.outputs.initialized == 'true' &&
       (needs.stage0.result == 'success' || needs.stage0.result == 'skipped') &&
       fromJSON(needs.detect.outputs.clusters)[0] != null
     runs-on: [self-hosted]
