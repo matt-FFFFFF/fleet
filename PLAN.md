@@ -3014,9 +3014,13 @@ Steps, per App:
    `{ id, slug, client_id, client_secret, pem, webhook_secret }`.
    These values are returned **once**; the script writes them
    immediately to `./.gh-apps.state.json` (mode 0600, gitignored).
-6. **Install** the App on the fleet repo:
-   `gh api -X POST /orgs/<org>/installations` (operator may be
-   re-prompted in the browser to confirm install scope).
+6. **Install** the App on the fleet repo via the GitHub UI:
+   `https://github.com/apps/<slug>/installations/new` (operator
+   completes the install in the browser, including confirming the
+   repo/install scope). The script then discovers the resulting
+   installation id via the appropriate listing endpoint(s) (e.g.
+   `GET /users/<owner>/installation` or `GET /orgs/<org>/installation`
+   for the created App).
 7. **Emit** a narrow per-module tfvars overlay at
    `terraform/bootstrap/fleet/.gh-apps.auto.tfvars` (gitignored,
    mode 0600) carrying only the variables `bootstrap/fleet`

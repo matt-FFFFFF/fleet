@@ -93,7 +93,7 @@ while (($#)); do
     --keep)    KEEP=1;    shift ;;
     --port)    PORT="${2:?--port needs a number}"; shift 2 ;;
     --port=*)  PORT="${1#*=}"; shift ;;
-    -h|--help) sed -n '2,46p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,76p' "$0"; exit 0 ;;
     *) die "unknown flag: $1" ;;
   esac
 done

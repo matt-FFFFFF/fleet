@@ -215,8 +215,11 @@ module "team_template_repo" {
 # `init-gh-apps.sh` itself.
 #
 # TODO(phase2-stage0-gh-apps): declare matching `variable` blocks in
-# terraform/stages/0-fleet/ and wire tf-apply.yaml to symlink the tfvars
-# overlay into that stage's working directory.
+# terraform/stages/0-fleet/ for the `fleet-meta` / `stage0-publisher`
+# credentials, and have tf-apply.yaml derive a Stage-0 tfvars file
+# from `<repo-root>/.gh-apps.state.json` at apply time. No Stage-0
+# `.auto.tfvars` file is emitted by `init-gh-apps.sh` — the state
+# file is authoritative.
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------

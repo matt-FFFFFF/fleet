@@ -817,35 +817,25 @@ self-contained enough to land in its own PR.
     template-vs-instance id divergence that drove the churn is
     no longer present in the config.
 16. **Document `-var-file` requirement for `bootstrap/fleet`** —
-    ✅ **Done.** `bootstrap/fleet` now consumes
-    `fleet_runners_app_pem` from the root `.gh-apps.auto.tfvars`
-    (F4-class runner-PEM seeding into the fleet KV data plane), but
-    `*.auto.tfvars` only auto-loads from the module root being
-    applied. `docs/adoption.md §5.1` gains a GH-App PEM prerequisite
-    bullet spelling out the explicit
+    ✅ **Done.** **Superseded by item 17** — the `-var-file`
+    workaround this item originally documented is no longer part
+    of the codebase. The F5 landing briefly required adopters to
+    pass an explicit
     `-var-file="$(git rev-parse --show-toplevel)/.gh-apps.auto.tfvars"`
-    flag and documenting that the root file currently carries 12
-    generated GH-App variables (four per App: `*_id`, `*_client_id`,
-    `*_pem`, `*_webhook_secret` — see `init-gh-apps.sh:562-578`), so
-    passing it to `bootstrap/fleet` produces 11 benign
-    `Value for undeclared variable` warnings (everything except
-    `fleet_runners_app_pem`, the one field declared in that module).
-    Warning-vs-error semantics keep the apply succeeding; the
-    residual warnings disappear when PLAN §16.4 grows the Stage-0
-    variable blocks + `-var-file` wiring in `tf-apply.yaml`. §5.2
-    worked command block updated to include the flag on both the
-    first-apply and steady-state invocations. §4 sweep: rewrote the
-    stale "`init-gh-apps.sh` seeds the KV via `az keyvault secret
-    set`" sentence to match reality (the seeding happens inside
-    `bootstrap/fleet` via the `azapi_data_plane_resource` introduced
-    by the F4-class work), and clarified that Stage 0's current
-    workflow does not yet pass `-var-file` — the file stays at rest
-    until §16.4 lands. F5 finding deleted from `docs/findings.md`
-    per AGENTS.md lifecycle rule. **Superseded by item 17:** the
-    `-var-file` workaround documented here is no longer required —
-    `init-gh-apps.sh` now drops a narrow per-module overlay at the
-    `bootstrap/fleet` module root and the docs were rewritten to
-    drop the flag.
+    to `bootstrap/fleet` (because `*.auto.tfvars` only auto-loads
+    from the module root being applied, and the root file carried
+    all 12 generated GH-App variables — producing 11 benign
+    "undeclared variable" warnings on every apply). Item 17
+    replaced that approach with a narrow per-module overlay at
+    `terraform/bootstrap/fleet/.gh-apps.auto.tfvars`; the flag,
+    the warnings, and the root-level file were all removed.
+    `docs/adoption.md §4 / §5.1 / §5.2` were rewritten to match;
+    PLAN §4's stale "`init-gh-apps.sh` seeds the KV via
+    `az keyvault secret set`" sentence was corrected (the seeding
+    happens inside `bootstrap/fleet` via the
+    `azapi_data_plane_resource` introduced by the F4-class work).
+    F5 finding deleted from `docs/findings.md` per AGENTS.md
+    lifecycle rule.
 17. **Narrow `bootstrap/fleet` GH-App tfvars overlay** —
     ✅ **Done.** `init-gh-apps.sh` now writes a single tfvars file
     at `terraform/bootstrap/fleet/.gh-apps.auto.tfvars` (gitignored,
