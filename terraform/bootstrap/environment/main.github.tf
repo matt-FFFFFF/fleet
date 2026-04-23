@@ -211,8 +211,16 @@ data "azuread_service_principal" "msgraph" {
   client_id = "00000003-0000-0000-c000-000000000000"
 }
 
+locals {
+  # Graph app-role id (stable across tenants). Mirrors the same-named local
+  # in `terraform/bootstrap/fleet/main.identities.tf`; kept as a named
+  # constant here rather than a literal so additions of further Graph roles
+  # to this module stay consistent and grep-able.
+  msgraph_role_application_readwrite_ownedby = "18a4783c-866b-4cc7-a460-3d5e5662c884"
+}
+
 resource "azuread_app_role_assignment" "env_app_rw_owned_by" {
-  app_role_id         = "18a4783c-866b-4cc7-a460-3d5e5662c884" # Application.ReadWrite.OwnedBy
+  app_role_id         = local.msgraph_role_application_readwrite_ownedby
   principal_object_id = module.env_github.identity.principal_id
   resource_object_id  = data.azuread_service_principal.msgraph.object_id
 }
