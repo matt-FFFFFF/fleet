@@ -1,0 +1,61 @@
+# .github/actions/fleet-initialized/action.yaml
+#
+# Template-repo guard for adopter-facing workflows.
+#
+# Adopter-facing Terraform / bootstrap workflows (`tf-plan`, `tf-apply`,
+# `env-bootstrap`, `team-bootstrap`) consume fleet-scope repo variables
+# (`FLEET_KEYVAULT_ID`, `ACR_RESOURCE_ID`, `MGMT_VNET_RESOURCE_IDS`, …)
+# and a rendered `clusters/_fleet.yaml`. Both are produced by
+# `init-fleet.sh` + `init-gh-apps.sh` at adoption time, and neither exists
+# in the template repo or in an uninitialised adopter clone.
+#
+# Running those workflows pre-init fails mid-`terraform init` with obscure
+# missing-variable errors. This action short-circuits early with a clear
+# `::notice::` instead, emitting `initialized=true|false` for downstream
+# `if:` gates.
+#
+# The marker file `.fleet-initialized` is written by `init-fleet.sh` after
+# the first successful render and deleted by the self-cleanup step that
+# strips the template machinery from adopter repos. Its presence is the
+# single source of truth for "this repo is an initialised fleet."
+#
+# Usage:
+#
+#   jobs:
+#     detect:
+#       steps:
+#         - uses: actions/checkout@...
+#         - id: init_guard
+#           uses: ./.github/actions/fleet-initialized
+#       outputs:
+#         initialized: ${{ steps.init_guard.outputs.initialized }}
+#
+#     real_job:
+#       needs: detect
+#       if: needs.detect.outputs.initialized == 'true'
+#       ...
+
+name: Fleet initialisation guard
+description: |
+  Check for the `.fleet-initialized` marker. Emits
+  `initialized=true|false` without failing the workflow, so downstream
+  jobs can skip cleanly in the template repo.
+
+outputs:
+  initialized:
+    description: '"true" if `.fleet-initialized` exists at the repo root, else "false".'
+    value: ${{ steps.check.outputs.initialized }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check for .fleet-initialized
+      id: check
+      shell: bash
+      run: |
+        if [[ -f .fleet-initialized ]]; then
+          echo "initialized=true"  >> "$GITHUB_OUTPUT"
+        else
+          echo "initialized=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::.fleet-initialized marker absent — skipping TF legs (template repo or uninitialised adopter clone)"
+        fi

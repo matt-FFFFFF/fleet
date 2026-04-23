@@ -45,16 +45,22 @@ jobs:
     name: detect affected
     runs-on: ubuntu-24.04
     outputs:
-      stage0:   ${{ steps.detect.outputs.stage0 }}
-      clusters: ${{ steps.detect.outputs.clusters }}
-      any:      ${{ steps.detect.outputs.any }}
+      stage0:      ${{ steps.detect.outputs.stage0 }}
+      clusters:    ${{ steps.detect.outputs.clusters }}
+      any:         ${{ steps.detect.outputs.any }}
+      initialized: ${{ steps.init_guard.outputs.initialized }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
+      - name: Initialisation guard
+        id: init_guard
+        uses: ./.github/actions/fleet-initialized
+
       - name: Detect
         id: detect
+        if: steps.init_guard.outputs.initialized == 'true'
         run: |
           # Diff against the commit that was at HEAD~1 prior to the merge
           # — every PR merged to main is a merge commit with one
@@ -75,7 +81,7 @@ jobs:
   stage0:
     name: stage0 apply
     needs: detect
-    if: needs.detect.outputs.stage0 == 'true'
+    if: needs.detect.outputs.initialized == 'true' && needs.detect.outputs.stage0 == 'true'
     runs-on: [self-hosted]
     environment: fleet-stage0
     outputs:
@@ -220,6 +226,7 @@ jobs:
     # Run after Stage 0 (skipped-state counts as success thanks to `always()`).
     if: |
       always() &&
+      needs.detect.outputs.initialized == 'true' &&
       (needs.stage0.result == 'success' || needs.stage0.result == 'skipped') &&
       fromJSON(needs.detect.outputs.clusters)[0] != null
     runs-on: [self-hosted]

@@ -31,15 +31,21 @@ jobs:
     name: detect new teams
     runs-on: ubuntu-24.04
     outputs:
-      teams: ${{ steps.detect.outputs.teams }}
-      any:   ${{ steps.detect.outputs.any }}
+      teams:       ${{ steps.detect.outputs.teams }}
+      any:         ${{ steps.detect.outputs.any }}
+      initialized: ${{ steps.init_guard.outputs.initialized }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
+      - name: Initialisation guard
+        id: init_guard
+        uses: ./.github/actions/fleet-initialized
+
       - name: Detect newly-added team YAMLs
         id: detect
+        if: steps.init_guard.outputs.initialized == 'true'
         run: |
           set -euo pipefail
           # --diff-filter=A → Added files only. HEAD~1..HEAD is the merge
@@ -65,7 +71,7 @@ jobs:
   bootstrap:
     name: bootstrap team=${{ matrix.team.name }}
     needs: detect
-    if: needs.detect.outputs.any == 'true'
+    if: needs.detect.outputs.initialized == 'true' && needs.detect.outputs.any == 'true'
     runs-on: [self-hosted]
     environment: fleet-meta
     strategy:

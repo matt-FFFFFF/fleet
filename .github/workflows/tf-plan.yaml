@@ -51,16 +51,22 @@ jobs:
     name: detect affected
     runs-on: ubuntu-24.04
     outputs:
-      stage0:   ${{ steps.detect.outputs.stage0 }}
-      clusters: ${{ steps.detect.outputs.clusters }}
-      any:      ${{ steps.detect.outputs.any }}
+      stage0:      ${{ steps.detect.outputs.stage0 }}
+      clusters:    ${{ steps.detect.outputs.clusters }}
+      any:         ${{ steps.detect.outputs.any }}
+      initialized: ${{ steps.init_guard.outputs.initialized }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
+      - name: Initialisation guard
+        id: init_guard
+        uses: ./.github/actions/fleet-initialized
+
       - name: Detect
         id: detect
+        if: steps.init_guard.outputs.initialized == 'true'
         env:
           BASE_REF: origin/${{ github.base_ref }}
           HEAD_REF: ${{ github.event.pull_request.head.sha }}
@@ -75,14 +81,10 @@ jobs:
           echo "clusters=$clusters" >> "$GITHUB_OUTPUT"
           echo "any=$any" >> "$GITHUB_OUTPUT"
 
-  # -------------------------------------------------------------------------
-  # 2. Stage 0 plan — fires only when `terraform/stages/0-fleet/**` (or
-  #    anything flagged as "everything") is in the change set.
-  # -------------------------------------------------------------------------
   stage0:
     name: stage0 plan
     needs: detect
-    if: needs.detect.outputs.stage0 == 'true'
+    if: needs.detect.outputs.initialized == 'true' && needs.detect.outputs.stage0 == 'true'
     runs-on: [self-hosted]
     environment: fleet-stage0
     steps:
@@ -144,7 +146,7 @@ jobs:
   cluster:
     name: plan ${{ matrix.cluster.env }}/${{ matrix.cluster.region }}/${{ matrix.cluster.name }}
     needs: detect
-    if: fromJSON(needs.detect.outputs.clusters)[0] != null
+    if: needs.detect.outputs.initialized == 'true' && fromJSON(needs.detect.outputs.clusters)[0] != null
     runs-on: [self-hosted]
     environment: fleet-${{ matrix.cluster.env }}
     strategy:
@@ -266,7 +268,7 @@ jobs:
   summarize:
     name: summarize plans
     needs: [detect, stage0, cluster]
-    if: always() && needs.detect.outputs.any == 'true'
+    if: always() && needs.detect.outputs.initialized == 'true' && needs.detect.outputs.any == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
