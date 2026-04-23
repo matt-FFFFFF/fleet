@@ -3018,9 +3018,12 @@ Steps, per App:
    `https://github.com/apps/<slug>/installations/new` (operator
    completes the install in the browser, including confirming the
    repo/install scope). The script then discovers the resulting
-   installation id via the appropriate listing endpoint(s) (e.g.
-   `GET /users/<owner>/installation` or `GET /orgs/<org>/installation`
-   for the created App).
+   installation id via PAT-friendly listing endpoints — for
+   org-owned repos `GET /orgs/<org>/installations` (paginated;
+   requires `admin:org`); for user-owned repos
+   `GET /user/installations` (authenticated user; note that
+   `/users/<user>/installations` is **not** a real route) — and
+   filters the returned installations by the created App's `app_id`.
 7. **Emit** a narrow per-module tfvars overlay at
    `terraform/bootstrap/fleet/.gh-apps.auto.tfvars` (gitignored,
    mode 0600) carrying only the variables `bootstrap/fleet`
@@ -3046,8 +3049,9 @@ Steps, per App:
    file shape would be premature. When the deferred Stage-0
    wiring lands (this same §16.4 work), Stage 0 will derive its
    tfvars file from `./.gh-apps.state.json` (which already
-   persists the full payload — IDs, client IDs, PEMs, webhook
-   secrets for all three Apps). Stage 0 then writes the PEMs +
+   persists the full GitHub App payload — IDs, client IDs, client
+   secrets, PEMs, webhook secrets, and other App metadata for all
+   three Apps). Stage 0 then writes the PEMs +
    webhook secrets into the fleet KV created by `bootstrap/fleet`
    (Stage 0 holds `Key Vault Secrets Officer` on the vault; the
    role assignment is created in `bootstrap/fleet` to the

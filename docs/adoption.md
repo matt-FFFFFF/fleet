@@ -182,9 +182,10 @@ export GH_TOKEN=<PAT with repo + admin:org>
 ./init-gh-apps.sh
 ```
 
-The script persists the full App payload (IDs / PEMs / webhook secrets
-for all three Apps) to `./.gh-apps.state.json` (gitignored, mode 0600)
-and writes a narrow per-module overlay at
+The script persists the full App payload (App IDs, `client_id`,
+`client_secret`, PEMs, webhook secrets, and other App metadata for all
+three Apps) to `./.gh-apps.state.json` (gitignored, mode 0600) and
+writes a narrow per-module overlay at
 `terraform/bootstrap/fleet/.gh-apps.auto.tfvars` (gitignored, mode
 0600) carrying only `fleet_runners_app_pem` +
 `fleet_runners_app_pem_version`. `bootstrap/fleet` (Stage -1) owns the

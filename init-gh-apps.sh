@@ -41,10 +41,11 @@
 #     installation_id}` so `bootstrap/fleet` apply just works.
 #   - Self-deletes (only on a fully successful run).
 #
-# The full GitHub App payload (IDs / client IDs / PEMs / webhook secrets
-# for all three Apps) is persisted in .gh-apps.state.json. Stage 0's
-# eventual consumer (PLAN §16.4) will derive its own tfvars from state
-# at that time; no Stage-0 tfvars file is emitted today.
+# The full GitHub App payload (IDs, client IDs, client secrets, PEMs,
+# webhook secrets, and other App metadata for all three Apps) is
+# persisted in .gh-apps.state.json. Stage 0's eventual consumer
+# (PLAN §16.4) will derive its own tfvars from state at that time; no
+# Stage-0 tfvars file is emitted today.
 #
 # Idempotent: if .gh-apps.state.json already records all three Apps, the
 # script re-emits the tfvars overlay + _fleet.yaml patch and exits 0
@@ -93,7 +94,7 @@ while (($#)); do
     --keep)    KEEP=1;    shift ;;
     --port)    PORT="${2:?--port needs a number}"; shift 2 ;;
     --port=*)  PORT="${1#*=}"; shift ;;
-    -h|--help) sed -n '2,76p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,77p' "$0"; exit 0 ;;
     *) die "unknown flag: $1" ;;
   esac
 done
