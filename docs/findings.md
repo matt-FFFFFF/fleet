@@ -5,60 +5,6 @@ Open design/implementation concerns that don't fit `PLAN.md` (intent) or
 work queued in the Rework program in `STATUS.md`. Close a finding by
 deleting its section when the matching rework item is completed.
 
-## F5 — `.gh-apps.auto.tfvars` lives at repo root; `bootstrap/fleet` now needs it
-
-Tracked: Rework item 15.
-
-**Observation.** `init-gh-apps.sh` writes
-`<repo-root>/.gh-apps.auto.tfvars` (gitignored, mode 0600) containing
-the three GH App PEMs and IDs. The file was originally intended
-solely for `stages/0-fleet`, which receives it through `tf-apply.yaml`
-as an explicit `-var-file`. `bootstrap/fleet` now also consumes one
-field from it — `fleet_runners_app_pem` — to seed the fleet Key
-Vault via `azapi_data_plane_resource.fleet_runners_pem_secret`
-before the runner Container App Job is created (ACA validates the
-KV reference at PUT time, not at first job execution).
-
-**Trap.** `*.auto.tfvars` only auto-loads from the Terraform module
-root being applied. Running `terraform apply` from
-`terraform/bootstrap/fleet/` does **not** auto-load the repo-root
-file. Without explicit `-var-file`, the required
-`fleet_runners_app_pem` variable is unset and apply fails at plan
-time with `No value for required variable`.
-
-**Operator contract.** Every `bootstrap/fleet` apply must pass:
-
-```
-terraform apply \
-  -var-file=$(git rev-parse --show-toplevel)/.gh-apps.auto.tfvars \
-  [other flags] tfplan
-```
-
-Undeclared-variable warnings from the six Stage-0-only fields in
-that file (`fleet_meta_app_id`, `fleet_meta_app_pem`, etc.) are
-expected and benign — `terraform` emits warnings, not errors, for
-undeclared vars supplied via explicit `-var-file`.
-
-**Action.**
-
-1. Document the `-var-file` requirement in `docs/adoption.md §5.1`
-   alongside the existing `allow_public_state_during_bootstrap`
-   mention.
-2. Update the bootstrap/fleet README (if any) with the same command.
-3. Optionally: have `init-gh-apps.sh` emit a second file — e.g.
-   `.gh-apps.bootstrap.auto.tfvars` containing **only**
-   `fleet_runners_app_pem` + `fleet_runners_app_pem_version` — so
-   no undeclared-var warnings fire. Cosmetic; skip unless operator
-   noise becomes a support burden.
-4. Stage 0's workflow (`tf-apply.yaml`) already passes `-var-file`
-   explicitly; no change required there.
-
-**Future.** If additional App PEMs or IDs ever need to cross the
-bootstrap/fleet boundary, declare them as `ephemeral = true`
-variables and seed as additional `azapi_data_plane_resource` blocks.
-Never stage AAD-app secrets through ordinary `azurerm` / `azapi`
-resources — they would land in state.
-
 ## F6 — Spoke networking is incomplete for hub-and-spoke egress
 
 **Observation.** The mgmt VNets created in `bootstrap/fleet`
