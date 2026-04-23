@@ -15,9 +15,9 @@
 # `if:` gates.
 #
 # The marker file `.fleet-initialized` is written by `init-fleet.sh` after
-# the first successful render and deleted by the self-cleanup step that
-# strips the template machinery from adopter repos. Its presence is the
-# single source of truth for "this repo is an initialised fleet."
+# the first successful render and persists in the adopter repo (it is
+# committed as part of the init commit). Its presence is the single
+# source of truth for "this repo is an initialised fleet."
 #
 # Usage:
 #

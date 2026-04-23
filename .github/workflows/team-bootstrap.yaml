@@ -45,9 +45,17 @@ jobs:
 
       - name: Detect newly-added team YAMLs
         id: detect
-        if: steps.init_guard.outputs.initialized == 'true'
+        env:
+          INITIALIZED: ${{ steps.init_guard.outputs.initialized }}
         run: |
           set -euo pipefail
+          if [[ "$INITIALIZED" != "true" ]]; then
+            # Emit valid-JSON defaults so downstream `fromJSON(...)`
+            # expressions don't hard-fail on empty strings.
+            echo 'teams=[]'   >> "$GITHUB_OUTPUT"
+            echo 'any=false'  >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # --diff-filter=A → Added files only. HEAD~1..HEAD is the merge
           # commit; any team YAML that is new at HEAD and absent at HEAD~1
           # lands in the list.
