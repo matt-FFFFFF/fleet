@@ -61,10 +61,9 @@ resource "azapi_resource" "state_sa" {
   response_export_values = ["id", "properties.primaryEndpoints.blob"]
 }
 
-resource "azapi_resource" "state_blob_service" {
-  type      = "Microsoft.Storage/storageAccounts/blobServices@2023-05-01"
-  name      = "default"
-  parent_id = azapi_resource.state_sa.id
+resource "azapi_update_resource" "state_blob_service" {
+  type        = "Microsoft.Storage/storageAccounts/blobServices@2023-05-01"
+  resource_id = "${azapi_resource.state_sa.id}/blobServices/default"
 
   body = {
     properties = {
@@ -84,13 +83,15 @@ resource "azapi_resource" "state_blob_service" {
 resource "azapi_resource" "state_container_fleet" {
   type      = "Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01"
   name      = local.derived.state_container
-  parent_id = azapi_resource.state_blob_service.id
+  parent_id = "${azapi_resource.state_sa.id}/blobServices/default"
 
   body = {
     properties = {
       publicAccess = "None"
     }
   }
+
+  depends_on = [azapi_update_resource.state_blob_service]
 }
 
 # -----------------------------------------------------------------------------

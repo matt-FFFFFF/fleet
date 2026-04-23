@@ -88,6 +88,7 @@ terraform/
   config-loader/load.sh                yq deep-merge → tfvars.json
 docs/
   adoption.md naming.md                contracts
+  findings.md                          open design/implementation findings (detailed rationale for STATUS Rework items)
   onboarding-*.md upgrades.md promotion.md   operator UX
 .github/
   workflows/                           CI

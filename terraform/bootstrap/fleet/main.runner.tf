@@ -96,6 +96,7 @@ module "runner" {
     terraform_data.runner_preconditions,
     azapi_resource.ra_runner_kv_secrets_user,
     azapi_resource.fleet_kv_pe_dns_zone_group,
+    azapi_data_plane_resource.fleet_runners_pem_secret,
   ]
 
   postfix  = local.runner_postfix

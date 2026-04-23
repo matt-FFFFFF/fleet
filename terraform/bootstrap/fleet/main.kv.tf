@@ -138,7 +138,7 @@ resource "azapi_resource" "fleet_kv_pe_dns_zone_group" {
 # graph as the UAMI, so the PUT succeeds in a single apply.
 
 locals {
-  role_kv_secrets_user_guid = "4633458b-17de-4321-8a42-03b4c0a0ebb2"
+  role_kv_secrets_user_guid = "4633458b-17de-408a-b874-0445c86b69e6"
 }
 
 resource "azapi_resource" "ra_runner_kv_secrets_user" {
@@ -163,4 +163,44 @@ output "fleet_kv_id" {
 output "fleet_kv_vault_uri" {
   description = "Data-plane URI of the fleet Key Vault (https://<name>.vault.azure.net/)."
   value       = azapi_resource.fleet_kv.output.properties.vaultUri
+}
+
+# --- Seed fleet-runners GitHub App PEM --------------------------------------
+#
+# The runner Container App Job (main.runner.tf) references
+# `<kv>/secrets/fleet-runners-app-pem` as a KV reference. ACA validates
+# the reference at PUT time by attempting to fetch the secret via the
+# attached UAMI, so the secret must exist before the job is created.
+#
+# Seeded via the KV data-plane API (7.4) so the PEM travels over the PE
+# and never touches ARM / state. `sensitive_body` is a write-only schema
+# attribute: the value is sent on create/update but never stored in
+# Terraform state. `sensitive_body_version` is the only change-detection
+# signal; bump `var.fleet_runners_app_pem_version` on rotation.
+#
+# Requires the executor (operator workstation or a runner) to have
+# private-network reach to `<vault>.vault.azure.net`. With the KV
+# PE + DNS zone group in place, a VPN / jump host / Bastion session
+# into the mgmt VNet is sufficient.
+
+resource "azapi_data_plane_resource" "fleet_runners_pem_secret" {
+  type      = "Microsoft.KeyVault/vaults/secrets@7.4"
+  parent_id = azapi_resource.fleet_kv.output.properties.vaultUri
+  name      = local.github_app_fleet_runners.private_key_kv_secret
+
+  body = {
+    contentType = "application/x-pem-file"
+  }
+
+  sensitive_body = {
+    value = var.fleet_runners_app_pem
+  }
+
+  sensitive_body_version = {
+    value = var.fleet_runners_app_pem_version
+  }
+
+  depends_on = [
+    azapi_resource.fleet_kv_pe_dns_zone_group,
+  ]
 }

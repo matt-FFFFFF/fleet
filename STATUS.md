@@ -779,3 +779,10 @@ self-contained enough to land in its own PR.
     locally: passes clean on both example clusters; injecting a
     deliberate fleet-identity name mutation reproduces the expected
     mismatch output. Portable across GNU + BSD `find` (no `-printf`).
+13. **Drop `Entra AppAdmin` from `fleet-meta`** — `[ ]` Not started.
+    See `docs/findings.md` F1.
+14. **Replace `Application Administrator` on `fleet-stage0` with
+    `Application.ReadWrite.OwnedBy`** — `[ ]` Not started.
+    See `docs/findings.md` F2. Also fixes a latent bug where Stage 1
+    mgmt Kargo password rotation would fail under `fleet-mgmt` on a
+    Stage-0-owned app.
