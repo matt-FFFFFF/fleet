@@ -193,12 +193,14 @@ root being applied, the `bootstrap/fleet` apply must pass the repo-root
 file explicitly via `-var-file` — see §5.1 and §5.2 below. The executor
 running the apply must have private-network reach to the KV
 (`<vault>.vault.azure.net`).
-Stage 0 seeds the remaining PEMs + webhook secrets and publishes the
-App IDs / client IDs as repo variables; its workflow
-(`tf-apply.yaml`) already passes `-var-file` explicitly to `stages/
-0-fleet`. The on-disk `.gh-apps.auto.tfvars` and `.gh-apps.state.json`
-remain on disk (both gitignored) after Stage 0 applies; the adopter may
-delete them manually once the fleet KV holds authoritative copies.
+Stage 0 is intended to seed the remaining PEMs + webhook secrets and
+publish the App IDs / client IDs as repo variables, but its current
+workflow (`tf-apply.yaml`) does not yet pass the repo-root
+`.gh-apps.auto.tfvars` to `terraform/stages/0-fleet` — the Stage-0
+`variable` blocks for those fields are deferred to PLAN §16.4. The
+on-disk `.gh-apps.auto.tfvars` and `.gh-apps.state.json` remain on
+disk (both gitignored) after Stage 0 applies; the adopter may delete
+them manually once the fleet KV holds authoritative copies.
 
 ### Today (manual)
 
@@ -329,14 +331,15 @@ GitHub items must be arranged out-of-band by the adopter org.
   ```
 
   Terraform emits `Warning: Value for undeclared variable` for the
-  six Stage-0-only fields in that file
-  (`fleet_meta_app_id`, `fleet_meta_app_pem`,
-  `fleet_meta_webhook_secret`, `stage0_publisher_app_id`,
-  `stage0_publisher_app_pem`, `stage0_publisher_webhook_secret`) —
-  these are warnings, not errors, and are expected until Stage 0 grows
-  the matching `variable` blocks (PLAN §16.4). Stage 0's own workflow
-  (`.github/workflows/tf-apply.yaml`) already passes `-var-file`
-  explicitly, so no extra plumbing is required there.
+  other 11 entries in that file —
+  `fleet_meta_app_{id,client_id,pem,webhook_secret}`,
+  `stage0_publisher_app_{id,client_id,pem,webhook_secret}`, and
+  `fleet_runners_app_{id,client_id,webhook_secret}` (four vars per
+  App × 3 Apps = 12 total, minus the one that `bootstrap/fleet`
+  declares). These are warnings, not errors, and are expected until
+  Stage 0 grows the matching `variable` blocks (PLAN §16.4) — at
+  which point Stage 0's workflow will also start consuming the file
+  via its own `-var-file`.
 - The team-template repo (`<github_org>/<team_template_repo>`,
   default `team-repo-template`) must **not** pre-exist; it is
   created fresh with `prevent_destroy = true`.
