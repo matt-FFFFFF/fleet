@@ -793,6 +793,7 @@ self-contained enough to land in its own PR.
     assignment on every plan** — ✅ **Done.** Changed `role_id` on
     `azuread_directory_role_assignment.stage0_app_admin` from the
     instance `object_id` to `template_id`, so the provider's Read
-    (which normalises to the template id) no longer diverges from
-    state. F2 will supersede this when it lands by replacing the
-    directory-role assignment with a Graph app-role assignment.
+    (which normalises to the template id) no longer causes a
+    config/state mismatch. F2 will supersede this when it lands by
+    replacing the directory-role assignment with a Graph app-role
+    assignment.

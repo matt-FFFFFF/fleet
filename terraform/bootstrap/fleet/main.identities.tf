@@ -61,8 +61,8 @@ resource "azuread_directory_role_assignment" "stage0_app_admin" {
   # provider's Read path normalises `role_id` to the roleTemplate id
   # (the tenant-agnostic GUID) regardless of what Create was given.
   # Writing the instance id here produces a spurious force-new diff on
-  # every subsequent plan; writing the template id keeps state in sync
-  # with what Read returns. See `docs/findings.md` F7.
+  # every subsequent plan; writing the template id keeps config in sync
+  # with what Read returns. See `STATUS.md` item 15.
   role_id             = azuread_directory_role.app_admin.template_id
   principal_object_id = module.fleet_repo.environments["stage0"].identity.principal_id
 }
