@@ -45,16 +45,16 @@ locals {
 
 # Helper: role-definition ARM id for a guid, on this cluster's sub.
 locals {
-  _role_def_base = "/subscriptions/${local.role_def_sub}/providers/Microsoft.Authorization/roleDefinitions"
+  role_def_base = "/subscriptions/${local.role_def_sub}/providers/Microsoft.Authorization/roleDefinitions"
 
   role_def_ids = {
-    pdz_contrib    = "${local._role_def_base}/${local.role_private_dns_zone_contrib}"
-    kv_secrets_usr = "${local._role_def_base}/${local.role_kv_secrets_user}"
-    acr_pull       = "${local._role_def_base}/${local.role_acr_pull}"
-    aks_admin      = "${local._role_def_base}/${local.role_aks_rbac_cluster_admin}"
-    aks_reader     = "${local._role_def_base}/${local.role_aks_rbac_reader}"
-    aks_user       = "${local._role_def_base}/${local.role_aks_cluster_user}"
-    monitor_pub    = "${local._role_def_base}/${local.role_monitoring_metrics_pub}"
+    pdz_contrib    = "${local.role_def_base}/${local.role_private_dns_zone_contrib}"
+    kv_secrets_usr = "${local.role_def_base}/${local.role_kv_secrets_user}"
+    acr_pull       = "${local.role_def_base}/${local.role_acr_pull}"
+    aks_admin      = "${local.role_def_base}/${local.role_aks_rbac_cluster_admin}"
+    aks_reader     = "${local.role_def_base}/${local.role_aks_rbac_reader}"
+    aks_user       = "${local.role_def_base}/${local.role_aks_cluster_user}"
+    monitor_pub    = "${local.role_def_base}/${local.role_monitoring_metrics_pub}"
   }
 }
 

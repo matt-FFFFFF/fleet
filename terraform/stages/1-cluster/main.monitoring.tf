@@ -29,9 +29,8 @@ module "cluster_monitoring" {
   location       = local.cluster.region
   parent_id      = "/subscriptions/${local.cluster.subscription_id}/resourceGroups/${local.cluster.resource_group}"
 
-  dce_id          = var.env_dce_id
-  amw_id          = var.env_monitor_workspace_id
-  action_group_id = var.env_action_group_id
+  dce_id = var.env_dce_id
+  amw_id = var.env_monitor_workspace_id
 
   tags = {
     fleet       = local.fleet.name

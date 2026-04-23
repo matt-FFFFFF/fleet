@@ -12,7 +12,7 @@ rules:
   comments-indentation: disable
   document-start: disable
   truthy:
-    allowed-values: ['true', 'false', 'null', '~']
+    allowed-values: ['true', 'false']
     check-keys: false
   indentation:
     spaces: 2
