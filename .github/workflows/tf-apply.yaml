@@ -62,6 +62,8 @@ jobs:
         id: detect
         env:
           INITIALIZED: ${{ steps.init_guard.outputs.initialized }}
+          BASE_REF: HEAD~1
+          HEAD_REF: HEAD
         run: |
           if [[ "$INITIALIZED" != "true" ]]; then
             # Emit valid-JSON defaults so downstream `fromJSON(...)`
@@ -75,7 +77,7 @@ jobs:
           # — every PR merged to main is a merge commit with one
           # first-parent and one second-parent; `HEAD~1` is the previous
           # main tip, which is what we want to compare against.
-          result="$(BASE_REF=HEAD~1 HEAD_REF=HEAD .github/scripts/detect-affected-clusters.sh)"
+          result="$(.github/scripts/detect-affected-clusters.sh)"
           echo "$result" | jq .
           stage0="$(echo "$result" | jq -r .stage0)"
           clusters="$(echo "$result" | jq -c .clusters)"

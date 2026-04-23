@@ -80,7 +80,7 @@ jobs:
             exit 0
           fi
           git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
-          result="$(BASE_REF=origin/${{ github.base_ref }} HEAD_REF=${{ github.event.pull_request.head.sha }} .github/scripts/detect-affected-clusters.sh)"
+          result="$(.github/scripts/detect-affected-clusters.sh)"
           echo "$result" | jq .
           stage0="$(echo "$result" | jq -r .stage0)"
           clusters="$(echo "$result" | jq -c .clusters)"
