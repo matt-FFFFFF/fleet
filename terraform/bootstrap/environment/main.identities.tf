@@ -65,9 +65,10 @@ resource "azapi_resource" "rg_env_obs" {
 # --- fleet-meta subscription-scope RBAC in this env --------------------------
 #
 # fleet-meta (created by bootstrap/fleet, not owned by this stage) needs
-# Contributor + User Access Administrator + Application Administrator
-# (Entra-level, granted in bootstrap/fleet) to run team-bootstrap and
-# env-bootstrap again against this env.
+# Contributor + User Access Administrator at subscription scope, plus
+# Graph `AppRoleAssignment.ReadWrite.All` (granted in bootstrap/fleet) to
+# author the per-env `Application.ReadWrite.OwnedBy` assignment here and
+# to run team-bootstrap / env-bootstrap against this env.
 
 resource "azapi_resource" "ra_meta_sub_contrib" {
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"

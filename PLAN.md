@@ -1003,10 +1003,11 @@ messages; the rest must be arranged out-of-band by the adopter org.
   providers run with `use_cli = true`; no service-principal env
   vars are read.
 - Tenant role: **Privileged Role Administrator** (or Global
-  Administrator) — required to grant the Entra
-  `Application Administrator` directory role to the `fleet-stage0`
-  and `fleet-meta` UAMIs. Without it the apply errors at the
-  `azuread_directory_role_assignment` step.
+  Administrator) — required to consent to the Microsoft Graph
+  app-role assignments that grant `fleet-stage0`
+  `Application.ReadWrite.OwnedBy` and `fleet-meta`
+  `AppRoleAssignment.ReadWrite.All`. Without it the apply errors at
+  the `azuread_app_role_assignment` step.
 - Subscription role on `_fleet.yaml.acr.subscription_id` (the
   fleet-shared subscription): **Owner** (or Contributor + User
   Access Administrator). Used to create resource groups, the
@@ -1167,15 +1168,16 @@ Creates:
 - **`fleet-stage0` UAMI** + federated credential
   `repo:<org>/fleet:environment:fleet-stage0`. RBAC:
   `Contributor` on `rg-fleet-shared`; `Storage Blob Data Contributor` on
-  `tfstate-fleet` container; `Application Administrator` on Entra
-  (needed for AAD app CRUD) or tightened to app-owner on pre-created
-  apps if policy forbids tenant-wide role.
+  `tfstate-fleet` container; Graph `Application.ReadWrite.OwnedBy`
+  (owner-scoped CRUD on the two AAD apps Stage 0 creates).
 - **`fleet-meta` UAMI** + federated credential
   `repo:<org>/fleet:environment:fleet-meta`. RBAC:
   `User Access Administrator` + `Contributor` at
   tenant-root/per-subscription (scope per subscription model);
-  `Application Administrator` on Entra. This is the privileged identity
-  used by env-bootstrap and team-bootstrap workflows.
+  Graph `AppRoleAssignment.ReadWrite.All` (needed to author the
+  per-env `Application.ReadWrite.OwnedBy` assignment inside
+  `bootstrap/environment`). This is the privileged identity used by
+  env-bootstrap and team-bootstrap workflows.
 - **`fleet-meta` GitHub App** (admin-class) and **`stage0-publisher`
   GitHub App** (narrow). Both are created **out of band** by the
   `init-gh-apps.sh` helper (§16.4) before this stage runs, because
@@ -2440,11 +2442,11 @@ Template-level workflows that do **not** touch tfstate — `validate.yaml`,
 **Per-environment GitHub OIDC federation** into dedicated UAMIs. No
 long-lived cloud secrets in Actions. Identities:
 
-| Identity            | Created by              | Used by                                  | Scope                                                                                                                                                                                                                                                             |
-| ------------------- | ----------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fleet-stage0` UAMI | `bootstrap/fleet`       | Stage 0 matrix leg                       | `rg-fleet-shared` Contributor + `tfstate-fleet` Blob Contributor + Entra AppAdmin                                                                                                                                                                                 |
-| `fleet-meta` UAMI   | `bootstrap/fleet`       | env-bootstrap + team-bootstrap workflows | Tenant/subscription-wide UAccessAdmin + Contributor                                                                                                                                                                                                               |
-| `fleet-<env>` UAMI  | `bootstrap/environment` | Stage 1 + Stage 2 matrix legs            | env subscription/RG Contributor + `tfstate-<env>` Blob Contributor + fleet KV Secrets User + ACR UAccessAdmin + `User Access Administrator` scoped to the env AMW resource id (to delegate `Monitoring Metrics Publisher` to cluster addon identities in Stage 1) |
+| Identity            | Created by              | Used by                                  | Scope                                                                                                                                                                                                                                                                                         |
+| ------------------- | ----------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fleet-stage0` UAMI | `bootstrap/fleet`       | Stage 0 matrix leg                       | `rg-fleet-shared` Contributor + `tfstate-fleet` Blob Contributor + Graph `Application.ReadWrite.OwnedBy`                                                                                                                                                                                      |
+| `fleet-meta` UAMI   | `bootstrap/fleet`       | env-bootstrap + team-bootstrap workflows | Tenant/subscription-wide UAccessAdmin + Contributor + Graph `AppRoleAssignment.ReadWrite.All`                                                                                                                                                                                                 |
+| `fleet-<env>` UAMI  | `bootstrap/environment` | Stage 1 + Stage 2 matrix legs            | env subscription/RG Contributor + `tfstate-<env>` Blob Contributor + fleet KV Secrets User + ACR UAccessAdmin + `User Access Administrator` scoped to the env AMW resource id (to delegate `Monitoring Metrics Publisher` to cluster addon identities in Stage 1) + Graph `Application.ReadWrite.OwnedBy` |
 
 Stage 1 **consumes Stage 0 outputs via repo variables**
 (`vars.ACR_RESOURCE_ID`, `vars.FLEET_KEYVAULT_ID`, etc.) rather than
@@ -2732,8 +2734,12 @@ is deferred until the Kargo GitHub App is minted (see §15).
   `sub-fleet-prod`). Each per-env UAMI receives `Contributor` at
   subscription scope. Subscription IDs are surfaced in each GH
   environment's variables.
-- **Entra role for bootstrap UAMIs**: `Application Administrator`
-  assigned to both `fleet-stage0` and `fleet-meta` UAMIs.
+- **Graph app-roles for bootstrap UAMIs**:
+  `Application.ReadWrite.OwnedBy` on `fleet-stage0` and every
+  `fleet-<env>`; `AppRoleAssignment.ReadWrite.All` on `fleet-meta`.
+  All three are owner-scoped / narrow replacements for the
+  previously-held tenant-wide `Application Administrator` directory
+  role.
 - **VNets**: repo-owned per §3.4. Mgmt VNet (N=1) created by
   `bootstrap/fleet` via `Azure/avm-ptn-alz-sub-vending/azure`; env
   VNets (one per env-per-region) created by `bootstrap/environment`
@@ -2797,9 +2803,9 @@ is deferred until the Kargo GitHub App is minted (see §15).
 - **`fleet-bootstrap-rerun.yaml` workflow** — `bootstrap/fleet` is
   run locally today (§4 Stage -1). Moving it to a self-hosted runner
   in CI would require a fourth privileged UAMI with Entra
-  **Privileged Role Administrator** (to self-assign the
-  `Application Administrator` role onto `fleet-stage0` /
-  `fleet-meta` on subsequent runs), plus a `bootstrap/fleet`-scoped
+  **Privileged Role Administrator** (to consent to the Microsoft
+  Graph app-role assignments granted in `main.identities.tf` on
+  subsequent runs), plus a `bootstrap/fleet`-scoped
   GH App / OIDC FIC. Trade-off: strictly more standing privilege
   than the current "run locally once" model. Deferred until the
   operator UX demand justifies the extra privileged identity.

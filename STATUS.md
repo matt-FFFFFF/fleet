@@ -785,15 +785,32 @@ self-contained enough to land in its own PR.
     reflect that only `fleet-stage0` holds the role. PLAN §10 identities
     table updated (`fleet-meta` row no longer lists Entra AppAdmin).
 14. **Replace `Application Administrator` on `fleet-stage0` with
-    `Application.ReadWrite.OwnedBy`** — `[ ]` Not started.
-    See `docs/findings.md` F2. Also fixes a latent bug where Stage 1
-    mgmt Kargo password rotation would fail under `fleet-mgmt` on a
-    Stage-0-owned app.
+    `Application.ReadWrite.OwnedBy`** — ✅ **Done.**
+    `bootstrap/fleet/main.identities.tf` swaps the
+    `azuread_directory_role_assignment` pair for two
+    `azuread_app_role_assignment` resources on the Microsoft Graph
+    SP: `fleet-stage0` gets `Application.ReadWrite.OwnedBy`
+    (owner-scoped CRUD on AAD apps it owns); `fleet-meta` gets
+    `AppRoleAssignment.ReadWrite.All` (needed to author per-env
+    role assignments from within `bootstrap/environment`).
+    `bootstrap/environment` grows its own `azuread` provider and
+    a third `azuread_app_role_assignment` granting the same
+    `Application.ReadWrite.OwnedBy` to every `uami-fleet-<env>`.
+    `stages/0-fleet/main.aad.tf` extends `owners` on both Argo +
+    Kargo applications (and their service principals) with the
+    stage0 UAMI and every env UAMI, discovered at plan time via
+    `data "azuread_service_principal"` keyed off the envs present
+    in the cluster inventory (no repo-variable wiring needed).
+    `sort(distinct(concat(...)))` keeps owners stable across
+    runs. Fixes the latent bug where Stage 1 mgmt Kargo password
+    rotation would fail under `fleet-mgmt` on a fresh tenant (the
+    mgmt UAMI is now in the Kargo owners list by construction).
+    PLAN §10 identities table + relevant prose sweeps updated; F2
+    finding deleted from `docs/findings.md` per AGENTS.md
+    lifecycle rule.
 15. **Stop forced replacement of `stage0_app_admin` directory role
-    assignment on every plan** — ✅ **Done.** Changed `role_id` on
-    `azuread_directory_role_assignment.stage0_app_admin` from the
-    instance `object_id` to `template_id`, so the provider's Read
-    (which normalises to the template id) no longer causes a
-    config/state mismatch. F2 will supersede this when it lands by
-    replacing the directory-role assignment with a Graph app-role
-    assignment.
+    assignment on every plan** — ✅ **Done.** Superseded by item 14:
+    the directory role assignment has been removed entirely in
+    favour of the narrower Graph app-role assignment, so the
+    template-vs-instance id divergence that drove the churn is
+    no longer present in the config.
