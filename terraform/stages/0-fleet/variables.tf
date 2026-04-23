@@ -16,8 +16,9 @@
 #  `stage0_publisher_app_id`, `stage0_publisher_app_pem`,
 #  `stage0_publisher_app_webhook_secret`,
 #  `stage0_publisher_app_client_id`)
-# to be consumed from a repo-root `.gh-apps.auto.tfvars` overlay written
-# by the (not-yet-implemented) `init-gh-apps.sh` helper (PLAN §16.4;
+# to be consumed from a tfvars file derived at apply time from
+# `./.gh-apps.state.json` (the authoritative on-disk record written
+# by the (not-yet-implemented) `init-gh-apps.sh` helper, PLAN §16.4;
 # implementation-status callout in §16 flags §16.4 as Phase 1 spec-
 # only). Those `variable` blocks — and the KV-seed / repo-variable-
 # publish resources that consume them — land together with §16.4's

@@ -1079,9 +1079,13 @@ messages; the rest must be arranged out-of-band by the adopter org.
   Manifest flow requires a one-time browser handshake.
   **Future (once §16.4 lands):** the adopter runs
   `./init-gh-apps.sh` (repo root, next to `init-fleet.sh`), which
-  automates everything *except* the click-to-create step, and
-  writes credentials to `./.gh-apps.auto.tfvars` for **Stage 0**
-  to consume (not `bootstrap/fleet`).
+  automates everything *except* the click-to-create step. It
+  persists the full GitHub App payload to `./.gh-apps.state.json`
+  and writes a narrow per-module overlay at
+  `terraform/bootstrap/fleet/.gh-apps.auto.tfvars` carrying only
+  the `fleet-runners` PEM that `bootstrap/fleet` consumes. Stage 0
+  derives its own tfvars from `.gh-apps.state.json` when §16.4
+  lands the matching `variable` blocks.
   **Today (Phase 1):** GH Apps are **not required** to
   `terraform apply` `bootstrap/fleet` — this stage does not
   consume App credentials. Adopters who want env/team-bootstrap
@@ -1118,13 +1122,16 @@ messages; the rest must be arranged out-of-band by the adopter org.
   fields under `envs.*` may remain empty until
   `bootstrap/environment` runs for that env).
 - **Future (once §16.4 lands):** `init-gh-apps.sh` (at the repo
-  root) has been run successfully and its outputs are available
-  as `./.gh-apps.auto.tfvars` for **Stage 0** — see §16.4 for the
-  exact variable names. The fleet Key Vault is created by
+  root) has been run successfully, persisting the full GH App
+  payload to `./.gh-apps.state.json`. Stage 0 derives the GH App
+  PEMs / webhook secrets / IDs it needs from that state file (or
+  an equivalently-shaped tfvars file generated from it) — see §16.4
+  for the exact variable names. The fleet Key Vault is created by
   `bootstrap/fleet`; **Stage 0 seeds the GH App PEMs + webhook
   secrets into it** (Stage 0 holds `Key Vault Secrets Officer` on
   the vault). `bootstrap/fleet` does not write or manage the GitHub
-  App credentials.
+  App credentials beyond seeding the `fleet-runners` PEM that its
+  own runner pool consumes.
   **Today (Phase 1):** not a prerequisite — `bootstrap/fleet` has
   no GH App input variables and Stage 0 has not yet added the
   §16.4 GH App input variables / KV-seed resources either.
@@ -1564,11 +1571,11 @@ Creates:
     `stage0-publisher-app-pem`, `stage0-publisher-webhook-secret`,
     `fleet-runners-app-pem`, `fleet-runners-webhook-secret` —
     the three GH Apps created out-of-band by `init-gh-apps.sh`
-    (§16.4). Values are consumed from the repo-root
-    `.gh-apps.auto.tfvars` overlay this stage reads in addition to
-    its normal tfvars.json. Downstream workflows read them at run
-    time via the `fleet-meta` / `stage0-publisher` UAMIs; the
-    `fleet-runners-app-pem` is consumed by the runner-pool
+    (§16.4). Values are sourced from `./.gh-apps.state.json` (which
+    the script persists) — Stage 0's tf-apply workflow reads them
+    via a state-derived tfvars file. Downstream workflows read them
+    at run time via the `fleet-meta` / `stage0-publisher` UAMIs;
+    the `fleet-runners-app-pem` is consumed by the runner-pool
     Container App Job via Key Vault secret reference (never
     plaintext in state, never via Terraform read). `bootstrap/fleet`
     creates the vault with no secrets in it; the runner pool's
@@ -1692,9 +1699,10 @@ secret material is ever a Stage 0 output.
 | `kargo_mgmt_uami_client_id`       | `KARGO_MGMT_UAMI_CLIENT_ID`         | Mgmt Stage 2 — `azure.workload.identity/client-id` annotation on the `kargo-controller` ServiceAccount                      |
 
 **GitHub Apps** (Apps themselves are created by `init-gh-apps.sh`
-out-of-band per §16.4; Stage 0 receives their ids/client ids as
-inputs via `.gh-apps.auto.tfvars` and publishes them as repo
-variables so downstream workflows can mint installation tokens)
+out-of-band per §16.4; Stage 0 receives their ids/client ids via
+a tfvars file derived from `./.gh-apps.state.json` and publishes
+them as repo variables so downstream workflows can mint
+installation tokens)
 
 | TF output                           | Repo variable                  | Consumed by                                                                                      |
 | ----------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------ |
@@ -2997,49 +3005,39 @@ Steps, per App:
 6. **Install** the App on the fleet repo:
    `gh api -X POST /orgs/<org>/installations` (operator may be
    re-prompted in the browser to confirm install scope).
-7. **Emit** a tfvars overlay file (`./.gh-apps.auto.tfvars` at repo
-   root, gitignored) with the variable names Stage 0 consumes:
+7. **Emit** a narrow per-module tfvars overlay at
+   `terraform/bootstrap/fleet/.gh-apps.auto.tfvars` (gitignored,
+   mode 0600) carrying only the variables `bootstrap/fleet`
+   declares:
 
    ```hcl
-   fleet_meta_app_id             = "<id>"
-   fleet_meta_app_client_id      = "<client_id>"
-   fleet_meta_app_pem            = <<EOT
+   fleet_runners_app_pem         = <<EOT
    <pem>
    EOT
-   fleet_meta_app_webhook_secret = "<webhook_secret>"
-
-   stage0_publisher_app_id              = "<id>"
-   stage0_publisher_app_client_id       = "<client_id>"
-   stage0_publisher_app_pem             = <<EOT
-   <pem>
-   EOT
-   stage0_publisher_app_webhook_secret  = "<webhook_secret>"
-
-   fleet_runners_app_id                 = "<id>"
-   fleet_runners_app_client_id          = "<client_id>"
-   fleet_runners_app_pem                = <<EOT
-   <pem>
-   EOT
-   fleet_runners_app_webhook_secret     = "<webhook_secret>"
+   fleet_runners_app_pem_version = "0"
    ```
 
-   **Stage 0** declares matching `variable` blocks (not
-   `bootstrap/fleet`: `bootstrap/fleet` creates the empty fleet KV
-   but does not write secret material into it). Stage 0's tf-apply
-   workflow symlinks or copies `.gh-apps.auto.tfvars` into
-   `terraform/stages/0-fleet/` so `terraform plan/apply` picks it up
-   as an additional variable source. Stage 0 then writes the PEMs +
+   Because the file lives at the module root, `terraform apply`
+   in `bootstrap/fleet` auto-loads it without an explicit
+   `-var-file` flag and without "undeclared variable" warnings.
+   `bootstrap/fleet` writes the PEM into the fleet KV as the
+   `fleet-runners-app-pem` secret via the KV data plane (§4
+   Stage -1 Runner infrastructure). `fleet_runners_app_pem_version`
+   is opaque — bump it to drive a re-PUT after rotation.
+
+   No Stage-0 tfvars file is emitted today. `terraform/stages/
+   0-fleet` has no matching `variable` blocks declared, so any
+   file shape would be premature. When the deferred Stage-0
+   wiring lands (this same §16.4 work), Stage 0 will derive its
+   tfvars file from `./.gh-apps.state.json` (which already
+   persists the full payload — IDs, client IDs, PEMs, webhook
+   secrets for all three Apps). Stage 0 then writes the PEMs +
    webhook secrets into the fleet KV created by `bootstrap/fleet`
-   (Stage 0 holds `Key Vault Secrets Officer` on the vault; the role
-   assignment is created in `bootstrap/fleet` to the `fleet-stage0`
-   UAMI), including the `fleet-runners` PEM at the secret name
-   referenced by `_fleet.yaml`
-   `github_app.fleet_runners.private_key_kv_secret`, which the
-   runner pool's ACA job reads at scale-out via KV reference — see
-   §4 Stage -1 `bootstrap/fleet` → *Runner infrastructure*), and
-   publishes the App ids / client ids as fleet-repo variables (see
-   §4 Stage 0 outputs) so downstream workflows can mint installation
-   tokens.
+   (Stage 0 holds `Key Vault Secrets Officer` on the vault; the
+   role assignment is created in `bootstrap/fleet` to the
+   `fleet-stage0` UAMI), and publishes the App ids / client ids
+   as fleet-repo variables (see §4 Stage 0 outputs) so downstream
+   workflows can mint installation tokens.
 
 Failure modes the script handles explicitly:
 
@@ -3056,10 +3054,11 @@ Failure modes the script handles explicitly:
   `gh api -X POST /apps/<slug>/keys` and re-run).
 
 Self-cleanup: the script `rm`s itself after a successful run in
-which all three Apps exist, are installed, and the tfvars overlay
-has been written. The state file (`./.gh-apps.state.json`) and
-tfvars overlay (`./.gh-apps.auto.tfvars`) remain on disk (both
-gitignored)
+which all three Apps exist, are installed, and the narrow
+`bootstrap/fleet` tfvars overlay has been written. The state file
+(`./.gh-apps.state.json`) and the per-module overlay
+(`terraform/bootstrap/fleet/.gh-apps.auto.tfvars`) remain on disk
+(both gitignored)
 until Stage 0 has successfully applied — their authoritative storage
 post-Stage-0 is the fleet KV (PEMs/webhook secrets) and fleet-repo
 variables (ids/client ids). The adopter may delete both files

@@ -43,7 +43,9 @@ crash.*.log
 # ignored — it's committed by the adopter to record initialization.
 .fleet-bootstrap/
 
-# init-gh-apps.sh artifacts (PLAN §16.4). Both live at repo root and
-# contain GitHub App credentials; neither is ever committed.
+# init-gh-apps.sh artifacts (PLAN §16.4). `.gh-apps.state.json` carries
+# the full GitHub App payload (IDs, client IDs, PEMs, webhook secrets
+# for all three Apps); the per-module overlay carries only the
+# `fleet-runners` PEM for `bootstrap/fleet`. Neither is ever committed.
 /.gh-apps.state.json
-/.gh-apps.auto.tfvars
+/terraform/bootstrap/fleet/.gh-apps.auto.tfvars
