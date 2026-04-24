@@ -608,8 +608,13 @@ pem = s["fleet-runners"]["pem"].rstrip("\n")
 
 # Read prior narrow tfvars (if any) to decide whether to bump the
 # opaque rotation token. Parsing is surgical — we look for the two
-# fields by name via regex; if either is absent or malformed we fall
-# back to first-emit semantics (version "0").
+# fields by name via regex. Treat a missing/malformed
+# `fleet_runners_app_pem_version` as "0" for bump purposes so that
+# a subsequent PEM rotation still increments the token to "1"
+# (rather than resetting to first-emit semantics, which would leave
+# `sensitive_body_version` unchanged and skip the KV re-PUT). If
+# `fleet_runners_app_pem` itself is absent we genuinely have no
+# prior state and fall back to first-emit ("0").
 prior_pem = None
 prior_version = None
 try:
@@ -626,16 +631,20 @@ try:
 except FileNotFoundError:
     pass
 
-if prior_pem is None or prior_version is None:
+if prior_pem is None:
+    # No prior file, or file present but PEM block missing/malformed.
     version = "0"
 elif prior_pem == pem:
-    version = prior_version
+    # PEM unchanged — preserve the prior token (or "0" if it was
+    # missing) so idempotent re-runs don't perturb KV state.
+    version = prior_version if prior_version is not None else "0"
 else:
-    # Bump. Treat the token as a decimal integer when possible; if the
-    # operator has set something non-numeric, jump to "1" so the value
-    # definitely changes and KV re-PUTs.
+    # PEM rotated. Bump the token so `sensitive_body_version` in
+    # `bootstrap/fleet` changes and the KV secret is re-PUT. Treat
+    # a missing/non-numeric prior version as "0" and emit "1".
+    base = prior_version if prior_version is not None else "0"
     try:
-        version = str(int(prior_version) + 1)
+        version = str(int(base) + 1)
     except ValueError:
         version = "1"
 
@@ -714,9 +723,19 @@ echo ""
 echo "  Next:"
 echo "    1. Commit the _fleet.yaml change."
 echo "    2. Run terraform -chdir=terraform/bootstrap/fleet apply."
-echo "    3. After Stage 0 has applied, you may delete:"
-echo "         $state_file"
-echo "         $tfvars_file"
+echo ""
+echo "  Keep $state_file and $tfvars_file as long as you may need"
+echo "  to re-plan or re-apply terraform/bootstrap/fleet — the"
+echo "  fleet_runners_app_pem variable is ephemeral/sensitive and"
+echo "  cannot be read back from Terraform state or from the KV"
+echo "  secret (bootstrap/fleet writes it via the KV data plane as a"
+echo "  write-only sensitive_body, so any future plan needs the PEM"
+echo "  supplied again). If you delete the tfvars file, you must"
+echo "  supply the PEM on each subsequent apply — e.g."
+echo "      export TF_VAR_fleet_runners_app_pem=\"\$(jq -r .\\\"fleet-runners\\\".pem $state_file)\""
+echo "      export TF_VAR_fleet_runners_app_pem_version=0"
+echo "  from a kept copy of $state_file, or fetch the PEM from"
+echo "  wherever you safely stashed it (a password manager, etc.)."
 echo ""
 if [[ $KEEP -eq 0 ]]; then
   echo "  This script will self-delete on exit. If you need to re-run it"
