@@ -204,8 +204,20 @@ matching `variable` blocks declared, so any file shape would be
 premature. PLAN §16.4 will derive its own tfvars from
 `.gh-apps.state.json` when the matching variable blocks land. Both
 files (`.gh-apps.state.json` and the `bootstrap/fleet` overlay) remain
-on disk after applies; the adopter may delete them manually once the
-fleet KV holds authoritative copies.
+on disk after applies. Keep them as long as you may need to re-plan
+or re-apply `terraform/bootstrap/fleet`: the `fleet_runners_app_pem`
+variable is `ephemeral` + `sensitive` + `nullable = false`, and
+`bootstrap/fleet` writes the PEM into Key Vault via a write-only
+data-plane `sensitive_body` — Terraform cannot read it back from
+state or from KV, so every future plan/apply needs the PEM supplied
+again. If you do delete the overlay, you must supply the PEM on each
+subsequent apply via another source (for example
+`export TF_VAR_fleet_runners_app_pem="$(jq -r '."fleet-runners".pem' .gh-apps.state.json)"`
+from a kept copy of the state file, or from a password manager / secret
+store you have safely stashed it in). The equivalent applies to a PEM
+rotation: bump `fleet_runners_app_pem_version` (the overlay does this
+automatically on re-run of `./init-gh-apps.sh`; otherwise bump it by
+hand) to drive a re-PUT of the KV secret.
 
 ### Today (manual)
 
