@@ -24,20 +24,48 @@
 #   7. Persist credentials to ./.gh-apps.state.json (mode 0600, gitignored).
 #
 # After all three Apps exist, the script:
-#   - Writes ./.gh-apps.auto.tfvars (gitignored) for Stage 0 to consume.
+#   - Writes terraform/bootstrap/fleet/.gh-apps.auto.tfvars (gitignored,
+#     mode 0600) containing only `fleet_runners_app_pem` +
+#     `fleet_runners_app_pem_version` — the two variables
+#     `bootstrap/fleet/variables.tf` declares. `*.auto.tfvars` auto-loads
+#     only from the module root being applied, so dropping the file here
+#     lets `terraform -chdir=terraform/bootstrap/fleet apply` pick the
+#     PEM up without an explicit `-var-file` flag and without
+#     "undeclared variable" warnings. `fleet_runners_app_pem_version` is
+#     an opaque rotation token — preserved across re-runs when the PEM
+#     is unchanged, auto-bumped when the PEM in state differs from the
+#     PEM in the existing narrow tfvars (keeps
+#     `bootstrap/fleet`'s `azapi_data_plane_resource` re-PUT behaviour
+#     aligned with actual key rotations).
 #   - Patches clusters/_fleet.yaml with `github_app.fleet_runners.{app_id,
 #     installation_id}` so `bootstrap/fleet` apply just works.
 #   - Self-deletes (only on a fully successful run).
 #
+# The full GitHub App payload (IDs, client IDs, client secrets, PEMs,
+# webhook secrets, and other App metadata for all three Apps) is
+# persisted in .gh-apps.state.json. Stage 0's eventual consumer
+# (PLAN §16.4) will derive its own tfvars from state at that time; no
+# Stage-0 tfvars file is emitted today.
+#
 # Idempotent: if .gh-apps.state.json already records all three Apps, the
 # script re-emits the tfvars overlay + _fleet.yaml patch and exits 0
-# without prompting.
+# without prompting. The tfvars file is overwritten in place on each run.
+#
+# NOTE ON RE-RUNS: by default this script self-deletes on a successful
+# run (see --keep below). Adopters who expect to re-run it later — e.g.
+# to rotate the `fleet-runners` App's private key via
+# `gh api -X POST /apps/<slug>/keys` and regenerate the narrow tfvars
+# overlay — must either pass `--keep` on the initial run, or restore
+# the script from git history (`git show <template-commit>:init-gh-apps.sh`)
+# before re-running. The rotation-detection logic in the tfvars writer
+# assumes the script is available; it cannot run without it.
 #
 # Usage:
 #   ./init-gh-apps.sh              # interactive: opens browser, waits for clicks
 #   ./init-gh-apps.sh --no-open    # don't shell out to open(1) — print URL only
 #   ./init-gh-apps.sh --port N     # bind listener to a specific port
-#   ./init-gh-apps.sh --keep       # don't self-delete on success (debug aid)
+#   ./init-gh-apps.sh --keep       # don't self-delete on success — required
+#                                    if you want to re-run later for key rotation
 #
 # Prereqs:
 #   - clusters/_fleet.yaml exists (run ./init-fleet.sh first).
@@ -66,7 +94,7 @@ while (($#)); do
     --keep)    KEEP=1;    shift ;;
     --port)    PORT="${2:?--port needs a number}"; shift 2 ;;
     --port=*)  PORT="${1#*=}"; shift ;;
-    -h|--help) sed -n '2,46p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,77p' "$0"; exit 0 ;;
     *) die "unknown flag: $1" ;;
   esac
 done
@@ -89,7 +117,13 @@ cd "$repo_root"
 
 fleet_yaml="$repo_root/clusters/_fleet.yaml"
 state_file="$repo_root/.gh-apps.state.json"
-tfvars_file="$repo_root/.gh-apps.auto.tfvars"
+# Narrow per-module overlay for `bootstrap/fleet`. Carries only the
+# variables that module declares (fleet_runners_app_pem +
+# fleet_runners_app_pem_version) so `terraform apply` auto-loads it
+# without `-var-file` and without "undeclared variable" warnings.
+# Stage 0's full-payload tfvars file is not emitted today; PLAN §16.4
+# will derive it from state when the matching variable blocks land.
+tfvars_file="$repo_root/terraform/bootstrap/fleet/.gh-apps.auto.tfvars"
 
 [[ -f "$fleet_yaml" ]] || die "clusters/_fleet.yaml not found — run ./init-fleet.sh first"
 
@@ -535,47 +569,100 @@ for i in "${!APP_SLUGS[@]}"; do
   install_app "${APP_SLUGS[$i]}"
 done
 
-# ---- emit tfvars overlay ----------------------------------------------------
+# ---- emit narrow bootstrap/fleet tfvars overlay -----------------------------
 #
-# Stage 0 declares matching variable blocks; tf-apply.yaml symlinks/copies
-# this file into terraform/stages/0-fleet/ so terraform plan/apply picks it
-# up as an additional variable source. Heredocs preserve the PEM exactly.
+# `bootstrap/fleet/variables.tf` declares exactly two of the GH-App-derived
+# variables: `fleet_runners_app_pem` (ephemeral/sensitive/nullable=false)
+# and `fleet_runners_app_pem_version` (default "0"). The file is dropped at
+# the module root so `terraform -chdir=terraform/bootstrap/fleet apply`
+# auto-loads it without an explicit `-var-file` flag and without
+# "undeclared variable" warnings.
+#
+# Stage 0's eventual full-payload tfvars (PLAN §16.4) is intentionally not
+# emitted today — Stage 0 has no matching `variable` blocks declared, and
+# any file shape we picked now would need revisiting once §16.4 lands.
+# The full payload (IDs / client IDs / PEMs / webhook secrets for all three
+# Apps) lives in .gh-apps.state.json; §16.4 will derive its own tfvars
+# from state at that time.
+#
+# `fleet_runners_app_pem_version` is an opaque rotation token. On first
+# emit it is `"0"`. On re-runs the writer reads the existing narrow
+# tfvars file (if present), compares the PEM it carries against the
+# PEM in `.gh-apps.state.json`, and:
+#   - if the PEMs match → preserves the existing version verbatim
+#     (so `terraform apply` is a no-op on the KV secret),
+#   - if the PEMs differ → increments the version by 1 (treating it
+#     as a decimal integer; non-integer values fall back to "1").
+# This keeps `bootstrap/fleet`'s `azapi_data_plane_resource` change
+# detection (which keys off `sensitive_body_version`) in sync with
+# actual PEM rotations, even when the operator rotates the App's
+# private key via `gh api -X POST /apps/<slug>/keys` and re-runs.
 
 info "Writing $tfvars_file"
+mkdir -p "$(dirname "$tfvars_file")"
 python3 - "$state_file" "$tfvars_file" <<'PY'
-import json, os, sys
+import json, os, re, sys
 state_path, out_path = sys.argv[1], sys.argv[2]
 s = json.load(open(state_path))
+pem = s["fleet-runners"]["pem"].rstrip("\n")
 
-mapping = [
-    ("fleet-meta",        "fleet_meta_app"),
-    ("stage0-publisher",  "stage0_publisher_app"),
-    ("fleet-runners",     "fleet_runners_app"),
-]
+# Read prior narrow tfvars (if any) to decide whether to bump the
+# opaque rotation token. Parsing is surgical — we look for the two
+# fields by name via regex. Treat a missing/malformed
+# `fleet_runners_app_pem_version` as "0" for bump purposes so that
+# a subsequent PEM rotation still increments the token to "1"
+# (rather than resetting to first-emit semantics, which would leave
+# `sensitive_body_version` unchanged and skip the KV re-PUT). If
+# `fleet_runners_app_pem` itself is absent we genuinely have no
+# prior state and fall back to first-emit ("0").
+prior_pem = None
+prior_version = None
+try:
+    with open(out_path) as f:
+        prior_text = f.read()
+    m = re.search(r'fleet_runners_app_pem\s*=\s*<<EOT\n(.*?)\nEOT',
+                  prior_text, re.DOTALL)
+    if m:
+        prior_pem = m.group(1).rstrip("\n")
+    m = re.search(r'fleet_runners_app_pem_version\s*=\s*"([^"]*)"',
+                  prior_text)
+    if m:
+        prior_version = m.group(1)
+except FileNotFoundError:
+    pass
+
+if prior_pem is None:
+    # No prior file, or file present but PEM block missing/malformed.
+    version = "0"
+elif prior_pem == pem:
+    # PEM unchanged — preserve the prior token (or "0" if it was
+    # missing) so idempotent re-runs don't perturb KV state.
+    version = prior_version if prior_version is not None else "0"
+else:
+    # PEM rotated. Bump the token so `sensitive_body_version` in
+    # `bootstrap/fleet` changes and the KV secret is re-PUT. Treat
+    # a missing/non-numeric prior version as "0" and emit "1".
+    base = prior_version if prior_version is not None else "0"
+    try:
+        version = str(int(base) + 1)
+    except ValueError:
+        version = "1"
 
 lines = [
     "# Generated by ./init-gh-apps.sh — do not edit by hand.",
-    "# Consumed by terraform/stages/0-fleet via tf-apply.yaml.",
+    "# Auto-loaded by `terraform -chdir=terraform/bootstrap/fleet apply`.",
     "# Gitignored (see .gitignore).",
+    "#",
+    "# fleet_runners_app_pem_version is bumped automatically by the",
+    "# script when the PEM in .gh-apps.state.json changes; bump it",
+    "# manually if you need to force a re-PUT of the KV secret.",
+    "",
+    "fleet_runners_app_pem         = <<EOT",
+    pem,
+    "EOT",
+    f'fleet_runners_app_pem_version = "{version}"',
     "",
 ]
-for slug, prefix in mapping:
-    a = s[slug]
-    lines += [
-        # Installation IDs are intentionally NOT emitted here: PLAN §16.4
-        # step 7's prescribed tfvars shape does not include them, and Stage
-        # 0 variable blocks aren't declared yet (see bootstrap/fleet
-        # main.github.tf TODO(phase2-stage0-gh-apps)). The fleet-runners
-        # installation_id is written into clusters/_fleet.yaml below; the
-        # others remain in .gh-apps.state.json for when Stage 0 lands.
-        f'{prefix}_id              = "{a["id"]}"',
-        f'{prefix}_client_id       = "{a["client_id"]}"',
-        f'{prefix}_pem             = <<EOT',
-        a["pem"].rstrip("\n"),
-        "EOT",
-        f'{prefix}_webhook_secret  = "{a["webhook_secret"]}"',
-        "",
-    ]
 
 fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 os.fchmod(fd, 0o600)
@@ -636,10 +723,27 @@ echo ""
 echo "  Next:"
 echo "    1. Commit the _fleet.yaml change."
 echo "    2. Run terraform -chdir=terraform/bootstrap/fleet apply."
-echo "    3. After Stage 0 has applied, you may delete:"
-echo "         $state_file"
-echo "         $tfvars_file"
 echo ""
+echo "  Keep $state_file and $tfvars_file as long as you may need"
+echo "  to re-plan or re-apply terraform/bootstrap/fleet — the"
+echo "  fleet_runners_app_pem variable is ephemeral/sensitive and"
+echo "  cannot be read back from Terraform state or from the KV"
+echo "  secret (bootstrap/fleet writes it via the KV data plane as a"
+echo "  write-only sensitive_body, so any future plan needs the PEM"
+echo "  supplied again). If you delete the tfvars file, you must"
+echo "  supply the PEM on each subsequent apply — e.g."
+echo "      export TF_VAR_fleet_runners_app_pem=\"\$(jq -r .\\\"fleet-runners\\\".pem $state_file)\""
+echo "      export TF_VAR_fleet_runners_app_pem_version=0"
+echo "  from a kept copy of $state_file, or fetch the PEM from"
+echo "  wherever you safely stashed it (a password manager, etc.)."
+echo ""
+if [[ $KEEP -eq 0 ]]; then
+  echo "  This script will self-delete on exit. If you need to re-run it"
+  echo "  later (e.g. to rotate the fleet-runners PEM), restore it from git"
+  echo "  history first — or re-run with --keep next time to avoid the"
+  echo "  restore step."
+  echo ""
+fi
 
 if [[ $KEEP -eq 0 ]]; then
   # Best-effort self-delete. If the script can't remove itself (read-only

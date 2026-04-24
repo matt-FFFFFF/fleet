@@ -515,9 +515,11 @@
 - [x] §16.3 `init-fleet.sh` wrapper over `init/` TF module.
 - [x] §16.4 `init-gh-apps.sh` — manifest flow for `fleet-meta` /
       `stage0-publisher` / `fleet-runners` Apps; writes
-      `./.gh-apps.state.json` + `./.gh-apps.auto.tfvars`; patches
-      `_fleet.yaml` with runner IDs; self-deletes. Stage 0 wiring of
-      the tfvars overlay remains TODO.
+      `./.gh-apps.state.json` + narrow per-module
+      `terraform/bootstrap/fleet/.gh-apps.auto.tfvars` overlay
+      (Rework item 17); patches `_fleet.yaml` with runner IDs;
+      self-deletes. Stage 0 wiring of GH App credentials (derived
+      from `.gh-apps.state.json` at apply time) remains TODO.
 - [x] §16.5 GitHub template mechanics; `import` block for fleet repo.
 - [x] §16.6 `docs/naming.md` — reworked in unit 8; see §11.
   - [x] CI diff between `load.sh` and bootstrap HCL locals — Rework
@@ -815,28 +817,42 @@ self-contained enough to land in its own PR.
     template-vs-instance id divergence that drove the churn is
     no longer present in the config.
 16. **Document `-var-file` requirement for `bootstrap/fleet`** —
-    ✅ **Done.** `bootstrap/fleet` now consumes
-    `fleet_runners_app_pem` from the root `.gh-apps.auto.tfvars`
-    (F4-class runner-PEM seeding into the fleet KV data plane), but
-    `*.auto.tfvars` only auto-loads from the module root being
-    applied. `docs/adoption.md §5.1` gains a GH-App PEM prerequisite
-    bullet spelling out the explicit
+    ✅ **Done.** **Superseded by item 17** — the `-var-file`
+    workaround this item originally documented is no longer part
+    of the codebase. The F5 landing briefly required adopters to
+    pass an explicit
     `-var-file="$(git rev-parse --show-toplevel)/.gh-apps.auto.tfvars"`
-    flag and documenting that the root file currently carries 12
-    generated GH-App variables (four per App: `*_id`, `*_client_id`,
-    `*_pem`, `*_webhook_secret` — see `init-gh-apps.sh:562-578`), so
-    passing it to `bootstrap/fleet` produces 11 benign
-    `Value for undeclared variable` warnings (everything except
-    `fleet_runners_app_pem`, the one field declared in that module).
-    Warning-vs-error semantics keep the apply succeeding; the
-    residual warnings disappear when PLAN §16.4 grows the Stage-0
-    variable blocks + `-var-file` wiring in `tf-apply.yaml`. §5.2
-    worked command block updated to include the flag on both the
-    first-apply and steady-state invocations. §4 sweep: rewrote the
-    stale "`init-gh-apps.sh` seeds the KV via `az keyvault secret
-    set`" sentence to match reality (the seeding happens inside
-    `bootstrap/fleet` via the `azapi_data_plane_resource` introduced
-    by the F4-class work), and clarified that Stage 0's current
-    workflow does not yet pass `-var-file` — the file stays at rest
-    until §16.4 lands. F5 finding deleted from `docs/findings.md`
-    per AGENTS.md lifecycle rule.
+    to `bootstrap/fleet` (because `*.auto.tfvars` only auto-loads
+    from the module root being applied, and the root file carried
+    all 12 generated GH-App variables — producing 11 benign
+    "undeclared variable" warnings on every apply). Item 17
+    replaced that approach with a narrow per-module overlay at
+    `terraform/bootstrap/fleet/.gh-apps.auto.tfvars`; the flag,
+    the warnings, and the root-level file were all removed.
+    `docs/adoption.md §4 / §5.1 / §5.2` were rewritten to match;
+    PLAN §4's stale "`init-gh-apps.sh` seeds the KV via
+    `az keyvault secret set`" sentence was corrected (the seeding
+    happens inside `bootstrap/fleet` via the
+    `azapi_data_plane_resource` introduced by the F4-class work).
+    F5 finding deleted from `docs/findings.md` per AGENTS.md
+    lifecycle rule.
+17. **Narrow `bootstrap/fleet` GH-App tfvars overlay** —
+    ✅ **Done.** `init-gh-apps.sh` now writes a single tfvars file
+    at `terraform/bootstrap/fleet/.gh-apps.auto.tfvars` (gitignored,
+    mode 0600) carrying only the two variables that module declares
+    — `fleet_runners_app_pem` and `fleet_runners_app_pem_version`
+    (default `"0"`; bump to drive a re-PUT of the KV secret on
+    rotation). Because the file lives at the module root, `terraform
+    apply` auto-loads it: no `-var-file` flag, no
+    "undeclared variable" warnings, no PEMs from the other two Apps
+    on disk in the bootstrap module's working directory. The repo-
+    root `.gh-apps.auto.tfvars` (full payload, all three Apps) is no
+    longer emitted at all — Stage 0 has no matching `variable`
+    blocks today and PLAN §16.4 will derive its own tfvars from
+    `.gh-apps.state.json` (which still persists the full payload)
+    when the matching variable blocks land. `.gitignore` updated:
+    drops the obsolete `/.gh-apps.auto.tfvars` entry, adds
+    `/terraform/bootstrap/fleet/.gh-apps.auto.tfvars`.
+    `docs/adoption.md §4 / §5.1 / §5.2` rewritten to reflect the
+    single-file overlay and the auto-load behaviour. F8 finding
+    deleted from `docs/findings.md` per AGENTS.md lifecycle rule.

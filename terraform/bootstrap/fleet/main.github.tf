@@ -202,8 +202,11 @@ module "team_template_repo" {
 # at the repo root (PLAN §16.4, implemented).
 #
 # The helper creates all three Apps (`fleet-meta`, `stage0-publisher`,
-# `fleet-runners`), records their installation metadata, and writes
-# `./.gh-apps.auto.tfvars` for Stage 0 to consume. It also patches
+# `fleet-runners`), records their installation metadata in
+# `./.gh-apps.state.json`, and writes a narrow per-module overlay at
+# `terraform/bootstrap/fleet/.gh-apps.auto.tfvars` carrying
+# `fleet_runners_app_pem` + `fleet_runners_app_pem_version` — the two
+# variables this stage declares (see `variables.tf`). It also patches
 # `clusters/_fleet.yaml` with `github_app.fleet_runners.{app_id,
 # installation_id}` so this stage's runner module validation passes.
 # The installation's repository selection must include the fleet repo
@@ -212,8 +215,11 @@ module "team_template_repo" {
 # `init-gh-apps.sh` itself.
 #
 # TODO(phase2-stage0-gh-apps): declare matching `variable` blocks in
-# terraform/stages/0-fleet/ and wire tf-apply.yaml to symlink the tfvars
-# overlay into that stage's working directory.
+# terraform/stages/0-fleet/ for the `fleet-meta` / `stage0-publisher`
+# credentials, and have tf-apply.yaml derive a Stage-0 tfvars file
+# from `<repo-root>/.gh-apps.state.json` at apply time. No Stage-0
+# `.auto.tfvars` file is emitted by `init-gh-apps.sh` — the state
+# file is authoritative.
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
