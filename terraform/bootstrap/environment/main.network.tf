@@ -118,10 +118,10 @@ resource "terraform_data" "network_preconditions" {
     }
     # F6: external subnet route-table ids, when supplied, must be full
     # ARM Microsoft.Network/routeTables resource ids. This stage owns
-    # only `snet-pe-env`; other keys (pe-fleet / runners) are validated
-    # on bootstrap/fleet. We still accept them in the data type (the
-    # fleet-identity schema is shared across stages) but reject any key
-    # other than `pe-env` here to catch typos early.
+    # only `snet-pe-env`; any other key in the map is ignored here
+    # (the fleet-identity schema is shared across stages and mgmt-only
+    # keys `pe-fleet` / `runners` are validated by bootstrap/fleet).
+    # The keyset check below catches typos early across both stages.
     precondition {
       condition = alltrue([
         for k in local.region_keys : alltrue([
