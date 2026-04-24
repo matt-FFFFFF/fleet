@@ -274,9 +274,13 @@ GitHub items must be arranged out-of-band by the adopter org.
   `snet-pe-fleet` (`/26`) + `snet-runners` (`/23`) out of the upper
   `/(N+1)` of that address space. The runner subnet is delegated to
   `Microsoft.App/environments` and egresses via the hub firewall
-  when `egress_next_hop_ip` is set on that region (UDR ownership is
-  in-repo as the per-env-region route table `rt-aks-<env>-<region>`;
-  see `docs/networking.md` § "Route table / UDR egress").
+  when `egress_next_hop_ip` is set on that region. UDR ownership on
+  the fleet plane is in-repo as the mgmt-only route table
+  `rt-fleet-<region>`, associated with both `snet-pe-fleet` and
+  `snet-runners`, unless an adopter overrides on a per-subnet basis
+  via `subnet_route_table_ids` (see next bullet). Cluster-workload
+  UDR lives on `rt-aks-<env>-<region>` (a separate RT) per-env-region.
+  See `docs/networking.md` § "Route table / UDR egress".
 - **Hub-and-spoke knobs (all optional; pre-F6 defaults preserved
   when omitted).** Per
   `networking.envs.<env>.regions.<region>` entry:
@@ -285,10 +289,13 @@ GitHub items must be arranged out-of-band by the adopter org.
       on mgmt env-regions (association: `snet-pe-fleet` +
       `snet-runners`). Null = no repo-owned route table on the
       fleet plane (island-VNet default).
-    * `use_remote_gateways` (bool, default false). Must be `true`
-      only when the hub has a VPN or ExpressRoute gateway the spoke
-      needs to learn routes from; Azure rejects the peering
-      otherwise.
+    * `hub_peering.use_remote_gateways` (bool, default false).
+      Configured at
+      `networking.envs.<env>.regions.<region>.hub_peering.use_remote_gateways`
+      (nested under `hub_peering:` so future sibling knobs can live
+      alongside it). Set `true` only when the hub has a VPN or
+      ExpressRoute gateway the spoke needs to learn routes from;
+      Azure rejects the peering otherwise.
     * `dns_servers` (list(string), default `[]`). `[]` = Azure-
       provided DNS (168.63.129.16). Populate with the central
       Private DNS Resolver inbound-endpoint IPs when split-horizon

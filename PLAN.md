@@ -392,12 +392,15 @@ networking:
           # get the same route on `rt-aks-<env>-<region>` and the
           # association covers api/nodes/pe-env subnets.
           egress_next_hop_ip: 10.0.0.4
-          # `use_remote_gateways` — set true when the hub owns the
-          # VPN / ExpressRoute gateway and the spoke must learn hub
-          # routes over BGP. Defaults to false (pre-F6 island-VNet
-          # behaviour). Must be false on every spoke when the hub has
-          # no gateway; Azure rejects the peering otherwise.
-          use_remote_gateways: false
+          # `hub_peering.use_remote_gateways` — set true when the
+          # hub owns the VPN / ExpressRoute gateway and the spoke
+          # must learn hub routes over BGP. Defaults to false (pre-F6
+          # island-VNet behaviour). Must be false on every spoke
+          # when the hub has no gateway; Azure rejects the peering
+          # otherwise. Nested under `hub_peering:` so future sibling
+          # knobs (allow_forwarded_traffic etc.) live alongside it.
+          hub_peering:
+            use_remote_gateways: false
           # `dns_servers` — VNet-level DNS servers. Empty list (the
           # default) = Azure-provided DNS (168.63.129.16). Populate
           # with the central Private DNS Resolver inbound-endpoint
@@ -637,9 +640,12 @@ no RT) is preserved when omitted.
 spoke-owned route tables can supply a hub-owned RT on a per-subnet
 basis via `networking.envs.<env>.regions.<region>.subnet_route_table_ids`
 (a map keyed by subnet name). Precedence: external id → repo-created
-RT derived from `egress_next_hop_ip` → no RT (pre-F6 default). Keys
-are restricted to the subnets each stage owns: `{pe-fleet, runners}`
-for `bootstrap/fleet`, `{pe-env}` for `bootstrap/environment`.
+RT derived from `egress_next_hop_ip` → no RT (pre-F6 default). Both
+`bootstrap/fleet` and `bootstrap/environment` accept the shared key
+set `{pe-fleet, runners, pe-env}` (rejecting other keys as typos);
+each stage consumes only the subnets it owns and ignores the rest,
+so a typo under either bucket surfaces at the owning stage's
+preflight.
 
 **VNet-level DNS + remote-gateway transit.** Two further per-env-region
 fields complete the hub-and-spoke contract:
