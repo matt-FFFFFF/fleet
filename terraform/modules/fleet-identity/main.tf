@@ -137,11 +137,14 @@ locals {
         # default. Populate with central Private DNS Resolver inbound
         # endpoint IPs when split-horizon / on-prem DNS forwarding is
         # required.
-        # Use coalesce(try(...), typed_zero) so an explicit YAML
-        # `dns_servers: null` (which `tolist(null)` would pass through)
-        # is normalised to the typed empty list alongside the
-        # attribute-absent case.
-        dns_servers = coalesce(try(tolist(region_block.dns_servers), null), tolist([]))
+        # Default only the attribute-absent / explicit-null cases to
+        # the typed empty list. A non-null invalid value (e.g. a
+        # string or map written by mistake) must still fail fast when
+        # coerced with `tolist(...)` — swallowing the type error with
+        # a catch-all `try()` would let a malformed fleet file look
+        # like it applied while silently ignoring the adopter's
+        # intended DNS servers.
+        dns_servers = try(region_block.dns_servers, null) == null ? tolist([]) : tolist(region_block.dns_servers)
 
         # `subnet_route_table_ids` — per-subnet external RT override.
         # Keys reference fleet- and env-plane subnets this repo owns:
@@ -154,10 +157,11 @@ locals {
         #   3. no RT attached (pre-F6 default)
         # Validation of keys + id format lives at the bootstrap/fleet +
         # bootstrap/environment call sites; this layer is a passthrough.
-        # Same null-coalescing pattern as `dns_servers`: an explicit
-        # YAML `subnet_route_table_ids: null` must not propagate to
-        # downstream `for`-preconditions, which would error on null.
-        subnet_route_table_ids = coalesce(try(tomap(region_block.subnet_route_table_ids), null), tomap({}))
+        # Same default-only-on-absent/null pattern as `dns_servers`:
+        # preserve type errors for non-map YAML shapes so an invalid
+        # `subnet_route_table_ids:` (e.g. a list) fails fast rather
+        # than being silently dropped.
+        subnet_route_table_ids = try(region_block.subnet_route_table_ids, null) == null ? tomap({}) : tomap(region_block.subnet_route_table_ids)
       }
     }
   ]...)
