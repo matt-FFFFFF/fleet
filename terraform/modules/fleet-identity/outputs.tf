@@ -49,7 +49,12 @@ output "networking_derived" {
           egress_next_hop_ip,            # null unless adopter filled it
           # mgmt-only fleet-plane fields; null for non-mgmt:
           snet_pe_fleet_cidr, snet_runners_cidr,
-          nsg_pe_fleet_name, nsg_runners_name
+          nsg_pe_fleet_name, nsg_runners_name,
+          rt_fleet_name,                 # mgmt-only
+          # Hub-and-spoke passthroughs (F6):
+          use_remote_gateways,           # bool, default false
+          dns_servers,                   # list(string), default []
+          subnet_route_table_ids         # map(string), default {}
         }
       }
 

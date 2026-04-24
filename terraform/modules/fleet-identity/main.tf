@@ -119,6 +119,38 @@ locals {
         hub_network_resource_id = try(region_block.hub_network_resource_id, null)
         egress_next_hop_ip      = try(region_block.egress_next_hop_ip, null)
         create_reverse_peering  = try(region_block.create_reverse_peering, true)
+
+        # Hub-and-spoke knobs (F6). All optional, defaults preserve the
+        # pre-F6 "island VNet" behaviour so existing adopters see no
+        # change.
+        #
+        # `use_remote_gateways` — plumbed to
+        # `hub_peering_options_tohub.use_remote_gateways` on the spoke→
+        # hub peering. `true` is required when the hub owns a VPN /
+        # ExpressRoute gateway the spoke needs to reach; default `false`
+        # preserves backward compat for topologies where the hub has no
+        # gateway (unconditional `true` would break them).
+        use_remote_gateways = try(region_block.hub_peering.use_remote_gateways, false)
+
+        # `dns_servers` — plumbed to `virtual_networks.<k>.dns_servers`.
+        # Empty list = Azure-provided DNS (168.63.129.16), the module
+        # default. Populate with central Private DNS Resolver inbound
+        # endpoint IPs when split-horizon / on-prem DNS forwarding is
+        # required.
+        dns_servers = try(tolist(region_block.dns_servers), tolist([]))
+
+        # `subnet_route_table_ids` — per-subnet external RT override.
+        # Keys reference fleet- and env-plane subnets this repo owns:
+        # `pe-fleet`, `runners` (mgmt only), `pe-env` (all envs). Values
+        # are full ARM route-table resource ids. An explicit override
+        # wins over any RT the repo might otherwise create from
+        # `egress_next_hop_ip`. Precedence:
+        #   1. `subnet_route_table_ids.<subnet>` (adopter-owned hub RT)
+        #   2. repo-created RT derived from `egress_next_hop_ip`
+        #   3. no RT attached (pre-F6 default)
+        # Validation of keys + id format lives at the bootstrap/fleet +
+        # bootstrap/environment call sites; this layer is a passthrough.
+        subnet_route_table_ids = try(tomap(region_block.subnet_route_table_ids), tomap({}))
       }
     }
   ]...)
@@ -216,6 +248,23 @@ locals {
         # Fleet-plane NSG names (mgmt-only; null elsewhere).
         nsg_pe_fleet_name = r.env == "mgmt" ? "nsg-pe-fleet-${r.region}" : null
         nsg_runners_name  = r.env == "mgmt" ? "nsg-runners-${r.region}" : null
+
+        # Fleet-plane route table (F6). When the adopter has set
+        # `egress_next_hop_ip` on a mgmt region, `bootstrap/fleet`
+        # creates `rt-fleet-<region>` with a single
+        # `0.0.0.0/0 → VirtualAppliance → <ip>` route and attaches it
+        # to `snet-pe-fleet` and `snet-runners` (unless
+        # `subnet_route_table_ids.<subnet>` supplies an adopter-owned
+        # external id, which wins). Null on non-mgmt env-regions
+        # (cluster-plane RT is named `rt-aks-<env>-<region>` and is
+        # already owned by `bootstrap/environment`).
+        rt_fleet_name = r.env == "mgmt" ? "rt-fleet-${r.region}" : null
+
+        # Hub-and-spoke passthroughs (F6). `bootstrap/fleet` and
+        # `bootstrap/environment` consume these as-is.
+        use_remote_gateways    = r.use_remote_gateways
+        dns_servers            = r.dns_servers
+        subnet_route_table_ids = r.subnet_route_table_ids
       }
     }
   }

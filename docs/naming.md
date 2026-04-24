@@ -89,6 +89,7 @@ from the cluster.yaml itself (required, immutable — see PLAN §3.4).
 | Env-region VNet           | `vnet-<fleet.name>-<env>-<region>` (uniform across envs incl. mgmt)   |                      |
 | Env-region network RG     | `rg-net-<env>-<region>` (uniform across envs incl. mgmt)              |                      |
 | Env-region route table    | `rt-aks-<env>-<region>` (associated with both the api and nodes subnets; `0.0.0.0/0` next-hop `egress_next_hop_ip`) | authored unconditionally by `bootstrap/environment`; `0.0.0.0/0` route entry only created when `egress_next_hop_ip` is non-null |
+| Mgmt fleet-plane route table | `rt-fleet-<region>` (associated with `snet-pe-fleet` and `snet-runners`; `0.0.0.0/0` next-hop `egress_next_hop_ip`) | only on env=mgmt; authored by `bootstrap/fleet` **only when** `networking.envs.mgmt.regions.<region>.egress_next_hop_ip` is non-null. Adopters supplying a hub-owned RT via `networking.envs.<env>.regions.<region>.subnet_route_table_ids.<subnet>` override this on a per-subnet basis |
 | Env-region node ASG       | `asg-nodes-<env>-<region>`                                            |                      |
 | Env-region PE NSG         | `nsg-pe-env-<env>-<region>` (uniform across envs incl. mgmt)          |                      |
 | Mgmt-only PE-fleet NSG    | `nsg-pe-fleet-<region>` (only on env=mgmt)                            |                      |
