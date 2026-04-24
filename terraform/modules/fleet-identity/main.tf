@@ -137,7 +137,11 @@ locals {
         # default. Populate with central Private DNS Resolver inbound
         # endpoint IPs when split-horizon / on-prem DNS forwarding is
         # required.
-        dns_servers = try(tolist(region_block.dns_servers), tolist([]))
+        # Use coalesce(try(...), typed_zero) so an explicit YAML
+        # `dns_servers: null` (which `tolist(null)` would pass through)
+        # is normalised to the typed empty list alongside the
+        # attribute-absent case.
+        dns_servers = coalesce(try(tolist(region_block.dns_servers), null), tolist([]))
 
         # `subnet_route_table_ids` — per-subnet external RT override.
         # Keys reference fleet- and env-plane subnets this repo owns:
@@ -150,7 +154,10 @@ locals {
         #   3. no RT attached (pre-F6 default)
         # Validation of keys + id format lives at the bootstrap/fleet +
         # bootstrap/environment call sites; this layer is a passthrough.
-        subnet_route_table_ids = try(tomap(region_block.subnet_route_table_ids), tomap({}))
+        # Same null-coalescing pattern as `dns_servers`: an explicit
+        # YAML `subnet_route_table_ids: null` must not propagate to
+        # downstream `for`-preconditions, which would error on null.
+        subnet_route_table_ids = coalesce(try(tomap(region_block.subnet_route_table_ids), null), tomap({}))
       }
     }
   ]...)
