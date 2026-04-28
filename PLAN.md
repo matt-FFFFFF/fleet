@@ -20,7 +20,7 @@ manage upgrades, and add Kargo promotion.
 | Terraform state                 | One state per cluster per stage                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Cluster upgrades                | In-place; `kubernetes.version` pinned in `cluster.yaml`; TF apply drives upgrade                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | Bootstrap staging               | Two Terraform stages per cluster (`1-cluster`, `2-bootstrap`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| Argo topology                   | **Hub-and-spoke**: a single ArgoCD instance on the management cluster manages every spoke. No per-cluster ArgoCD installs. Argo connects to spokes via standard Argo cluster `Secret`s (built-in cluster generator) using an `execProviderConfig` exec plugin. The plugin (curl + jq, with `kubelogin` as the supported alternative) reads the in-pod federated SA token, exchanges it via OAuth2 client-assertion against the AKS AAD server app, and emits an `ExecCredential`. Each spoke provisions its own `uami-argocd-spoke-<cluster>` UAMI carrying `Azure Kubernetes Service RBAC Cluster Admin` on its own AKS resource id; the UAMI's federated identity credential is keyed to the **mgmt** cluster's OIDC issuer URL with subject `system:serviceaccount:argocd:argocd-application-controller` (additional FIC entries cover `argocd-applicationset-controller` and `argocd-server`). No in-repo cluster registry / Argo resource generator — Argo's own cluster generator is the source of truth. |
+| Argo topology                   | **Hub-and-spoke**: a single ArgoCD instance on the management cluster manages every spoke. No per-cluster ArgoCD installs. Argo connects to spokes via standard Argo cluster `Secret`s (built-in cluster generator) using an `execProviderConfig` exec plugin. The plugin (curl + jq, with `kubelogin` as the supported alternative) reads the in-pod federated SA token, exchanges it via OAuth2 client-assertion against the AKS AAD server app, and emits an `ExecCredential`. Each spoke provisions its own `uami-argocd-spoke-<cluster>` UAMI carrying `Azure Kubernetes Service RBAC Cluster Admin` on its own AKS resource id; the UAMI's federated identity credential is keyed to the **mgmt** cluster's OIDC issuer URL with subject `system:serviceaccount:argocd:argocd-application-controller` (additional FIC entries cover `argocd-applicationset-controller` and `argocd-server`). No Argo resource generator in this repo — Argo's built-in cluster generator iterates the cluster `Secret`s. The PR-reviewed cluster registry (`platform-gitops/config/clusters/<env>-<region>-<name>.yaml`) is retained as a Terraform input that drives the labels written onto each cluster Secret. |
 | Cluster authn/authz             | **Entra-only**: `disableLocalAccounts=true`, `aadProfile.managed=true`, `aadProfile.enableAzureRBAC=true`. No local kubeconfigs ever issued. Access to the Kubernetes API is gated entirely by AAD tokens + Azure RBAC for Kubernetes Authorization. Per-env break-glass AAD group set as `adminGroupObjectIDs`.                                                                                                                                                                                                                                                        |
 | Git provider                    | GitHub only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Secrets / identity              | Azure Workload Identity + External Secrets Operator + Key Vault                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -170,12 +170,8 @@ fleet/
 │   │       └── team-prod.yaml
 │   │
 │   └── config/
+│       ├── clusters/<env>-<region>-<name>.yaml   # cluster registry — Terraform-input file (per cluster) declaring labels (env, region, role, …) that spoke Stage 2 writes onto the cluster Secret it creates in the mgmt argocd namespace. Argo's built-in cluster generator selects on those labels at reconcile time. No Argo-side resource generator in this repo.
 │       └── teams/<team>.yaml                     # team registry — drives AppProject + Kargo Project
-│       # NOTE: there is no in-repo cluster registry. The set of clusters
-│       # known to Argo is the set of `argocd.argoproj.io/secret-type=cluster`
-│       # Secrets in the mgmt argocd namespace, created by each spoke's
-│       # Stage 2 (see §4). ApplicationSets use Argo's built-in
-│       # cluster generator over those Secrets — no `config/clusters/*`
 
 │
 └── docs/
@@ -2234,11 +2230,16 @@ Creates:
   holds `AKS RBAC Cluster Admin` on the mgmt cluster from mgmt's
   Stage 1). Through that provider, Stage 2 creates one
   `kubernetes_secret_v1` in the mgmt `argocd` namespace named
-  `cluster-<spoke-fqdn>` with labels
-  `argocd.argoproj.io/secret-type=cluster`,
-  `platform.example.com/env=<cluster.env>`,
-  `platform.example.com/region=<cluster.region>`,
-  `platform.example.com/role=workload`, and string data:
+  `cluster-<spoke-fqdn>`. Labels are the union of the fixed
+  `argocd.argoproj.io/secret-type=cluster` and the contents of the
+  per-cluster registry file
+  `platform-gitops/config/clusters/<env>-<region>-<name>.yaml`
+  (read as a Terraform input via `yamldecode(file(...))` — same
+  pattern Stage 1 uses for `_fleet.yaml`). The registry file is the
+  PR-reviewed source of truth for cluster labels (`env`, `region`,
+  `role`, plus any operator-defined selectors); Argo's
+  ApplicationSet cluster generator selects on those labels at
+  reconcile time. String data:
   - `name` = `<cluster.name>`
   - `server` = `var.aks_host`
   - `config` = JSON document containing `tlsClientConfig.caData`
@@ -2465,10 +2466,13 @@ clusters: # opt-in; matches clusters/<env>/<region>/<name> path
 1. a git-files generator over `platform-gitops/config/teams/*.yaml`,
 2. **Argo's built-in cluster generator** — iterates the cluster
    `Secret`s registered in the mgmt `argocd` namespace (one per
-   spoke, plus the in-cluster default for mgmt itself). No in-repo
-   cluster registry exists; Argo's own cluster Secrets are the
-   source of truth. Per-cluster selectors (env, region, role) come
-   from labels on those Secrets, written by spoke Stage 2.
+   spoke, plus the in-cluster default for mgmt itself). The set of
+   cluster Secrets is owned by spoke Stage 2; the labels on each
+   Secret (env, region, role, …) come from that cluster's
+   `platform-gitops/config/clusters/<env>-<region>-<name>.yaml`
+   registry file, read by Stage 2 as a Terraform input. The
+   registry is the PR-reviewed source of truth for cluster
+   metadata; Argo selects on the Secret labels at reconcile time.
 
 The ApplicationSet template extracts `<team>` from the file path
 (`path.basenameNormalized`) — the YAML body does not carry the name
@@ -2780,13 +2784,18 @@ is deferred until the Kargo GitHub App is minted (see §15).
 
 1. `cp -r clusters/_template clusters/<env>/<region>/<name>/`.
 2. Fill `cluster.yaml`: `env`, `role`, `region`, IDs, `teams:`.
-3. Open PR → review plan → merge.
-4. CI runs Stage 1 then Stage 2. For workload (spoke) clusters,
+3. Create `platform-gitops/config/clusters/<env>-<region>-<name>.yaml`
+   with the cluster's labels (env, region, role, …). Stage 2 reads
+   this file as a Terraform input and applies the labels to the
+   cluster `Secret` it writes into the mgmt `argocd` namespace, so
+   ApplicationSets can target the cluster via Argo's built-in
+   cluster generator.
+4. Open PR → review plan → merge.
+5. CI runs Stage 1 then Stage 2. For workload (spoke) clusters,
    Stage 2 also writes a cluster Secret into the mgmt `argocd`
-   namespace (no in-repo cluster registry — Argo's cluster
-   generator picks it up automatically). For mgmt clusters, Stage
-   2 installs ArgoCD itself. Argo takes over; verify platform Apps
-   Healthy/Synced.
+   namespace; Argo's cluster generator picks it up automatically.
+   For mgmt clusters, Stage 2 installs ArgoCD itself. Argo takes
+   over; verify platform Apps Healthy/Synced.
 
 ### Onboard a team
 
