@@ -477,6 +477,37 @@ run "networking_derived_populates_topology_at_slash20" {
     condition     = output.networking_derived.envs["nonprod/eastus"].egress_next_hop_ip == null
     error_message = "egress_next_hop_ip must default to null when absent from fleet_doc."
   }
+
+  # --- F6 hub-and-spoke knobs: defaults preserve pre-F6 behaviour ---
+  assert {
+    condition     = output.networking_derived.envs["mgmt/eastus"].use_remote_gateways == false
+    error_message = "use_remote_gateways must default to false (preserves pre-F6 no-gateway-transit behaviour)."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["mgmt/eastus"].dns_servers == tolist([])
+    error_message = "dns_servers must default to [] (Azure-provided DNS)."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["mgmt/eastus"].subnet_route_table_ids == tomap({})
+    error_message = "subnet_route_table_ids must default to {} (no per-subnet RT override)."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["mgmt/eastus"].rt_fleet_name == "rt-fleet-eastus"
+    error_message = "rt_fleet_name must be `rt-fleet-<region>` on mgmt env-regions (fleet-plane RT when egress_next_hop_ip is set)."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["nonprod/eastus"].rt_fleet_name == null
+    error_message = "rt_fleet_name must be null on non-mgmt env-regions (cluster-plane RT is rt-aks-<env>-<region>)."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["nonprod/eastus"].use_remote_gateways == false
+    error_message = "use_remote_gateways must default to false on non-mgmt env-regions too."
+  }
 }
 
 # ---- networking_derived: create_reverse_peering = false honored ------------
@@ -697,5 +728,124 @@ run "networking_derived_capacity_two_pool" {
   assert {
     condition     = output.networking_derived.envs["mgmt/eastus"].snet_pe_env_cidr == "10.10.0.0/26"
     error_message = "snet-pe-env must be the first /26 of A regardless of VNet size."
+  }
+}
+
+# ---- networking_derived: F6 hub-and-spoke knobs pass through ---------------
+#
+# All three fields are optional on `_fleet.yaml` and default to the
+# pre-F6 "island VNet" behaviour (see defaults assertions in
+# `networking_derived_populates_topology_at_slash20`). When set,
+# `use_remote_gateways` / `dns_servers` / `subnet_route_table_ids` pass
+# through verbatim to `networking_derived.envs.<env>/<region>` for
+# consumption by `bootstrap/fleet` + `bootstrap/environment`.
+
+run "networking_derived_surfaces_f6_hub_spoke_knobs" {
+  command = apply
+
+  variables {
+    fleet_doc = {
+      fleet = {
+        name      = "acme"
+        tenant_id = "11111111-1111-1111-1111-111111111111"
+      }
+      acr = {
+        name_override   = ""
+        resource_group  = "rg-fleet-shared"
+        subscription_id = "22222222-2222-2222-2222-222222222222"
+        location        = "eastus"
+      }
+      keyvault = { name_override = "" }
+      state = {
+        storage_account_name_override = ""
+        resource_group                = "rg-fleet-tfstate"
+        subscription_id               = "22222222-2222-2222-2222-222222222222"
+        containers                    = { fleet = "tfstate-fleet" }
+      }
+      envs = { mgmt = { location = "eastus" } }
+      networking = {
+        envs = {
+          mgmt = {
+            regions = {
+              eastus = {
+                address_space           = ["10.50.0.0/20"]
+                hub_network_resource_id = "/subscriptions/hhh/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub-mgmt-eastus"
+                hub_peering = {
+                  use_remote_gateways = true
+                }
+                dns_servers = ["10.0.0.4", "10.0.0.5"]
+                subnet_route_table_ids = {
+                  pe-fleet = "/subscriptions/hhh/resourceGroups/rg-hub/providers/Microsoft.Network/routeTables/rt-hub-mgmt-eastus"
+                  runners  = "/subscriptions/hhh/resourceGroups/rg-hub/providers/Microsoft.Network/routeTables/rt-hub-mgmt-eastus"
+                }
+              }
+            }
+          }
+          nonprod = {
+            regions = {
+              eastus = {
+                address_space      = ["10.60.0.0/20"]
+                egress_next_hop_ip = "10.0.0.4"
+                subnet_route_table_ids = {
+                  pe-env = "/subscriptions/hhh/resourceGroups/rg-hub/providers/Microsoft.Network/routeTables/rt-hub-nonprod-eastus"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  # --- mgmt: all three knobs flow through ---
+  assert {
+    condition     = output.networking_derived.envs["mgmt/eastus"].use_remote_gateways == true
+    error_message = "hub_peering.use_remote_gateways on a region must pass through as networking_derived.envs.<k>.use_remote_gateways."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["mgmt/eastus"].dns_servers == tolist(["10.0.0.4", "10.0.0.5"])
+    error_message = "dns_servers must pass through verbatim on networking_derived.envs.<k>.dns_servers."
+  }
+
+  assert {
+    condition = (
+      output.networking_derived.envs["mgmt/eastus"].subnet_route_table_ids["pe-fleet"] ==
+      "/subscriptions/hhh/resourceGroups/rg-hub/providers/Microsoft.Network/routeTables/rt-hub-mgmt-eastus"
+    )
+    error_message = "subnet_route_table_ids.pe-fleet must pass through verbatim."
+  }
+
+  assert {
+    condition = (
+      output.networking_derived.envs["mgmt/eastus"].subnet_route_table_ids["runners"] ==
+      "/subscriptions/hhh/resourceGroups/rg-hub/providers/Microsoft.Network/routeTables/rt-hub-mgmt-eastus"
+    )
+    error_message = "subnet_route_table_ids.runners must pass through verbatim."
+  }
+
+  # --- non-mgmt: pe-env override + egress_next_hop_ip coexist ---
+  assert {
+    condition = (
+      output.networking_derived.envs["nonprod/eastus"].subnet_route_table_ids["pe-env"] ==
+      "/subscriptions/hhh/resourceGroups/rg-hub/providers/Microsoft.Network/routeTables/rt-hub-nonprod-eastus"
+    )
+    error_message = "subnet_route_table_ids.pe-env must pass through on non-mgmt env-regions."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["nonprod/eastus"].egress_next_hop_ip == "10.0.0.4"
+    error_message = "egress_next_hop_ip must coexist with subnet_route_table_ids (override precedence is a call-site concern, not a derivation concern)."
+  }
+
+  # --- defaults still hold on fields not set ---
+  assert {
+    condition     = output.networking_derived.envs["nonprod/eastus"].use_remote_gateways == false
+    error_message = "use_remote_gateways must default to false when hub_peering is not set on this region."
+  }
+
+  assert {
+    condition     = output.networking_derived.envs["nonprod/eastus"].dns_servers == tolist([])
+    error_message = "dns_servers must default to [] when not set on this region."
   }
 }

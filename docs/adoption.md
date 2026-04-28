@@ -274,9 +274,40 @@ GitHub items must be arranged out-of-band by the adopter org.
   `snet-pe-fleet` (`/26`) + `snet-runners` (`/23`) out of the upper
   `/(N+1)` of that address space. The runner subnet is delegated to
   `Microsoft.App/environments` and egresses via the hub firewall
-  when `egress_next_hop_ip` is set on that region (UDR ownership is
-  in-repo as the per-env-region route table `rt-aks-<env>-<region>`;
-  see `docs/networking.md` § "Route table / UDR egress").
+  when `egress_next_hop_ip` is set on that region. UDR ownership on
+  the fleet plane is in-repo as the mgmt-only route table
+  `rt-fleet-<region>`, associated with both `snet-pe-fleet` and
+  `snet-runners`, unless an adopter overrides on a per-subnet basis
+  via `subnet_route_table_ids` (see next bullet). Cluster-workload
+  UDR lives on `rt-aks-<env>-<region>` (a separate RT) per-env-region.
+  See `docs/networking.md` § "Route table / UDR egress".
+- **Hub-and-spoke knobs (all optional; pre-F6 defaults preserved
+  when omitted).** Per
+  `networking.envs.<env>.regions.<region>` entry:
+    * `egress_next_hop_ip` (string | null, default null). Already
+      drives `rt-aks-<env>-<region>`; also drives `rt-fleet-<region>`
+      on mgmt env-regions (association: `snet-pe-fleet` +
+      `snet-runners`). Null = no repo-owned route table on the
+      fleet plane (island-VNet default).
+    * `hub_peering.use_remote_gateways` (bool, default false).
+      Configured at
+      `networking.envs.<env>.regions.<region>.hub_peering.use_remote_gateways`
+      (nested under `hub_peering:` so future sibling knobs can live
+      alongside it). Set `true` only when the hub has a VPN or
+      ExpressRoute gateway the spoke needs to learn routes from;
+      Azure rejects the peering otherwise.
+    * `dns_servers` (list(string), default `[]`). `[]` = Azure-
+      provided DNS (168.63.129.16). Populate with the central
+      Private DNS Resolver inbound-endpoint IPs when split-horizon
+      or on-prem DNS forwarding is required.
+    * `subnet_route_table_ids` (map(string), default `{}`). Per-
+      subnet RT-id override. Keys: `pe-fleet`, `runners` (mgmt
+      only), and `pe-env` (every env). Values: full ARM
+      `Microsoft.Network/routeTables/<name>` resource ids of a
+      hub-owned RT. When set for a subnet, it wins over any
+      module-created RT derived from `egress_next_hop_ip`.
+      Intended for adopters whose hub team forbids spoke-owned RTs
+      on the peered subnets.
 - Central `privatelink.blob.core.windows.net` private DNS zone
   (typically in the hub connectivity subscription; shared with every
   other storage account in the tenant). Referenced by id in

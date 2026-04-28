@@ -100,6 +100,7 @@ info "found ${#cluster_paths[@]} cluster(s)"
 #   snet_pe_fleet_cidr                 snet_pe_fleet_cidr
 #   nsg_pe_fleet_name                  nsg_pe_fleet_name
 #   nsg_runners_name                   nsg_runners_name
+#   rt_fleet_name                      rt_fleet_name
 #
 # Fleet-scope comparisons (same for every cluster; we check once using
 # the first cluster's loader output):
@@ -170,6 +171,7 @@ for cp in "${cluster_paths[@]}"; do
   compare "snet_pe_fleet_cidr"         '.derived.networking.snet_pe_fleet_cidr'         '.snet_pe_fleet_cidr'
   compare "nsg_pe_fleet_name"          '.derived.networking.nsg_pe_fleet_name'          '.nsg_pe_fleet_name'
   compare "nsg_runners_name"           '.derived.networking.nsg_runners_name'           '.nsg_runners_name'
+  compare "rt_fleet_name"              '.derived.networking.rt_fleet_name'              '.rt_fleet_name'
 done
 
 if [[ "$errors" -gt 0 ]]; then

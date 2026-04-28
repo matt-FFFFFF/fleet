@@ -856,3 +856,28 @@ self-contained enough to land in its own PR.
     `docs/adoption.md §4 / §5.1 / §5.2` rewritten to reflect the
     single-file overlay and the auto-load behaviour. F8 finding
     deleted from `docs/findings.md` per AGENTS.md lifecycle rule.
+18. **Spoke networking hub-and-spoke gaps** —
+    ✅ **Done.** Plumbed three new per-env-region schema fields
+    (`use_remote_gateways`, `dns_servers`, `subnet_route_table_ids`)
+    through `modules/fleet-identity/` (`env_regions` passthrough +
+    `networking_derived.envs.<k>.*`), with `rt_fleet_name =
+    "rt-fleet-<region>"` derived on mgmt env-regions only.
+    `bootstrap/fleet` now module-creates `rt-fleet-<region>` via the
+    sub-vending `route_tables` variable when `egress_next_hop_ip` is
+    set, associates it with `snet-pe-fleet` + `snet-runners`, and
+    accepts a per-subnet override via `subnet_route_table_ids.<k>`
+    (precedence: external id → repo-created RT → pre-F6 unset).
+    `bootstrap/environment` plumbs `dns_servers` +
+    `use_remote_gateways` into the sub-vending call and applies the
+    same precedence to `snet-pe-env` (falling back to the existing
+    `rt-aks-<env>-<region>`, always created). ARM-regex + keyset
+    preflights reject malformed ids / typo'd subnet keys on both
+    stages. `config-loader/load.sh` emits `rt_fleet_name`;
+    `.github/scripts/check-naming-parity.sh` + harness updated to
+    compare it. `fleet-identity/tests/unit/` gained a new run block
+    (`networking_derived_surfaces_f6_hub_spoke_knobs`) + 6 default-
+    assertions under the existing topology run block. `PLAN.md §3.4`
+    documents the three fields + `rt-fleet-<region>`;
+    `docs/naming.md` adds the new RT row; `docs/adoption.md §5.1`
+    lists the knobs under prereqs. F6 finding deleted from
+    `docs/findings.md` per AGENTS.md lifecycle rule.

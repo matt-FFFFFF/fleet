@@ -74,6 +74,30 @@ resource "terraform_data" "network_preconditions" {
       ])
       error_message = "clusters/_fleet.yaml: networking.envs.mgmt.regions.<region>.hub_network_resource_id, when set, must be a full ARM VNet resource id (or null to skip hub peering). See docs/adoption.md §5.1 + docs/networking.md."
     }
+    # F6: external subnet route-table ids, when supplied, must be full
+    # ARM Microsoft.Network/routeTables resource ids. The keyset is
+    # constrained to the subnets this stage creates on mgmt VNets.
+    # `pe-env` belongs to `bootstrap/environment`; supplying it here is
+    # silently ignored by this stage (bootstrap/environment validates
+    # its own key against the env it owns).
+    precondition {
+      condition = alltrue([
+        for key, e in local.mgmt_regions : alltrue([
+          for sk, sv in e.subnet_route_table_ids :
+          can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/routeTables/[^/]+$", sv))
+        ])
+      ])
+      error_message = "clusters/_fleet.yaml: every networking.envs.mgmt.regions.<region>.subnet_route_table_ids value must be a full ARM Microsoft.Network/routeTables resource id. See docs/adoption.md §5.1 + PLAN §3.4 hub-and-spoke."
+    }
+    precondition {
+      condition = alltrue([
+        for key, e in local.mgmt_regions : alltrue([
+          for sk, _ in e.subnet_route_table_ids :
+          contains(["pe-fleet", "runners", "pe-env"], sk)
+        ])
+      ])
+      error_message = "clusters/_fleet.yaml: networking.envs.mgmt.regions.<region>.subnet_route_table_ids keys must be one of `pe-fleet`, `runners`, `pe-env` (pe-env is consumed by bootstrap/environment; other keys are rejected to catch typos early)."
+    }
     precondition {
       condition     = local.networking_central.pdz_blob != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.blob\\.core\\.windows\\.net$", local.networking_central.pdz_blob))
       error_message = "clusters/_fleet.yaml: networking.private_dns_zones.blob must be a full ARM resource id ending in `/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net`. See docs/adoption.md §5.1."
@@ -105,6 +129,15 @@ locals {
   mgmt_vnet_key    = "mgmt"
   nsg_pe_fleet_key = "pe-fleet"
   nsg_runners_key  = "runners"
+
+  # F6 fleet-plane RT: one module-created RT per region when the
+  # adopter has set `egress_next_hop_ip`. `rt-fleet-<region>` with a
+  # single `0.0.0.0/0 → VirtualAppliance → <ip>` route. Used by
+  # `snet-pe-fleet` + `snet-runners` when no per-subnet external RT id
+  # override (`subnet_route_table_ids.<subnet>`) is present. Skipped
+  # entirely when `egress_next_hop_ip` is null — the pre-F6 island-VNet
+  # default.
+  rt_fleet_key = "fleet-plane"
 }
 
 module "mgmt_network" {
@@ -162,6 +195,34 @@ module "mgmt_network" {
     }
   }
 
+  # --- Fleet-plane route table (F6) ----------------------------------------
+  #
+  # Module-created when `egress_next_hop_ip` is set. `route_table_enabled`
+  # gates the entire `route_tables` map — if we always passed `true` the
+  # module would fail plan on an empty `route_tables` map. The map must
+  # also be empty when disabled.
+  route_table_enabled = each.value.egress_next_hop_ip != null
+  route_tables = each.value.egress_next_hop_ip == null ? {} : {
+    (local.rt_fleet_key) = {
+      name               = each.value.rt_fleet_name # rt-fleet-<region>
+      location           = each.value.location
+      resource_group_key = local.mgmt_rg_key
+      # bgp_route_propagation_enabled defaults to `true` (sub-vending
+      # module default); adopters who need BGP learned routes not to
+      # override the 0.0.0.0/0 UDR should supply a hub-owned external
+      # RT id via `subnet_route_table_ids.<subnet>` — adopters retain
+      # full control on that path.
+      routes = {
+        default-egress = {
+          name                   = "default-0000-egress"
+          address_prefix         = "0.0.0.0/0"
+          next_hop_type          = "VirtualAppliance"
+          next_hop_in_ip_address = each.value.egress_next_hop_ip
+        }
+      }
+    }
+  }
+
   # --- VNet + fleet-plane subnets ------------------------------------------
   virtual_network_enabled = true
   virtual_networks = {
@@ -170,6 +231,12 @@ module "mgmt_network" {
       resource_group_key = local.mgmt_rg_key
       location           = each.value.location
       address_space      = each.value.address_space
+
+      # VNet-level DNS servers (F6). Empty list = Azure-provided DNS
+      # (168.63.129.16); populate with central Private DNS Resolver
+      # inbound endpoint IPs when split-horizon / on-prem DNS
+      # forwarding is required.
+      dns_servers = each.value.dns_servers
 
       # Fleet-plane subnets only. Cluster-workload subnets
       # (snet-pe-env, api pool, nodes pool) are carved by
@@ -182,6 +249,18 @@ module "mgmt_network" {
           network_security_group = {
             key_reference = local.nsg_pe_fleet_key
           }
+          # Route-table selection (F6). Precedence:
+          #   1. adopter-owned hub RT from subnet_route_table_ids
+          #   2. module-created fleet RT from egress_next_hop_ip
+          #   3. unset (omitted; pre-F6 default)
+          # `try(...)` so an adopter whose selection resolves to null
+          # yields `null`, which the sub-vending module treats as the
+          # "unset" case and skips the association.
+          route_table = try(lookup(each.value.subnet_route_table_ids, "pe-fleet", null) != null ? {
+            id = each.value.subnet_route_table_ids["pe-fleet"]
+            } : (each.value.egress_next_hop_ip != null ? {
+              key_reference = local.rt_fleet_key
+          } : null), null)
         }
         runners = {
           name             = "snet-runners"
@@ -201,6 +280,12 @@ module "mgmt_network" {
               }
             }
           ]
+          # Route-table selection (F6) — same precedence as pe-fleet.
+          route_table = try(lookup(each.value.subnet_route_table_ids, "runners", null) != null ? {
+            id = each.value.subnet_route_table_ids["runners"]
+            } : (each.value.egress_next_hop_ip != null ? {
+              key_reference = local.rt_fleet_key
+          } : null), null)
         }
       }
 
@@ -218,7 +303,10 @@ module "mgmt_network" {
         allow_forwarded_traffic      = true
         allow_gateway_transit        = false
         allow_virtual_network_access = true
-        use_remote_gateways          = false
+        # F6: plumbed per env-region. True when the hub owns a VPN /
+        # ExpressRoute gateway the spoke needs to reach; false
+        # (default) preserves pre-F6 island-VNet behaviour.
+        use_remote_gateways = each.value.use_remote_gateways
       }
       hub_peering_options_fromhub = {
         allow_forwarded_traffic      = true

@@ -116,6 +116,30 @@ resource "terraform_data" "network_preconditions" {
       condition     = local.networking_central.pdz_grafana != null && can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.grafana\\.azure\\.com$", local.networking_central.pdz_grafana))
       error_message = "clusters/_fleet.yaml: networking.private_dns_zones.grafana must be a full ARM resource id ending in `/providers/Microsoft.Network/privateDnsZones/privatelink.grafana.azure.com`. Replace it with the resource id of the central BYO Grafana PDZ. See docs/adoption.md §5.1."
     }
+    # F6: external subnet route-table ids, when supplied, must be full
+    # ARM Microsoft.Network/routeTables resource ids. This stage owns
+    # only `snet-pe-env`; any other key in the map is ignored here
+    # (the fleet-identity schema is shared across stages and mgmt-only
+    # keys `pe-fleet` / `runners` are validated by bootstrap/fleet).
+    # The keyset check below catches typos early across both stages.
+    precondition {
+      condition = alltrue([
+        for k in local.region_keys : alltrue([
+          for sk, sv in local.env_regions[k].subnet_route_table_ids :
+          can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/routeTables/[^/]+$", sv))
+        ])
+      ])
+      error_message = "clusters/_fleet.yaml: every networking.envs.${var.env}.regions.<region>.subnet_route_table_ids value must be a full ARM Microsoft.Network/routeTables resource id. See docs/adoption.md §5.1 + PLAN §3.4 hub-and-spoke."
+    }
+    precondition {
+      condition = alltrue([
+        for k in local.region_keys : alltrue([
+          for sk, _ in local.env_regions[k].subnet_route_table_ids :
+          contains(["pe-fleet", "runners", "pe-env"], sk)
+        ])
+      ])
+      error_message = "clusters/_fleet.yaml: networking.envs.${var.env}.regions.<region>.subnet_route_table_ids keys must be one of `pe-fleet`, `runners`, `pe-env`. For env != `mgmt` only `pe-env` is consumed by bootstrap/environment; other keys are validated by bootstrap/fleet."
+    }
     # env=mgmt: each region must have a pre-authored mgmt VNet id.
     # (Non-empty check is already enforced by the variable; here we
     # assert every mgmt region named in `_fleet.yaml` has a matching
@@ -215,6 +239,12 @@ module "env_network" {
       location           = r
       address_space      = local.env_regions[k].address_space
 
+      # VNet-level DNS servers (F6). Empty list = Azure-provided DNS
+      # (168.63.129.16); populate with central Private DNS Resolver
+      # inbound endpoint IPs when split-horizon / on-prem DNS
+      # forwarding is required.
+      dns_servers = local.env_regions[k].dns_servers
+
       # Cluster-workload subnets are authored as azapi children below
       # (uniform with the env=mgmt branch). Sub-vending's subnet carve
       # is therefore empty here; we rely on the module solely for the
@@ -233,7 +263,10 @@ module "env_network" {
         allow_forwarded_traffic      = true
         allow_gateway_transit        = false
         allow_virtual_network_access = true
-        use_remote_gateways          = false
+        # F6: plumbed per env-region. True when the hub owns a VPN /
+        # ExpressRoute gateway the spoke needs to reach; false
+        # (default) preserves pre-F6 island-VNet behaviour.
+        use_remote_gateways = local.env_regions[k].use_remote_gateways
       }
       hub_peering_options_fromhub = {
         allow_forwarded_traffic      = true
@@ -327,7 +360,18 @@ resource "azapi_resource" "snet_pe_env" {
     properties = {
       addressPrefixes      = [local.env_regions[each.value].snet_pe_env_cidr]
       networkSecurityGroup = { id = local.env_nsg_pe_env_id_by_region[each.key] }
-      routeTable           = { id = azapi_resource.route_table[each.key].id }
+      # Route-table selection (F6). Precedence:
+      #   1. adopter-owned hub RT from subnet_route_table_ids["pe-env"]
+      #   2. stage-created rt-aks-<env>-<region> (always present)
+      # There is no "unset" branch on the env stage — the rt-aks shell
+      # is always created regardless of `egress_next_hop_ip`, so the
+      # pre-F6 behaviour is preserved by branch (2).
+      routeTable = {
+        id = coalesce(
+          lookup(local.env_regions[each.value].subnet_route_table_ids, "pe-env", null),
+          azapi_resource.route_table[each.key].id,
+        )
+      }
     }
   }
   response_export_values = ["id"]

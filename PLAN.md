@@ -382,7 +382,41 @@ networking:
           # out-of-band and the sub-vending call only creates the
           # spoke→hub half).
           create_reverse_peering: true
-    nonprod:
+          # F6 hub-and-spoke knobs (all optional; pre-F6 defaults
+          # preserved when omitted).
+          #
+          # `egress_next_hop_ip` — when set, `bootstrap/fleet` creates
+          # `rt-fleet-<region>` with a single `0.0.0.0/0 →
+          # VirtualAppliance → <ip>` route, and associates it with
+          # `snet-pe-fleet` and `snet-runners` (mgmt); non-mgmt envs
+          # get the same route on `rt-aks-<env>-<region>` and the
+          # association covers api/nodes/pe-env subnets.
+          egress_next_hop_ip: 10.0.0.4
+          # `hub_peering.use_remote_gateways` — set true when the
+          # hub owns the VPN / ExpressRoute gateway and the spoke
+          # must learn hub routes over BGP. Defaults to false (pre-F6
+          # island-VNet behaviour). Must be false on every spoke
+          # when the hub has no gateway; Azure rejects the peering
+          # otherwise. Nested under `hub_peering:` so future sibling
+          # knobs (allow_forwarded_traffic etc.) live alongside it.
+          hub_peering:
+            use_remote_gateways: false
+          # `dns_servers` — VNet-level DNS servers. Empty list (the
+          # default) = Azure-provided DNS (168.63.129.16). Populate
+          # with the central Private DNS Resolver inbound-endpoint
+          # IPs when split-horizon / on-prem DNS forwarding is
+          # required (note: at least one inbound-endpoint IP per
+          # region because custom DNS is VNet-scoped).
+          dns_servers: []
+          # `subnet_route_table_ids` — per-subnet override for the
+          # route-table association. Keys are restricted to
+          # {`pe-fleet`, `runners`, `pe-env`}; values are full ARM
+          # `Microsoft.Network/routeTables/<name>` resource ids of a
+          # hub-owned RT. When set for a subnet, it wins over the
+          # module-created RT from `egress_next_hop_ip`. Intended for
+          # adopters whose hub team forbids spoke-owned RTs on the
+          # peered subnets.
+          subnet_route_table_ids: {}
       regions:
         eastus:
           address_space: ["10.60.0.0/20"]
@@ -594,6 +628,35 @@ associated with **both** the nodes subnet and the api-server delegated
 subnet — AKS api-server VNet integration egresses through the same
 next-hop as nodes. Stage 1 fails fast when `egress_next_hop_ip` is
 null for a region that hosts clusters.
+
+**Fleet-plane UDR (mgmt only).** The same `egress_next_hop_ip` also
+drives a second route table on mgmt env-regions:
+`rt-fleet-<region>`, authored by `bootstrap/fleet` and associated
+with `snet-pe-fleet` + `snet-runners`. This is created only when
+`egress_next_hop_ip` is non-null; the pre-F6 default (island VNet,
+no RT) is preserved when omitted.
+
+**Per-subnet RT override.** Adopters whose hub team forbids
+spoke-owned route tables can supply a hub-owned RT on a per-subnet
+basis via `networking.envs.<env>.regions.<region>.subnet_route_table_ids`
+(a map keyed by subnet name). Precedence: external id → repo-created
+RT derived from `egress_next_hop_ip` → no RT (pre-F6 default). Both
+`bootstrap/fleet` and `bootstrap/environment` accept the shared key
+set `{pe-fleet, runners, pe-env}` (rejecting other keys as typos);
+each stage consumes only the subnets it owns and ignores the rest,
+so a typo under either bucket surfaces at the owning stage's
+preflight.
+
+**VNet-level DNS + remote-gateway transit.** Two further per-env-region
+fields complete the hub-and-spoke contract:
+`networking.envs.<env>.regions.<region>.dns_servers` (defaults to the
+empty list = Azure-provided 168.63.129.16; populate with central
+Private DNS Resolver inbound-endpoint IPs for split-horizon / on-prem
+DNS) and `...use_remote_gateways` (defaults to false; set true when
+the hub owns a VPN / ExpressRoute gateway the spoke must learn
+routes from over BGP). Azure rejects the peering when the hub has no
+gateway and any spoke requests gateway transit — leave false unless
+the hub is actually gateway-backed.
 
 **Service CIDR reservation.** `modules/aks-cluster` hard-codes
 `network_profile.service_cidr = 100.127.0.0/16` with

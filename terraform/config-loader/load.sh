@@ -56,7 +56,8 @@
 #         "snet_runners_name":       "snet-runners-<region>" | null,
 #         "snet_runners_cidr":       "<cidr>" | null,
 #         "nsg_pe_fleet_name":       "nsg-pe-fleet-<region>" | null,
-#         "nsg_runners_name":        "nsg-runners-<region>" | null
+#         "nsg_runners_name":        "nsg-runners-<region>" | null,
+#         "rt_fleet_name":           "rt-fleet-<region>" | null
 #       }
 #     }
 #   }
@@ -362,11 +363,13 @@ if [[ "$env" == "mgmt" ]]; then
   snet_runners_name="snet-runners-${region}"
   nsg_pe_fleet_name="nsg-pe-fleet-${region}"
   nsg_runners_name="nsg-runners-${region}"
+  rt_fleet_name="rt-fleet-${region}"
 else
   snet_pe_fleet_name=""
   snet_runners_name=""
   nsg_pe_fleet_name=""
   nsg_runners_name=""
+  rt_fleet_name=""
 fi
 
 # Pass raw CIDR strings through to Stage 1 so the stage can author the
@@ -413,6 +416,7 @@ jq -n \
   --arg snet_runners  "$snet_runners_name" \
   --arg nsg_pe_fleet  "$nsg_pe_fleet_name" \
   --arg nsg_runners   "$nsg_runners_name" \
+  --arg rt_fleet      "$rt_fleet_name" \
   --arg egress_hop    "$egress_next_hop_ip" \
   --arg hub_net_id    "$hub_network_resource_id" \
   --argjson slot   "$subnet_slot" \
@@ -451,6 +455,7 @@ jq -n \
          snet_runners_name:             ($snet_runners      | orNull),
          nsg_pe_fleet_name:             ($nsg_pe_fleet     | orNull),
          nsg_runners_name:              ($nsg_runners      | orNull),
+         rt_fleet_name:                 ($rt_fleet         | orNull),
          egress_next_hop_ip:            ($egress_hop       | orNull),
          hub_network_resource_id:       ($hub_net_id       | orNull)
        } + $cidrs)
