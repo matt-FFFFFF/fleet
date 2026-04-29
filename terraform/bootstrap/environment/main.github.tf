@@ -205,7 +205,7 @@ resource "github_actions_environment_variable" "env_vars" {
 # `uami-fleet-mgmt` receives its `Application.ReadWrite.OwnedBy` grant
 # manually post-bootstrap; the long-lived `AppRoleAssignment.ReadWrite.All`
 # on `uami-fleet-meta` is not justified for that single one-off grant.
-# See `docs/adoption.md §5.1` for the operator command.
+# See `docs/adoption.md §5.3` for the operator command.
 #
 # Per-env UAMIs in `nonprod` / `prod` / etc. hold zero Graph permissions
 # and are not listed as owners on either AAD app.

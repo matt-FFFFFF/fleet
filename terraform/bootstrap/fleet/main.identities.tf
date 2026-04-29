@@ -66,7 +66,7 @@ locals {
 # either a two-pass bootstrap or a long-lived `AppRoleAssignment.
 # ReadWrite.All` on `fleet-meta`. Neither is justified for a single
 # one-off grant — instead, the operator issues it manually via `az`
-# once after env=mgmt bootstraps. See `docs/adoption.md §5.1`.
+# once after env=mgmt bootstraps. See `docs/adoption.md §5.3`.
 
 # Microsoft Graph service principal in this tenant. Required as the
 # `resource_object_id` for the `azuread_app_role_assignment` below.

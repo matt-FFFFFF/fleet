@@ -25,7 +25,7 @@
 #      no Graph grant. The matching grant on `uami-fleet-mgmt` (needed
 #      for Stage 1 mgmt-cluster Kargo password rotation) is issued
 #      manually by the operator after `bootstrap/environment` env=mgmt
-#      runs — see `docs/adoption.md §5.1`. See main.identities.tf for
+#      runs — see `docs/adoption.md §5.3`. See main.identities.tf for
 #      the rationale.
 #   7. Fleet GitHub repo + branch protection; team-repo-template repo.
 #   8. fleet-stage0 + fleet-meta GitHub environments with env variables,

@@ -418,10 +418,15 @@ See `PLAN.md` §4 Stage -1 for the full bootstrap sequence.
 
 `uami-fleet-mgmt` (created by `bootstrap/environment` when
 `env=mgmt`) needs Microsoft Graph `Application.ReadWrite.OwnedBy`
-so that Stage 0 — running under that UAMI in CI — can manage owners
-on the `argocd-fleet` and `kargo-fleet` AAD apps it creates. The
-grant is **not** issued from Terraform: doing so would require
-`bootstrap/fleet` (or `bootstrap/environment`) to hold
+so that **Stage 1 on the mgmt cluster** — running under that UAMI
+in CI — can mutate the `argocd-fleet` and `kargo-fleet` AAD apps it
+co-owns (rotating `azuread_application_password` for the Kargo
+OIDC client, writing future mgmt-side Argo/Kargo federated
+credentials, etc.). Stage 0 itself runs under `uami-fleet-stage0`
+and already holds the equivalent grant via `bootstrap/fleet`; this
+section is **only** about the mgmt-side UAMI. The grant is **not**
+issued from Terraform: doing so would require `bootstrap/fleet`
+(or `bootstrap/environment`) to hold
 `AppRoleAssignment.ReadWrite.All` long-term, which is exactly the
 blast radius we are trying to avoid (PLAN §13 Phase 2 / R1).
 
@@ -436,9 +441,9 @@ GRAPH_SP_OBJECT_ID="$(az ad sp show \
   --query id -o tsv)"
 
 # uami-fleet-mgmt principalId (from bootstrap/environment env=mgmt
-# state). `terraform output -json env_uami` is the canonical source:
+# state). `env_uami` is an object output, so use `-json`:
 MGMT_UAMI_PRINCIPAL_ID="$(terraform -chdir=terraform/bootstrap/environment \
-  output -raw env_uami | jq -r '.principal_id')"
+  output -json env_uami | jq -r '.principal_id')"
 
 # Application.ReadWrite.OwnedBy app-role id (well-known on Graph):
 APP_RW_OWNED_BY_ROLE_ID="18a4783c-866b-4cc7-a460-3d5e5662c884"
@@ -456,9 +461,10 @@ az rest \
 
 The grant persists for the life of the UAMI. Re-running
 `bootstrap/environment` env=mgmt does **not** revoke it; deleting
-the UAMI does. If the grant is missing, Stage 0 fails on the
-`azuread_application.argocd` / `kargo` owner reconcile with a Graph
-`Authorization_RequestDenied`.
+the UAMI does. If the grant is missing, the mgmt cluster's Stage 1
+operations that run under `uami-fleet-mgmt` can fail on Microsoft
+Graph-backed resources (for example `azuread_application_password`
+rotation on the Kargo AAD app) with `Authorization_RequestDenied`.
 
 ## Re-running `init-fleet.sh`
 
