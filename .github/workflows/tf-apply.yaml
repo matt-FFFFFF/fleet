@@ -321,12 +321,20 @@ jobs:
       # together when the `stage0-publisher` GitHub App lands. Until
       # then, the operator manually populates `MGMT_AKS_OIDC_ISSUER_URL`
       # (the only one consumed today) after the first mgmt-cluster apply.
+      #
+      # IMPORTANT: when enabling this step, the gate MUST be on the
+      # cluster's role, not its env. env=mgmt may hold more than one
+      # cluster (or, in principle, a non-management cluster), so a
+      # `matrix.cluster.env == 'mgmt'` gate would let the wrong cluster
+      # overwrite fleet-wide `MGMT_AKS_*` repo variables.
+      # `detect-affected-clusters.sh` must surface `matrix.cluster.role`
+      # (parsed from `cluster.yaml`); the enable-time condition becomes
+      # `matrix.cluster.role == 'management' && needs.stage0.result == 'success'`.
       # ---------------------------------------------------------------------
       - name: Publish mgmt Stage 1 outputs → repo vars (mgmt-only)
-        if: false   # TODO: enable in lockstep with publish-stage0
-        # NOTE: matrix.cluster.role is not currently surfaced by
-        # detect-affected-clusters.sh; gate on env when enabling.
-        # if: matrix.cluster.env == 'mgmt' && needs.stage0.result == 'success'
+        if: false   # TODO: enable in lockstep with publish-stage0; surface matrix.cluster.role first
+        # When enabling, replace `false` with:
+        #   matrix.cluster.role == 'management' && needs.stage0.result == 'success'
         working-directory: terraform/stages/1-cluster
         env:
           GH_TOKEN: ${{ secrets.STAGE0_PUBLISHER_TOKEN }}
