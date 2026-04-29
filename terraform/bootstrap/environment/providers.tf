@@ -6,13 +6,6 @@ terraform {
       source  = "Azure/azapi"
       version = "~> 2.9"
     }
-    # `azuread` is used for the Graph app-role assignment that grants the
-    # env UAMI `Application.ReadWrite.OwnedBy` on the Microsoft Graph SP.
-    # See main.github.tf / STATUS.md item 14.
-    azuread = {
-      source  = "hashicorp/azuread"
-      version = "~> 3.8"
-    }
     github = {
       source  = "integrations/github"
       version = "~> 6.11"
@@ -50,11 +43,6 @@ provider "azapi" {
   tenant_id       = local.fleet.tenant_id
   subscription_id = local.environment.subscription_id
   use_oidc        = true # authenticating as uami-fleet-meta via GitHub OIDC
-}
-
-provider "azuread" {
-  tenant_id = local.fleet.tenant_id
-  use_oidc  = true
 }
 
 provider "github" {

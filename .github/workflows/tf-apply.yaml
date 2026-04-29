@@ -20,7 +20,7 @@ name: tf-apply
 #     the job; `prod/*` serialised at matrix level (`max-parallel: 1`).
 #
 # Stage 2 is scaffolded below as a commented-out block; enable in
-# lockstep with the `terraform/stages/2-bootstrap/` module landing.
+# lockstep with the `terraform/stages/2-kubernetes/` module landing.
 
 on:
   push:
@@ -289,6 +289,7 @@ jobs:
           TF_VAR_acr_resource_id:                   ${{ vars.ACR_RESOURCE_ID }}
           TF_VAR_kargo_mgmt_uami_principal_id:      ${{ vars.KARGO_MGMT_UAMI_PRINCIPAL_ID }}
           TF_VAR_kargo_aad_application_object_id:   ${{ vars.KARGO_AAD_APPLICATION_OBJECT_ID }}
+          TF_VAR_mgmt_aks_oidc_issuer_url:          ${{ vars.MGMT_AKS_OIDC_ISSUER_URL }}
           TF_VAR_fleet_env_uami_principal_id:       ${{ vars.FLEET_ENV_UAMI_PRINCIPAL_ID }}
           TF_VAR_env_monitor_workspace_id:          ${{ vars.MONITOR_WORKSPACE_ID }}
           TF_VAR_env_dce_id:                        ${{ vars.DCE_ID }}
@@ -304,7 +305,54 @@ jobs:
             -backend-config="key=${REGION}/${NAME}/stage1.tfstate"
           terraform apply -auto-approve -var-file="$TFVARS"
 
-      # TODO(stage2): uncomment when `terraform/stages/2-bootstrap/` lands.
+      # ---------------------------------------------------------------------
+      # Mgmt-only: publish a small set of Stage 1 outputs to fleet-scope
+      # repo variables for spoke clusters' Stage 1 to consume (PLAN §1
+      # hub-and-spoke; PLAN §4 Stage 1 outputs):
+      #
+      #   MGMT_AKS_OIDC_ISSUER_URL          → spoke fc-argocd-spoke FICs
+      #   MGMT_AKS_HOST                     → spoke Stage 2 kubernetes
+      #                                       provider host (mgmt-aliased)
+      #   MGMT_AKS_CLUSTER_CA_CERTIFICATE   → same — provider CA
+      #   MGMT_AKS_CLUSTER_RESOURCE_ID     → spoke Stage 2 — for minting
+      #                                       AAD token scoped to mgmt AKS
+      #
+      # SCAFFOLD: same `if: false` gate as `publish-stage0` above. Flip on
+      # together when the `stage0-publisher` GitHub App lands. Until
+      # then, the operator manually populates `MGMT_AKS_OIDC_ISSUER_URL`
+      # (the only one consumed today) after the first mgmt-cluster apply.
+      # ---------------------------------------------------------------------
+      - name: Publish mgmt Stage 1 outputs → repo vars (mgmt-only)
+        if: false   # TODO: enable in lockstep with publish-stage0
+        # NOTE: matrix.cluster.role is not currently surfaced by
+        # detect-affected-clusters.sh; gate on env when enabling.
+        # if: matrix.cluster.env == 'mgmt' && needs.stage0.result == 'success'
+        working-directory: terraform/stages/1-cluster
+        env:
+          GH_TOKEN: ${{ secrets.STAGE0_PUBLISHER_TOKEN }}
+          OWNER:    ${{ github.repository_owner }}
+          REPO:     ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          oidc="$(terraform output -raw aks_oidc_issuer_url)"
+          host="$(terraform output -raw aks_host)"
+          ca="$(terraform output -raw aks_cluster_ca_certificate)"
+          rid="$(terraform output -raw aks_cluster_resource_id)"
+          upsert() {
+            local name="$1" value="$2"
+            [[ -z "$value" ]] && { echo "skip $name (empty)"; return 0; }
+            if gh api "repos/$OWNER/$REPO/actions/variables/$name" >/dev/null 2>&1; then
+              gh api -X PATCH "repos/$OWNER/$REPO/actions/variables/$name" -f name="$name" -f value="$value"
+            else
+              gh api -X POST "repos/$OWNER/$REPO/actions/variables" -f name="$name" -f value="$value"
+            fi
+          }
+          upsert MGMT_AKS_OIDC_ISSUER_URL        "$oidc"
+          upsert MGMT_AKS_HOST                   "$host"
+          upsert MGMT_AKS_CLUSTER_CA_CERTIFICATE "$ca"
+          upsert MGMT_AKS_CLUSTER_RESOURCE_ID    "$rid"
+
+      # TODO(stage2): uncomment when `terraform/stages/2-kubernetes/` lands.
       #
       # - name: Stage 1 outputs → Stage 2 tfvars
       #   working-directory: terraform/stages/1-cluster
@@ -313,7 +361,7 @@ jobs:
       #       | jq 'with_entries(.value |= .value)' \
       #       > "$RUNNER_TEMP/stage2.auto.tfvars.json"
       #     cp "$RUNNER_TEMP/stage2.auto.tfvars.json" \
-      #       ../../../terraform/stages/2-bootstrap/
+      #       ../../../terraform/stages/2-kubernetes/
       #
       # - name: Mint AAD access token → TF_VAR_aks_access_token
       #   env:
@@ -323,7 +371,7 @@ jobs:
       #   run: .github/scripts/mint-aks-token.sh
       #
       # - name: Stage 2 — init + apply
-      #   working-directory: terraform/stages/2-bootstrap
+      #   working-directory: terraform/stages/2-kubernetes
       #   env:
       #     ARM_USE_OIDC: "true"
       #     REGION: ${{ matrix.cluster.region }}

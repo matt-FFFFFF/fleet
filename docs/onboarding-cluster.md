@@ -174,7 +174,7 @@ STATUS §10):
      `fromJSON(vars.MGMT_VNET_RESOURCE_IDS)[<peer_mgmt_region>]`).
      For mgmt clusters these collapse to a single link by
      id-equality.
-2. **Stage 2** (`terraform/stages/2-bootstrap`):
+2. **Stage 2** (`terraform/stages/2-kubernetes`):
    - ArgoCD / Kargo bootstrap.
 
 Total wall-clock: AKS creation dominates (~15 min). The PR itself is

@@ -18,12 +18,15 @@
 #      User on the fleet KV. Subscription-scope assignments for
 #      fleet-meta are deferred to bootstrap/environment (one per env
 #      subscription).
-#   6. Microsoft Graph app-role assignments: `fleet-stage0` gets
+#   6. Microsoft Graph app-role assignment: `fleet-stage0` gets
 #      `Application.ReadWrite.OwnedBy` (owner-scoped CRUD on the Argo +
-#      Kargo AAD apps it creates); `fleet-meta` gets
-#      `AppRoleAssignment.ReadWrite.All` (needed to grant the same
-#      `Application.ReadWrite.OwnedBy` to each env UAMI inside
-#      `bootstrap/environment`).
+#      Kargo AAD apps it creates; in practice the only two apps it
+#      ever owns under PLAN §1 hub-and-spoke). `fleet-meta` receives
+#      no Graph grant. The matching grant on `uami-fleet-mgmt` (needed
+#      for Stage 1 mgmt-cluster Kargo password rotation) is issued
+#      manually by the operator after `bootstrap/environment` env=mgmt
+#      runs — see `docs/adoption.md §5.1`. See main.identities.tf for
+#      the rationale.
 #   7. Fleet GitHub repo + branch protection; team-repo-template repo.
 #   8. fleet-stage0 + fleet-meta GitHub environments with env variables,
 #      including JSON-encoded MGMT_VNET_RESOURCE_IDS /

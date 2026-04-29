@@ -12,7 +12,7 @@ name: tf-plan
 #     fleet-<env>` (derived from the cluster path), OIDC-authed as
 #     `uami-fleet-<env>`. Currently runs Stage 1 plan only — Stage 2 is
 #     scaffolded below as a commented-out block; enable when
-#     `terraform/stages/2-bootstrap/` lands.
+#     `terraform/stages/2-kubernetes/` lands.
 #   - Plan artefacts fed into `tf-summarize` for a single consolidated
 #     sticky PR comment.
 #
@@ -147,7 +147,7 @@ jobs:
   #    fleet-scope `vars.*` for KV/ACR/Kargo + per-env `vars.*` for
   #    VNet/ASG/RT/UAMI.
   #
-  #    `stages/2-bootstrap` plan is scaffolded as a commented-out block
+  #    `stages/2-kubernetes` plan is scaffolded as a commented-out block
   #    below; enable in lockstep with the Stage 2 module landing. When
   #    active, it will need the AAD-token mint step (see `tf-apply.yaml`).
   # -------------------------------------------------------------------------
@@ -211,6 +211,7 @@ jobs:
           TF_VAR_acr_resource_id:                   ${{ vars.ACR_RESOURCE_ID }}
           TF_VAR_kargo_mgmt_uami_principal_id:      ${{ vars.KARGO_MGMT_UAMI_PRINCIPAL_ID }}
           TF_VAR_kargo_aad_application_object_id:   ${{ vars.KARGO_AAD_APPLICATION_OBJECT_ID }}
+          TF_VAR_mgmt_aks_oidc_issuer_url:          ${{ vars.MGMT_AKS_OIDC_ISSUER_URL }}
           # Per-env repo variables (published by bootstrap/environment).
           TF_VAR_fleet_env_uami_principal_id:       ${{ vars.FLEET_ENV_UAMI_PRINCIPAL_ID }}
           TF_VAR_env_monitor_workspace_id:          ${{ vars.MONITOR_WORKSPACE_ID }}
@@ -230,7 +231,7 @@ jobs:
             | tee plan.txt
           terraform show -no-color plan.tfplan > plan.show.txt
 
-      # TODO(stage2): uncomment when `terraform/stages/2-bootstrap/` lands.
+      # TODO(stage2): uncomment when `terraform/stages/2-kubernetes/` lands.
       # Stage 2 consumes Stage 1 outputs in-job — no `terraform_remote_state`.
       # The plan step here needs a minted AAD access token for the in-plan
       # kubernetes/helm providers; see `tf-apply.yaml` for the mint recipe.
@@ -242,13 +243,13 @@ jobs:
       #       | jq 'with_entries(.value |= .value)' \
       #       > "$RUNNER_TEMP/stage2.auto.tfvars.json"
       #     cp "$RUNNER_TEMP/stage2.auto.tfvars.json" \
-      #       ../../../terraform/stages/2-bootstrap/
+      #       ../../../terraform/stages/2-kubernetes/
       #
       # - name: Mint AAD token → TF_VAR_aks_access_token
       #   run: .github/scripts/mint-aks-token.sh
       #
       # - name: Stage 2 — terraform init + plan
-      #   working-directory: terraform/stages/2-bootstrap
+      #   working-directory: terraform/stages/2-kubernetes
       #   env:
       #     ARM_USE_OIDC: "true"
       #     REGION: ${{ matrix.cluster.region }}

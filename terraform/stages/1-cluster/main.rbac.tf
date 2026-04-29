@@ -206,14 +206,44 @@ resource "azapi_resource" "ra_aks_user_groups" {
   }
 }
 
-# --- Kargo mgmt UAMI → AKS RBAC Reader on every workload cluster -----------
+# --- Argo spoke UAMI → AKS RBAC Cluster Admin on this AKS (spokes only) ----
 #
-# Enables Kargo (running in the mgmt cluster) to read Argo `Application`
-# CRs on every workload cluster for health verification. SKIPPED on
-# the mgmt cluster itself — Kargo doesn't need Reader on its own home.
+# The per-spoke `uami-argocd-spoke-<cluster>` (main.identities.tf) is the
+# identity mgmt's central Argo assumes when reconciling against this
+# cluster's K8s API (PLAN §1 hub-and-spoke). Argo creates/deletes
+# arbitrary resources fleet-wide, so the spoke side must grant it
+# cluster-admin. Scope is this AKS resource only — Argo cannot reach any
+# other Azure resource through this UAMI.
+# Skipped on the mgmt cluster: Argo's local `argocd-application-controller`
+# SA talks to `kubernetes.default.svc` directly, no AAD round-trip.
+
+resource "azapi_resource" "ra_argocd_spoke_aks_admin" {
+  count = local.mgmt_role_cluster ? 0 : 1
+
+  type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
+  name      = uuidv5("url", "aks-admin|${module.aks.resource_id}|${azapi_resource.uami_argocd_spoke[0].output.properties.principalId}")
+  parent_id = module.aks.resource_id
+
+  body = {
+    properties = {
+      principalId      = azapi_resource.uami_argocd_spoke[0].output.properties.principalId
+      principalType    = "ServicePrincipal"
+      roleDefinitionId = local.role_def_ids.aks_admin
+    }
+  }
+}
+
+# --- Kargo mgmt UAMI → AKS RBAC Reader on the mgmt AKS --------------------
+#
+# Under PLAN §1 hub-and-spoke, the central Argo on mgmt is the only
+# Argo instance, so every Argo `Application` CR exists on mgmt's K8s
+# API. Kargo (also mgmt-resident) reads those CRs for health-check /
+# promotion gating; it therefore only needs `AKS RBAC Reader` on the
+# **mgmt** cluster. Spoke clusters host no Argo CRs and require no
+# Kargo grant.
 
 resource "azapi_resource" "ra_kargo_aks_reader" {
-  count = local.mgmt_role_cluster ? 0 : 1
+  count = local.mgmt_role_cluster ? 1 : 0
 
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
   name      = uuidv5("url", "aks-reader|${module.aks.resource_id}|${var.kargo_mgmt_uami_principal_id}")

@@ -94,16 +94,18 @@ locals {
 
   mgmt_clusters = [for c in local.clusters : c if c.role == "management"]
 
-  # Distinct envs present in the cluster inventory. Feeds the
-  # `data.azuread_service_principal.env_uami` lookup in main.aad.tf that
-  # extends the Argo/Kargo app `owners` list per STATUS item 14.
-  envs = distinct([for c in local.clusters : c.env])
-
   # Redirect URI formula (derived from the directory path per PLAN §3.2 /
   # §4 Stage 0). Adding a cluster → Stage 0 re-apply updates these lists
   # atomically on the AAD apps.
+  #
+  # Per PLAN §1 hub-and-spoke: Argo (like Kargo) runs only on the mgmt
+  # cluster, so its RP-flow redirect URI list is also scoped to mgmt
+  # clusters. Spoke clusters do not run Argo — they register as cluster
+  # `Secret`s on mgmt's Argo and authenticate inbound via the per-spoke
+  # `uami-argocd-spoke-<cluster>` UAMI's FICs (Stage 1), no AAD app
+  # redirect URI required.
   argo_redirect_uris = [
-    for c in local.clusters :
+    for c in local.mgmt_clusters :
     "https://argocd.${c.name}.${c.region}.${c.env}.${local.dns.fleet_root}/auth/callback"
   ]
   kargo_redirect_uris = [

@@ -83,12 +83,11 @@ clusters/
   {mgmt,nonprod,prod}/    per-env scopes; cluster.yaml under <region>/<name>/
 terraform/
   bootstrap/{fleet,environment,team}/  Stage -1
-  stages/{0-fleet,1-cluster,2-bootstrap}/  Stage 0/1/2
+  stages/{0-fleet,1-cluster,2-kubernetes}/  Stage 0/1/2
   modules/                             reusable modules
   config-loader/load.sh                yq deep-merge → tfvars.json
 docs/
   adoption.md naming.md                contracts
-  findings.md                          open design/implementation findings (detailed rationale for STATUS Rework items)
   onboarding-*.md upgrades.md promotion.md   operator UX
 .github/
   workflows/                           CI
