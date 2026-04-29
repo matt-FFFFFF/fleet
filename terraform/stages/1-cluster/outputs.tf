@@ -64,6 +64,27 @@ output "team_identities" {
   }
 }
 
+# --- Argo spoke UAMI outputs (spoke clusters only) --------------------------
+#
+# Empty/null on the mgmt cluster (no spoke UAMI is created there). Spoke
+# Stage 2 consumes `client_id` to register this cluster as an Argo
+# `cluster` Secret on mgmt (execProviderConfig clientID).
+
+output "argocd_spoke_identity_client_id" {
+  description = "Argo spoke UAMI clientId — execProviderConfig.config.clientID in the Argo cluster Secret. Null on mgmt."
+  value       = local.mgmt_role_cluster ? null : azapi_resource.uami_argocd_spoke[0].output.properties.clientId
+}
+
+output "argocd_spoke_identity_resource_id" {
+  description = "Argo spoke UAMI ARM id. Null on mgmt."
+  value       = local.mgmt_role_cluster ? null : azapi_resource.uami_argocd_spoke[0].id
+}
+
+output "argocd_spoke_identity_principal_id" {
+  description = "Argo spoke UAMI principalId. Null on mgmt."
+  value       = local.mgmt_role_cluster ? null : azapi_resource.uami_argocd_spoke[0].output.properties.principalId
+}
+
 # --- Key Vault outputs -----------------------------------------------------
 
 output "cluster_keyvault_id" {

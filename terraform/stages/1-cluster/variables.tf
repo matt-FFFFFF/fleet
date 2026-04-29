@@ -165,11 +165,11 @@ variable "kargo_mgmt_uami_principal_id" {
   description = <<-EOT
     Principal id of the fleet-wide singleton Kargo UAMI
     (`uami-kargo-mgmt`), owned by Stage 0. Stage 1 assigns `Azure
-    Kubernetes Service RBAC Reader` on every **workload** cluster's AKS
-    resource to this principalId so Kargo (running in the mgmt cluster)
-    can read Argo `Application` CRs on every other cluster for health
-    verification. Assignment is SKIPPED on the management cluster
-    itself (`cluster.role == "management"`). Published as the
+    Kubernetes Service RBAC Reader` on the **mgmt** cluster's AKS
+    resource to this principalId so Kargo (mgmt-resident) can read
+    Argo `Application` CRs — under PLAN §1 hub-and-spoke, all such
+    CRs live on the mgmt cluster's K8s API. Assignment is SKIPPED
+    on every non-mgmt cluster. Published as the
     `KARGO_MGMT_UAMI_PRINCIPAL_ID` fleet-scope repo variable.
   EOT
   type        = string
@@ -185,6 +185,30 @@ variable "kargo_aad_application_object_id" {
     KV (PLAN §4 Stage 1 lines 1769-1782). Workload clusters accept a
     null value here — the secret-rotation resources are gated on
     `local.mgmt_cluster`.
+  EOT
+  type        = string
+  nullable    = true
+}
+
+variable "mgmt_aks_oidc_issuer_url" {
+  description = <<-EOT
+    OIDC issuer URL of the **management** cluster's AKS, used as the
+    `issuer` field on the three `fc-argocd-spoke-*` FICs that bind
+    `uami-argocd-spoke-<cluster>` to the Argo controller SAs running
+    on mgmt (PLAN §1 hub-and-spoke; PLAN §4 Stage 1 outputs).
+
+    Published by the **mgmt** cluster's Stage 1 as the
+    `MGMT_AKS_OIDC_ISSUER_URL` repo variable (the only place a Stage
+    1 also writes repo vars). Spoke clusters consume it via TF_VAR_*
+    in `tf-apply.yaml`.
+
+    Required on spokes (cluster.role != "management"); accepted as
+    null on mgmt itself (no spoke FICs are authored there).
+
+    While the `stage0-publisher` GH App that publishes this var is
+    gated `if: false`, the operator must populate it manually after
+    the first successful mgmt-cluster Stage 1 apply. See
+    `docs/adoption.md` for the bootstrap order.
   EOT
   type        = string
   nullable    = true

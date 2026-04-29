@@ -1,15 +1,25 @@
 # main.aad.tf
 #
 # Argo + Kargo AAD application registrations. Each is a single-tenant OIDC
-# client used by its respective per-cluster workload:
+# client used by the (single) mgmt-cluster workload:
 #
-#   Argo  — one instance per cluster; the app is shared across all of them.
-#           web.redirect_uris lists every cluster's Argo callback URL.
-#   Kargo — one instance on the mgmt cluster only. web.redirect_uris lists
-#           only the mgmt cluster(s) (usually exactly one).
+#   Argo  — one instance, mgmt only (PLAN §1 hub-and-spoke). Spoke clusters
+#           register into mgmt's Argo as cluster `Secret`s; they do not run
+#           Argo and so do not appear in `web.redirect_uris`.
+#   Kargo — one instance, mgmt only. web.redirect_uris lists the mgmt
+#           cluster(s) (usually exactly one).
 #
-# Federated Identity Credentials on these apps are added per cluster in
-# Stage 2 (needs the AKS OIDC issuer URL). Stage 0 does NOT touch FICs.
+# Both redirect URI lists are derived from `local.mgmt_clusters` (see
+# main.tf), so adding/removing a non-mgmt cluster never re-plans Argo or
+# Kargo here.
+#
+# Federated Identity Credentials on the Argo / Kargo *AAD apps* are
+# created on the mgmt cluster only (Stage 1 mgmt for Kargo password
+# rotation + Kargo FIC; Stage 1 mgmt for Argo FICs once the mgmt-side
+# Argo SAs need workload-identity AAD calls). Spoke clusters' Argo
+# inbound auth uses the per-spoke `uami-argocd-spoke-<cluster>` UAMI's
+# FICs (Stage 1, on the spoke's *UAMI*, not on the AAD app) — see PLAN
+# §4 Stage 1.
 #
 # The RP `client_secret` on each app exists solely for the OIDC auth-code
 # flow (human SSO login) — Argo/Dex upstream does not yet support
@@ -28,30 +38,32 @@
 
 # --- Owner-principal lookups ------------------------------------------------
 #
-# Per STATUS item 14, the Argo + Kargo apps list every Fleet UAMI that needs
-# owner-scoped CRUD (via Graph `Application.ReadWrite.OwnedBy`) as an owner:
+# Per PLAN §1 hub-and-spoke, the Argo + Kargo AAD apps are mgmt-only
+# singletons. The only UAMIs that ever mutate them post-create are:
 #
 #   * `uami-fleet-stage0` — Stage 0 itself (auto-owner on create, but the
 #     explicit entry makes re-applies idempotent and survives future
 #     refactors that might split creation from rotation).
-#   * `uami-fleet-<env>` for every env present in the cluster inventory —
-#     Stage 1 mgmt (Kargo password rotation on `uami-fleet-mgmt`) and
-#     Stage 2 every cluster (Argo per-cluster FIC writes on the env UAMI;
-#     Kargo FIC on mgmt only under `uami-fleet-mgmt`).
+#   * `uami-fleet-mgmt` — Stage 1 mgmt cluster (Kargo password rotation;
+#     mgmt-side Argo / Kargo FIC writes once those land).
 #
-# The UAMIs are authored by `bootstrap/fleet` (stage0) and
-# `bootstrap/environment` (per-env). Stage 0 looks them up by display name
-# at plan time; a missing UAMI surfaces as a plan-time data-source error,
-# which is the desired failure mode on a fresh tenant where an env has not
-# yet been bootstrapped.
+# Per-env UAMIs in non-mgmt envs (`uami-fleet-nonprod`,
+# `uami-fleet-prod`, …) are NOT owners — they have no reason to mutate
+# the Argo or Kargo apps, and dropping them eliminates the need for
+# `bootstrap/fleet` to grant `AppRoleAssignment.ReadWrite.All` to
+# `uami-fleet-meta`. See `terraform/bootstrap/fleet/main.identities.tf`
+# and `docs/adoption.md §5.1`.
+#
+# Both UAMIs are looked up by display name at plan time. A missing UAMI
+# surfaces as a plan-time data-source error — the desired failure mode
+# on a fresh tenant where env=mgmt has not yet been bootstrapped.
 
 data "azuread_service_principal" "stage0_uami" {
   display_name = "uami-fleet-stage0"
 }
 
-data "azuread_service_principal" "env_uami" {
-  for_each     = toset(local.envs)
-  display_name = "uami-fleet-${each.key}"
+data "azuread_service_principal" "mgmt_uami" {
+  display_name = "uami-fleet-mgmt"
 }
 
 locals {
@@ -62,12 +74,12 @@ locals {
   aad_app_owners_argocd = sort(distinct(concat(
     try(local.aad.argocd.owners, []),
     [data.azuread_service_principal.stage0_uami.object_id],
-    [for sp in data.azuread_service_principal.env_uami : sp.object_id],
+    [data.azuread_service_principal.mgmt_uami.object_id],
   )))
   aad_app_owners_kargo = sort(distinct(concat(
     try(local.aad.kargo.owners, []),
     [data.azuread_service_principal.stage0_uami.object_id],
-    [for sp in data.azuread_service_principal.env_uami : sp.object_id],
+    [data.azuread_service_principal.mgmt_uami.object_id],
   )))
 }
 

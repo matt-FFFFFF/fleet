@@ -18,7 +18,7 @@
 # Change-detection rules (PLAN §10 "Path filters"):
 #
 #   - `terraform/stages/0-fleet/**` changed                 → stage0=true.
-#   - `terraform/stages/{1-cluster,2-bootstrap}/**` changed → every cluster
+#   - `terraform/stages/{1-cluster,2-kubernetes}/**` changed → every cluster
 #     in `clusters/**/cluster.yaml` is affected (code-path change).
 #   - `terraform/modules/**` changed                         → every cluster
 #     affected (code-path change).
@@ -90,7 +90,7 @@ while IFS= read -r f; do
   case "$f" in
     terraform/stages/0-fleet/*)
       stage0=true ;;
-    terraform/stages/1-cluster/*|terraform/stages/2-bootstrap/*|terraform/modules/*)
+    terraform/stages/1-cluster/*|terraform/stages/2-kubernetes/*|terraform/modules/*)
       everything=true ;;
     .github/workflows/tf-plan.yaml|.github/workflows/tf-apply.yaml)
       everything=true

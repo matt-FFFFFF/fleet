@@ -5,13 +5,13 @@
 #     fleet-meta UAMIs all live here),
 #   * Azure role-GUID locals (used both here and in main.github.tf's
 #     `identity_role_assignments` map),
-#   * Microsoft Graph app-role assignments on `fleet-stage0` and
-#     `fleet-meta` (the module cannot assign Entra roles).
+#   * Microsoft Graph app-role assignment on `fleet-stage0` (the module
+#     cannot assign Entra roles).
 #
 # The fleet-stage0 + fleet-meta UAMIs, their federated credentials, and
 # their Azure RBAC assignments are created by `module.fleet_repo` (see
-# main.github.tf). The Graph app-role assignments here reference that
-# module's environment outputs for the principal IDs.
+# main.github.tf). The Graph app-role assignment here references that
+# module's environment outputs for the principal id.
 
 # --- Fleet shared resource group (for ACR / fleet KV / shared state) ---------
 
@@ -40,44 +40,47 @@ locals {
 # --- Microsoft Graph app-role assignments -----------------------------------
 #
 # `fleet-stage0` holds `Application.ReadWrite.OwnedBy` on the Microsoft
-# Graph SP: scoped CRUD on any AAD application where the assignee is listed
-# as an owner. Stage 0 creates the Argo + Kargo apps (auto-owning them on
-# create), writes the Argo RP client-secret, and — via Stage 1 mgmt
-# (`uami-fleet-mgmt`) and Stage 2 per-cluster (`uami-fleet-<env>`) — grants
-# those peers owner-scoped access too. See `docs/adoption.md` and the F2
-# entry in STATUS.md (item 14).
+# Graph SP: scoped CRUD on any AAD application where the assignee is
+# listed as an owner. In practice this UAMI ever owns exactly two apps
+# — the fleet-wide Argo and Kargo OIDC clients created by Stage 0 (see
+# `terraform/stages/0-fleet/main.aad.tf`). Per PLAN §1 hub-and-spoke
+# both apps are mgmt-only singletons, so the practical blast radius of
+# this grant is "those two apps for the lifetime of the fleet."
 #
-# `fleet-meta` holds `AppRoleAssignment.ReadWrite.All` on Graph: lets it
-# create the per-env `azuread_app_role_assignment` resources inside
-# `bootstrap/environment` (itself running under `uami-fleet-meta`). This
-# role grants only the ability to assign/unassign app-roles on service
-# principals — it does NOT grant the ability to CRUD applications, rotate
-# secrets, or write FICs (those remain scoped to the app-owners list).
+# Graph does not offer a finer-grained "this specific app" automated
+# role; `Application.ReadWrite.OwnedBy` is the narrowest available
+# without moving rotation off-CI to a delegated user flow.
 #
-# Both grants require Entra tenant-admin consent on first apply, same as
-# the directory-role assignment they replace; no regression in operator
-# burden. See `docs/adoption.md §5.1`.
+# This grant is created here under tenant-admin (the human running
+# `bootstrap/fleet` for the first time). It requires Entra tenant-admin
+# consent on first apply; same precondition as before. See
+# `docs/adoption.md §5.1`.
+#
+# `fleet-meta` does NOT hold `AppRoleAssignment.ReadWrite.All` or any
+# other Graph permission. Under PLAN §1 hub-and-spoke the only UAMI
+# that needs `Application.ReadWrite.OwnedBy` besides `fleet-stage0`
+# is `uami-fleet-mgmt` (for Stage 1 mgmt-cluster Kargo password
+# rotation; future mgmt-side Argo / Kargo FICs land here too). That
+# UAMI is created by `bootstrap/environment` env=mgmt, which runs
+# **after** this stage; granting it from Terraform would require
+# either a two-pass bootstrap or a long-lived `AppRoleAssignment.
+# ReadWrite.All` on `fleet-meta`. Neither is justified for a single
+# one-off grant — instead, the operator issues it manually via `az`
+# once after env=mgmt bootstraps. See `docs/adoption.md §5.3`.
 
 # Microsoft Graph service principal in this tenant. Required as the
-# `resource_object_id` for every `azuread_app_role_assignment` below.
+# `resource_object_id` for the `azuread_app_role_assignment` below.
 data "azuread_service_principal" "msgraph" {
   client_id = "00000003-0000-0000-c000-000000000000"
 }
 
 locals {
-  # Graph app-role ids (stable across tenants).
-  msgraph_role_application_readwrite_ownedby   = "18a4783c-866b-4cc7-a460-3d5e5662c884"
-  msgraph_role_approleassignment_readwrite_all = "06b708a9-e830-4db3-a914-8e69da51d44f"
+  # Graph app-role id (stable across tenants).
+  msgraph_role_application_readwrite_ownedby = "18a4783c-866b-4cc7-a460-3d5e5662c884"
 }
 
 resource "azuread_app_role_assignment" "stage0_app_rw_owned_by" {
   app_role_id         = local.msgraph_role_application_readwrite_ownedby
   principal_object_id = module.fleet_repo.environments["stage0"].identity.principal_id
-  resource_object_id  = data.azuread_service_principal.msgraph.object_id
-}
-
-resource "azuread_app_role_assignment" "meta_approle_rw_all" {
-  app_role_id         = local.msgraph_role_approleassignment_readwrite_all
-  principal_object_id = module.fleet_repo.environments["meta"].identity.principal_id
   resource_object_id  = data.azuread_service_principal.msgraph.object_id
 }

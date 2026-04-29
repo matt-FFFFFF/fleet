@@ -244,9 +244,11 @@ GitHub items must be arranged out-of-band by the adopter org.
   `use_cli = true`; no service-principal env vars are read.
 - Tenant role: **Privileged Role Administrator** (or Global
   Administrator) — required to consent to the Microsoft Graph
-  app-role assignments that grant `fleet-stage0`
-  `Application.ReadWrite.OwnedBy` and `fleet-meta`
-  `AppRoleAssignment.ReadWrite.All`.
+  app-role assignment that grants `fleet-stage0`
+  `Application.ReadWrite.OwnedBy` (issued automatically by
+  `bootstrap/fleet`), AND to manually issue the matching grant on
+  `uami-fleet-mgmt` after `bootstrap/environment` env=mgmt runs
+  (see §5.3).
 - Subscription role on `_fleet.yaml.acr.subscription_id`:
   **Owner** (or Contributor + User Access Administrator).
 - Resource provider registrations on the shared subscription:
@@ -411,6 +413,58 @@ GitHub; `bootstrap/fleet` contains an `import` block for
 No manual `terraform import` step is required.
 
 See `PLAN.md` §4 Stage -1 for the full bootstrap sequence.
+
+### 5.3 Post-`bootstrap/environment` (env=mgmt): manual Graph grant
+
+`uami-fleet-mgmt` (created by `bootstrap/environment` when
+`env=mgmt`) needs Microsoft Graph `Application.ReadWrite.OwnedBy`
+so that **Stage 1 on the mgmt cluster** — running under that UAMI
+in CI — can mutate the `argocd-fleet` and `kargo-fleet` AAD apps it
+co-owns (rotating `azuread_application_password` for the Kargo
+OIDC client, writing future mgmt-side Argo/Kargo federated
+credentials, etc.). Stage 0 itself runs under `uami-fleet-stage0`
+and already holds the equivalent grant via `bootstrap/fleet`; this
+section is **only** about the mgmt-side UAMI. The grant is **not**
+issued from Terraform: doing so would require `bootstrap/fleet`
+(or `bootstrap/environment`) to hold
+`AppRoleAssignment.ReadWrite.All` long-term, which is exactly the
+blast radius we are trying to avoid (PLAN §13 Phase 2 / R1).
+
+Instead, the operator (still holding **Privileged Role
+Administrator** from §5.1) issues the grant **once**, by hand, with
+`az`:
+
+```sh
+# Microsoft Graph service principal (well-known appId):
+GRAPH_SP_OBJECT_ID="$(az ad sp show \
+  --id 00000003-0000-0000-c000-000000000000 \
+  --query id -o tsv)"
+
+# uami-fleet-mgmt principalId (from bootstrap/environment env=mgmt
+# state). `env_uami` is an object output, so use `-json`:
+MGMT_UAMI_PRINCIPAL_ID="$(terraform -chdir=terraform/bootstrap/environment \
+  output -json env_uami | jq -r '.principal_id')"
+
+# Application.ReadWrite.OwnedBy app-role id (well-known on Graph):
+APP_RW_OWNED_BY_ROLE_ID="18a4783c-866b-4cc7-a460-3d5e5662c884"
+
+az rest \
+  --method POST \
+  --uri "https://graph.microsoft.com/v1.0/servicePrincipals/${GRAPH_SP_OBJECT_ID}/appRoleAssignedTo" \
+  --headers "Content-Type=application/json" \
+  --body "$(jq -nc \
+    --arg pid "${MGMT_UAMI_PRINCIPAL_ID}" \
+    --arg rid "${APP_RW_OWNED_BY_ROLE_ID}" \
+    --arg gid "${GRAPH_SP_OBJECT_ID}" \
+    '{principalId: $pid, resourceId: $gid, appRoleId: $rid}')"
+```
+
+The grant persists for the life of the UAMI. Re-running
+`bootstrap/environment` env=mgmt does **not** revoke it; deleting
+the UAMI does. If the grant is missing, the mgmt cluster's Stage 1
+operations that run under `uami-fleet-mgmt` can fail on Microsoft
+Graph-backed resources (for example `azuread_application_password`
+rotation on the Kargo AAD app) with `Authorization_RequestDenied`.
 
 ## Re-running `init-fleet.sh`
 

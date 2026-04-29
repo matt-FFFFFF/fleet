@@ -38,7 +38,7 @@ fleet/
 │   ├── stages/
 │   │   ├── 0-fleet/                          # fleet-global (ACR, fleet KV, AAD apps, Kargo UAMI)
 │   │   ├── 1-cluster/                        # per-cluster infra (AKS, UAMIs, cluster KV, DNS, DCR)
-│   │   └── 2-bootstrap/                      # per-cluster in-cluster bootstrap (ArgoCD, FICs, ESO seeds)
+│   │   └── 2-kubernetes/                      # per-cluster in-cluster bootstrap (ArgoCD, FICs, ESO seeds)
 │   ├── modules/
 │   │   ├── aks-cluster/                      # Entra-only AVM wrapper
 │   │   ├── cluster-identities/               # per-team + platform UAMIs

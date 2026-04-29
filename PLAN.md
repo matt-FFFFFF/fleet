@@ -19,7 +19,7 @@ manage upgrades, and add Kargo promotion.
 | Directory hierarchy             | `clusters/<env>/<region>/<name>/cluster.yaml` with `_defaults.yaml` merged at fleet → env → region → cluster                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Terraform state                 | One state per cluster per stage                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Cluster upgrades                | In-place; `kubernetes.version` pinned in `cluster.yaml`; TF apply drives upgrade                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Bootstrap staging               | Two Terraform stages per cluster (`1-cluster`, `2-bootstrap`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Bootstrap staging               | Two Terraform stages per cluster (`1-cluster`, `2-kubernetes`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Argo topology                   | **Hub-and-spoke**: a single ArgoCD instance on the management cluster manages every spoke. No per-cluster ArgoCD installs. Argo connects to spokes via standard Argo cluster `Secret`s (built-in cluster generator) using an `execProviderConfig` exec plugin. The plugin (curl + jq, with `kubelogin` as the supported alternative) reads the in-pod federated SA token, exchanges it via OAuth2 client-assertion against the AKS AAD server app, and emits an `ExecCredential`. Each spoke provisions its own `uami-argocd-spoke-<cluster>` UAMI carrying `Azure Kubernetes Service RBAC Cluster Admin` on its own AKS resource id; the UAMI's federated identity credential is keyed to the **mgmt** cluster's OIDC issuer URL with subject `system:serviceaccount:argocd:argocd-application-controller` (additional FIC entries cover `argocd-applicationset-controller` and `argocd-server`). No Argo resource generator in this repo — Argo's built-in cluster generator iterates the cluster `Secret`s. The existing `clusters/<env>/<region>/<name>/cluster.yaml` hierarchy is the PR-reviewed source of truth for cluster metadata; spoke Stage 2 reads it as a Terraform input and applies its labels to the cluster Secret it writes into mgmt. |
 | Cluster authn/authz             | **Entra-only**: `disableLocalAccounts=true`, `aadProfile.managed=true`, `aadProfile.enableAzureRBAC=true`. No local kubeconfigs ever issued. Access to the Kubernetes API is gated entirely by AAD tokens + Azure RBAC for Kubernetes Authorization. Per-env break-glass AAD group set as `adminGroupObjectIDs`.                                                                                                                                                                                                                                                        |
 | Git provider                    | GitHub only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
@@ -93,7 +93,7 @@ fleet/
 │   │   │   ├── variables.tf
 │   │   │   ├── main.tf
 │   │   │   └── outputs.tf
-│   │   └── 2-bootstrap/            # ArgoCD + (mgmt only) Kargo repo-creds / OIDC secrets
+│   │   └── 2-kubernetes/            # ArgoCD + (mgmt only) Kargo repo-creds / OIDC secrets
 │   │       ├── backend.tf
 │   │       ├── providers.tf
 │   │       ├── variables.tf
@@ -1076,10 +1076,11 @@ messages; the rest must be arranged out-of-band by the adopter org.
   vars are read.
 - Tenant role: **Privileged Role Administrator** (or Global
   Administrator) — required to consent to the Microsoft Graph
-  app-role assignments that grant `fleet-stage0`
-  `Application.ReadWrite.OwnedBy` and `fleet-meta`
-  `AppRoleAssignment.ReadWrite.All`. Without it the apply errors at
-  the `azuread_app_role_assignment` step.
+  app-role assignment that grants `fleet-stage0`
+  `Application.ReadWrite.OwnedBy`, AND to manually issue the
+  matching grant on `uami-fleet-mgmt` after `bootstrap/environment`
+  env=mgmt runs (see §5 adopter onboarding). Without it the apply
+  errors at the `azuread_app_role_assignment` step.
 - Subscription role on `_fleet.yaml.acr.subscription_id` (the
   fleet-shared subscription): **Owner** (or Contributor + User
   Access Administrator). Used to create resource groups, the
@@ -1264,11 +1265,12 @@ Creates:
 - **`fleet-meta` UAMI** + federated credential
   `repo:<org>/fleet:environment:fleet-meta`. RBAC:
   `User Access Administrator` + `Contributor` at
-  tenant-root/per-subscription (scope per subscription model);
-  Graph `AppRoleAssignment.ReadWrite.All` (needed to author the
-  per-env `Application.ReadWrite.OwnedBy` assignment inside
-  `bootstrap/environment`). This is the privileged identity used by
-  env-bootstrap and team-bootstrap workflows.
+  tenant-root/per-subscription (scope per subscription model). No
+  Graph permissions: under PLAN §1 hub-and-spoke, per-env UAMIs do
+  not mutate AAD apps, so the previous
+  `AppRoleAssignment.ReadWrite.All` grant is not needed. This is
+  the privileged identity used by env-bootstrap and team-bootstrap
+  workflows.
 - **`fleet-meta` GitHub App** (admin-class) and **`stage0-publisher`
   GitHub App** (narrow). Both are created **out of band** by the
   `init-gh-apps.sh` helper (§16.4) before this stage runs, because
@@ -1893,11 +1895,14 @@ envs.<env>.aks.admin_groups` — pure break-glass; members
     hub-and-spoke design (§1). Carries one role assignment in
     Stage 1: **`Azure Kubernetes Service RBAC Cluster Admin`** on
     this cluster's own AKS resource id (the only cluster Argo
-    needs to reach is this one). FIC bound to the **mgmt** cluster's
-    Argo controller ServiceAccounts is created in this cluster's
-    Stage 2 (needs the mgmt OIDC issuer URL — see below).
-    `client_id` is exported by Stage 1 so Stage 2 can pass it to the
-    mgmt cluster as part of the Argo cluster `Secret` registration.
+    needs to reach is this one). Three FICs bound to the **mgmt**
+    cluster's Argo controller ServiceAccounts are also created in
+    Stage 1 (subjects: `argocd-application-controller`,
+    `argocd-applicationset-controller`, `argocd-server`; issuer =
+    `var.mgmt_aks_oidc_issuer_url` repo var published by mgmt's
+    Stage 1). `client_id` is exported by Stage 1 so Stage 2 can
+    pass it to the mgmt cluster as part of the Argo cluster
+    `Secret` registration.
     On the management cluster, `uami-argocd-spoke-<cluster>` is **not**
     created — Argo's in-cluster ServiceAccount (`argocd-application-controller`)
     talks to the local API server at `https://kubernetes.default.svc`
@@ -1908,8 +1913,23 @@ envs.<env>.aks.admin_groups` — pure break-glass; members
     variable path. The FIC on it is created by the mgmt cluster's
     Stage 2 (needs the mgmt AKS OIDC issuer URL).
 - Federated Identity Credentials (`azapi_resource`
-  `Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials`)
-  created in Stage 2 (needs the AKS OIDC issuer URL output by Stage 1).
+  `Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials`):
+  - **(spoke clusters only)** Three FICs on
+    `uami-argocd-spoke-<cluster>`, one per Argo controller SA
+    (`argocd-application-controller`,
+    `argocd-applicationset-controller`, `argocd-server`). Issuer =
+    `var.mgmt_aks_oidc_issuer_url` (from
+    `vars.MGMT_AKS_OIDC_ISSUER_URL`, a repo var published by the
+    mgmt cluster's Stage 1 — see §4 Stage 1 outputs); audience =
+    `api://AzureADTokenExchange`. These FICs do **not** require
+    this cluster's own AKS OIDC issuer URL, so they can land in
+    Stage 1 alongside the UAMI itself; no Stage 2 dependency.
+  - All other FICs on Stage-1-owned UAMIs
+    (`uami-external-dns-<cluster>`, `uami-eso-<cluster>`,
+    `uami-team-<team>-<cluster>`, plus `fc-kargo-mgmt` on the
+    Stage-0-owned `uami-kargo-mgmt` for `cluster.role ==
+    "management"`) are created in Stage 2 — they need this
+    cluster's own AKS OIDC issuer URL, which is a Stage 1 output.
 - Role assignments (`azapi_resource`
   `Microsoft.Authorization/roleAssignments` at the appropriate scope):
   - **Private DNS Zone Contributor** scoped to the cluster's own
@@ -2064,7 +2084,7 @@ mechanism Stage 0 uses for its outputs):
 
 | Stage 1 output (mgmt only)              | Repo variable                       | Consumed by                                                                                                |
 | --------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `aks_oidc_issuer_url`                   | `MGMT_AKS_OIDC_ISSUER_URL`          | Every spoke cluster's Stage 2 — `issuer` field on `azapi_resource` `.../federatedIdentityCredentials` for `uami-argocd-spoke-<cluster>` |
+| `aks_oidc_issuer_url`                   | `MGMT_AKS_OIDC_ISSUER_URL`          | Every spoke cluster's Stage 1 — `issuer` field on the three `fc-argocd-spoke-*` FICs on `uami-argocd-spoke-<cluster>` |
 | `aks_host`                              | `MGMT_AKS_HOST`                     | Every spoke cluster's Stage 2 — `host` for the aliased `kubernetes` provider that registers the spoke into the mgmt argocd namespace    |
 | `aks_cluster_ca_certificate`            | `MGMT_AKS_CLUSTER_CA_CERTIFICATE`   | Same — provider CA                                                                                          |
 | `aks_cluster_resource_id`               | `MGMT_AKS_CLUSTER_RESOURCE_ID`      | Spoke Stage 2 — for minting an AAD token scoped to the mgmt cluster (cluster-admin via `fleet-<env>` UAMI)  |
@@ -2084,7 +2104,7 @@ workflow's OAuth2 client-assertion exchange.
 
 Backend key: `{env}/{region}/{name}/stage1.tfstate`.
 
-### Stage 2 — `terraform/stages/2-bootstrap`
+### Stage 2 — `terraform/stages/2-kubernetes`
 
 Reads nothing from other stages' state and makes **zero Azure data
 source calls at plan time**. All inputs arrive as tfvars materialized
@@ -2095,10 +2115,10 @@ from Stage 1 outputs by the workflow:
 terraform -chdir=terraform/stages/1-cluster output -json \
   | jq '{ (keys[]): .[keys[]].value }' \
   > "$RUNNER_TEMP/stage2.auto.tfvars.json"
-cp "$RUNNER_TEMP/stage2.auto.tfvars.json" terraform/stages/2-bootstrap/
+cp "$RUNNER_TEMP/stage2.auto.tfvars.json" terraform/stages/2-kubernetes/
 ```
 
-Stage 2 variables declared in `terraform/stages/2-bootstrap/variables.tf`
+Stage 2 variables declared in `terraform/stages/2-kubernetes/variables.tf`
 mirror the Stage 1 output schema 1:1; the tfvars file is gitignored and
 lives only in `$RUNNER_TEMP` for the life of the job.
 
@@ -2123,7 +2143,7 @@ assertion, with scope `6dae42f8-4368-4678-94ff-3960e28e3630/.default`
 terraform -chdir=terraform/stages/1-cluster output -json \
   | jq 'with_entries(.value |= .value)' \
   > "$RUNNER_TEMP/stage2.auto.tfvars.json"
-cp "$RUNNER_TEMP/stage2.auto.tfvars.json" terraform/stages/2-bootstrap/
+cp "$RUNNER_TEMP/stage2.auto.tfvars.json" terraform/stages/2-kubernetes/
 
 # Workflow-local AAD token → TF_VAR_aks_access_token (NOT a Stage 1 artifact):
 gh_jwt=$(curl -sSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
@@ -2197,21 +2217,6 @@ Creates:
   - `fc-eso` → subject `system:serviceaccount:external-secrets:external-secrets`
   - `fc-team-<team>` for each team, subject
     `system:serviceaccount:<team>-root:workload-identity`
-  - **(spoke clusters only)** **`fc-argocd-spoke`** on the
-    Stage 1-owned `uami-argocd-spoke-<cluster>`. Issuer =
-    `var.mgmt_aks_oidc_issuer_url` (from
-    `vars.MGMT_AKS_OIDC_ISSUER_URL`), audience =
-    `api://AzureADTokenExchange`. Three subjects, one FIC each
-    (Azure caps subjects at one per FIC):
-    `system:serviceaccount:argocd:argocd-application-controller`,
-    `system:serviceaccount:argocd:argocd-applicationset-controller`,
-    `system:serviceaccount:argocd:argocd-server`.
-    These are the SAs Argo's exec plugin runs under inside the mgmt
-    cluster pods; with this FIC, the projected SA token they read
-    from `/var/run/secrets/azure/tokens/azure-identity-token` can
-    be exchanged for an AAD access token whose `client_id` is this
-    spoke's UAMI — i.e., Argo authenticates to *this* spoke's K8s
-    API as a cluster-admin without any shared secret.
   - **Conditional (`cluster.role == "management"`)**:
     `fc-kargo-mgmt` on the Stage 0-owned `uami-kargo-mgmt`
     (resource id from `var.kargo_mgmt_uami_resource_id`), subject
@@ -2344,12 +2349,12 @@ B. Spoke cluster onboarding (each subsequent workload cluster)
       └─► AKS + identities + KV + DNS roles
           + uami-argocd-spoke-<cluster> with AKS RBAC Cluster Admin
             on its own AKS resource
+          + fc-argocd-spoke FICs on uami-argocd-spoke-<cluster>:
+              issuer = MGMT_AKS_OIDC_ISSUER_URL
+              subjects = argocd-application-controller / -applicationset-controller / -server
    2. TF stage2 apply (spoke)
       a. Local provider (this cluster):
          - external-dns / eso namespaces, FICs, platform-identity Secret
-         - fc-argocd-spoke FICs on uami-argocd-spoke-<cluster>:
-             issuer = MGMT_AKS_OIDC_ISSUER_URL
-             subjects = argocd-application-controller / -applicationset-controller / -server
          - NO ArgoCD helm release; spoke does not run Argo.
       b. Aliased provider (mgmt cluster, host/CA from MGMT_AKS_*,
          token minted by client-assertion exchange — fleet-<env>
@@ -2696,11 +2701,11 @@ Template-level workflows that do **not** touch tfstate — `validate.yaml`,
          terraform -chdir=terraform/stages/1-cluster output -json \
            | jq 'with_entries(.value |= .value)' \
            > "$RUNNER_TEMP/stage2.auto.tfvars.json"
-         cp "$RUNNER_TEMP/stage2.auto.tfvars.json" terraform/stages/2-bootstrap/
+         cp "$RUNNER_TEMP/stage2.auto.tfvars.json" terraform/stages/2-kubernetes/
      - name: Mint AAD token → TF_VAR_aks_access_token
        run: .github/scripts/mint-aks-token.sh # the curl/jq recipe in §4 Stage 2
      - name: Stage 2 apply
-       run: terraform -chdir=terraform/stages/2-bootstrap apply -auto-approve
+       run: terraform -chdir=terraform/stages/2-kubernetes apply -auto-approve
      ```
 
      `stage2.auto.tfvars.json` holds Stage 1 infra outputs (CA marked
@@ -2717,8 +2722,9 @@ long-lived cloud secrets in Actions. Identities:
 | Identity            | Created by              | Used by                                  | Scope                                                                                                                                                                                                                                                                                         |
 | ------------------- | ----------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `fleet-stage0` UAMI | `bootstrap/fleet`       | Stage 0 matrix leg                       | `rg-fleet-shared` Contributor + `tfstate-fleet` Blob Contributor + Graph `Application.ReadWrite.OwnedBy`                                                                                                                                                                                      |
-| `fleet-meta` UAMI   | `bootstrap/fleet`       | env-bootstrap + team-bootstrap workflows | Tenant/subscription-wide UAccessAdmin + Contributor + Graph `AppRoleAssignment.ReadWrite.All`                                                                                                                                                                                                 |
-| `fleet-<env>` UAMI  | `bootstrap/environment` | Stage 1 + Stage 2 matrix legs            | env subscription/RG Contributor + `tfstate-<env>` Blob Contributor + fleet KV Secrets User + ACR UAccessAdmin + `User Access Administrator` scoped to the env AMW resource id (to delegate `Monitoring Metrics Publisher` to cluster addon identities in Stage 1) + Graph `Application.ReadWrite.OwnedBy` |
+| `fleet-meta` UAMI   | `bootstrap/fleet`       | env-bootstrap + team-bootstrap workflows | Tenant/subscription-wide UAccessAdmin + Contributor (no Graph permissions)                                                                                                                                                                                                                    |
+| `fleet-mgmt` UAMI   | `bootstrap/environment` (env=mgmt) | Stage 1 mgmt cluster matrix leg | env subscription/RG Contributor + `tfstate-mgmt` Blob Contributor + fleet KV Secrets User + ACR UAccessAdmin + `User Access Administrator` scoped to the env AMW resource id + Graph `Application.ReadWrite.OwnedBy` (granted **manually** by the operator post-bootstrap; see §5.1) |
+| `fleet-<env>` UAMI  | `bootstrap/environment` | Stage 1 + Stage 2 matrix legs            | env subscription/RG Contributor + `tfstate-<env>` Blob Contributor + fleet KV Secrets User + ACR UAccessAdmin + `User Access Administrator` scoped to the env AMW resource id (to delegate `Monitoring Metrics Publisher` to cluster addon identities in Stage 1). No Graph permissions. |
 
 Stage 1 **consumes Stage 0 outputs via repo variables**
 (`vars.ACR_RESOURCE_ID`, `vars.FLEET_KEYVAULT_ID`, etc.) rather than
@@ -2897,7 +2903,7 @@ is deferred until the Kargo GitHub App is minted (see §15).
 
 - `terraform/modules/argocd-bootstrap` — vendors the Helm release
   values, the `argo-exec-auth.sh` exec plugin, and the cluster
-  Secret writer module. Used by `terraform/stages/2-bootstrap`.
+  Secret writer module. Used by `terraform/stages/2-kubernetes`.
 - `platform-gitops/applications/30-argocd-self-manage.yaml` and
   `platform-gitops/components/argocd-self-manage/` (mgmt cluster only).
 - `platform-gitops/applications/00-eso.yaml` and
@@ -3023,11 +3029,14 @@ is deferred until the Kargo GitHub App is minted (see §15).
   subscription scope. Subscription IDs are surfaced in each GH
   environment's variables.
 - **Graph app-roles for bootstrap UAMIs**:
-  `Application.ReadWrite.OwnedBy` on `fleet-stage0` and every
-  `fleet-<env>`; `AppRoleAssignment.ReadWrite.All` on `fleet-meta`.
-  All three are owner-scoped / narrow replacements for the
-  previously-held tenant-wide `Application Administrator` directory
-  role.
+  `Application.ReadWrite.OwnedBy` on `fleet-stage0` (created by
+  `bootstrap/fleet`) and on `fleet-mgmt` (granted **manually** by the
+  operator after `bootstrap/environment` env=mgmt — the single one-off
+  is not worth a long-lived `AppRoleAssignment.ReadWrite.All` grant
+  on `fleet-meta`; see §5.1). Per-env UAMIs in non-mgmt envs hold no
+  Graph permissions. Both grants are owner-scoped / narrow
+  replacements for the previously-held tenant-wide
+  `Application Administrator` directory role.
 - **VNets**: repo-owned per §3.4. Mgmt VNet (N=1) created by
   `bootstrap/fleet` via `Azure/avm-ptn-alz-sub-vending/azure`; env
   VNets (one per env-per-region) created by `bootstrap/environment`

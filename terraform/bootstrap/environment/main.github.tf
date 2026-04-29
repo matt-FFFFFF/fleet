@@ -192,35 +192,21 @@ resource "github_actions_environment_variable" "env_vars" {
 }
 
 # -----------------------------------------------------------------------------
-# Microsoft Graph app-role assignment — `Application.ReadWrite.OwnedBy` on
-# the per-env UAMI. Lets Stage 1 (mgmt cluster; Kargo password rotation) and
-# Stage 2 (every cluster; Argo per-cluster FIC writes + Kargo FIC on mgmt)
-# perform owner-scoped CRUD on the Argo + Kargo AAD apps, provided the env
-# UAMI is listed in each app's `owners` attribute (see
-# `terraform/stages/0-fleet/main.aad.tf`). Replaces the tenant-wide
-# `Application Administrator` directory role previously held by
-# `fleet-stage0` (STATUS item 14).
+# Per-env UAMI Microsoft Graph app-role assignment — REMOVED under PLAN §1
+# hub-and-spoke.
 #
-# The caller (`uami-fleet-meta`) needs `AppRoleAssignment.ReadWrite.All` on
-# Graph to create this resource; that grant is authored by `bootstrap/fleet`
-# (main.identities.tf `meta_approle_rw_all`) and must apply before this
-# stage runs.
+# Previously: `Application.ReadWrite.OwnedBy` on every `uami-fleet-<env>`,
+# granted via `bootstrap/fleet`'s `AppRoleAssignment.ReadWrite.All` on
+# `uami-fleet-meta`. Under hub-and-spoke, the only UAMIs that mutate the
+# Argo / Kargo AAD apps are `uami-fleet-stage0` (Stage 0; tenant-admin
+# bootstrap-time grant) and `uami-fleet-mgmt` (Stage 1 mgmt — Kargo
+# password rotation; future mgmt-side Argo / Kargo FICs).
+#
+# `uami-fleet-mgmt` receives its `Application.ReadWrite.OwnedBy` grant
+# manually post-bootstrap; the long-lived `AppRoleAssignment.ReadWrite.All`
+# on `uami-fleet-meta` is not justified for that single one-off grant.
+# See `docs/adoption.md §5.3` for the operator command.
+#
+# Per-env UAMIs in `nonprod` / `prod` / etc. hold zero Graph permissions
+# and are not listed as owners on either AAD app.
 # -----------------------------------------------------------------------------
-
-data "azuread_service_principal" "msgraph" {
-  client_id = "00000003-0000-0000-c000-000000000000"
-}
-
-locals {
-  # Graph app-role id (stable across tenants). Mirrors the same-named local
-  # in `terraform/bootstrap/fleet/main.identities.tf`; kept as a named
-  # constant here rather than a literal so additions of further Graph roles
-  # to this module stay consistent and grep-able.
-  msgraph_role_application_readwrite_ownedby = "18a4783c-866b-4cc7-a460-3d5e5662c884"
-}
-
-resource "azuread_app_role_assignment" "env_app_rw_owned_by" {
-  app_role_id         = local.msgraph_role_application_readwrite_ownedby
-  principal_object_id = module.env_github.identity.principal_id
-  resource_object_id  = data.azuread_service_principal.msgraph.object_id
-}
