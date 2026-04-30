@@ -428,8 +428,15 @@ two-pass apply pattern:
    - `ARGO_AAD_APP_ID`, `KARGO_AAD_APP_ID`, and
      `KARGO_AAD_APPLICATION_OBJECT_ID` published as repo-level
      GitHub Actions variables.
-   - KV writes are skipped because `var.mgmt_cluster_kv_id` is
-     null (default).
+   - Runners KV created with PE + DNS zone group; operator self-
+     grants `Key Vault Secrets Officer` on it (in-plan) so the
+     same apply can seed `fleet-runners-app-pem` and
+     `fleet-meta-app-pem` via data-plane PUT. Both PEM secrets
+     come from `TF_VAR_fleet_runners_app_pem` /
+     `TF_VAR_fleet_meta_app_pem`, populated by `init-gh-apps.sh`
+     (§4).
+   - Mgmt cluster KV writes are skipped because
+     `var.mgmt_cluster_kv_id` is null (default).
 
 2. Run `init-gh-apps.sh --keep` if needed to seed the GH App PEMs
    into the runners KV (skipped if already done).

@@ -1047,9 +1047,18 @@ scaler) and `fleet-meta-app-pem` (consumed by env- and team-bootstrap
 workflows). The `uami-fleet-runners` identity and its `Key Vault
 Secrets User` role assignment on the vault also live in
 `bootstrap/fleet` (same apply graph as the runner module's KV
-reference). PEM seeding of both secrets is done by the post-bootstrap
-`init-gh-apps.sh` helper, which must run from a host with data-plane
-reach to the KV.
+reference). PEM seeding of both secrets is done **in the same
+apply** via `azapi_data_plane_resource` PUTs against the vault's
+data-plane URI: `init-gh-apps.sh` (§16.4) materialises the two PEMs
+into `./.gh-apps.state.json` and the operator exports them as
+`TF_VAR_fleet_runners_app_pem` / `TF_VAR_fleet_meta_app_pem` before
+running `bootstrap/fleet`. The PUTs run as the signed-in operator,
+so the same plan also issues a `Key Vault Secrets Officer` role
+assignment to the operator on the runners KV (mirror of the
+operator → mgmt-cluster-KV self-grant on the second pass). Both
+roles are deterministic-name (`uuidv5` over scope|principalId|role)
+so re-runs are idempotent. Without the operator self-grant, the
+data-plane PUTs would 403 on first apply.
 
 `bootstrap/fleet` also creates the Argo CD and Kargo AAD application
 registrations + service principals + long-lived (2-year) client

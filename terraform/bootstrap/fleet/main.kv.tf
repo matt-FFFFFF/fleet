@@ -202,6 +202,53 @@ resource "azapi_resource" "ra_meta_kv_secrets_user" {
   }
 }
 
+# --- RBAC: operator -> Key Vault Secrets Officer (data-plane seeding) -------
+#
+# The operator running `bootstrap/fleet apply` (interactive `az login`,
+# tenant admin + subscription owner) seeds two GH App PEMs into this
+# vault via `azapi_data_plane_resource` PUTs below
+# (`fleet_runners_pem_secret`, `fleet_meta_pem_secret`). Those PUTs hit
+# the KV data-plane as the signed-in user and require an RBAC role on
+# the vault — the runner UAMI grant above is read-only and scoped to a
+# different principal.
+#
+# Without this role assignment, the first apply hard-fails on the data-
+# plane PUT with `403 Forbidden / AccessDenied: Caller is not
+# authorized to perform action on resource`, which strands the vault
+# (created, PE wired, runner UAMI granted) but unable to hold the PEMs
+# the runner needs to start. See historical F17 finding.
+#
+# Self-grant — same pattern as the operator -> mgmt cluster KV grant in
+# `main.aad.tf` for the second-pass RP-secret writes. The role is
+# scoped to this vault only; granting `Secrets Officer` to the same
+# operator who already holds Owner on the subscription is not a
+# privilege escalation, it just makes the stage self-sufficient on
+# first apply.
+
+data "azuread_client_config" "operator" {}
+
+resource "azapi_resource" "ra_operator_runners_kv_secrets_officer" {
+  type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
+  parent_id = azapi_resource.runners_kv.output.id
+  # Deterministic GUID v5 over (scope, principalId, role) so re-runs
+  # don't produce duplicate assignments. Same shape as
+  # `operator_mgmt_kv_secrets_officer` in main.aad.tf.
+  name = uuidv5("oid", "${azapi_resource.runners_kv.output.id}|${data.azuread_client_config.operator.object_id}|Key Vault Secrets Officer")
+
+  body = {
+    properties = {
+      principalId   = data.azuread_client_config.operator.object_id
+      principalType = "User"
+      # Key Vault Secrets Officer (built-in)
+      roleDefinitionId = "/providers/Microsoft.Authorization/roleDefinitions/b86a8fe4-44ce-4948-aee5-eccb2c155cd7"
+    }
+  }
+
+  retry = {
+    error_message_regex = ["AuthorizationFailed", "PrincipalNotFound"]
+  }
+}
+
 output "runners_kv_id" {
   description = "Resource id of the runner-pool Key Vault."
   value       = azapi_resource.runners_kv.output.id
@@ -254,6 +301,7 @@ resource "azapi_data_plane_resource" "fleet_runners_pem_secret" {
 
   depends_on = [
     azapi_resource.runners_kv_pe_dns_zone_group,
+    azapi_resource.ra_operator_runners_kv_secrets_officer,
   ]
 }
 
@@ -289,5 +337,6 @@ resource "azapi_data_plane_resource" "fleet_meta_pem_secret" {
 
   depends_on = [
     azapi_resource.runners_kv_pe_dns_zone_group,
+    azapi_resource.ra_operator_runners_kv_secrets_officer,
   ]
 }
