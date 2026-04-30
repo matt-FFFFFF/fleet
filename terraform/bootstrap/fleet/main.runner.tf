@@ -29,10 +29,9 @@
 # never touches the PEM.
 
 locals {
-  runner_uami_name      = "uami-fleet-runners"
-  runner_resource_group = "rg-fleet-runners"
-  runner_postfix        = "fleet-runners"
-  runner_pool_name      = "fleet-runners"
+  runner_uami_name = "uami-fleet-runners"
+  runner_postfix   = "fleet-runners"
+  runner_pool_name = "fleet-runners"
 
   # The runner pool is co-located with the fleet shared RG
   # (`acr_location`). Pick the matching mgmt region for subnet
@@ -47,6 +46,25 @@ locals {
   # the attached UAMI; the PEM itself is seeded post-bootstrap by
   # init-gh-apps.sh.
   fleet_runners_app_key_kv_secret_id = "${azapi_resource.runners_kv.output.properties.vaultUri}secrets/${local.github_app_fleet_runners.private_key_kv_secret}"
+}
+
+# --- Runner pool resource group ---------------------------------------------
+#
+# Owns: the runner pool's vendored module resources AND the runner-pool
+# Key Vault (parent_id of azapi_resource.runners_kv in main.kv.tf). The
+# RG must be created in this stage rather than by the vendored module
+# (`resource_group_creation_enabled = false` below) so the KV's
+# parent_id can resolve at plan time. RG name is fleet-wide literal
+# `rg-fleet-runners` (PLAN §3) — matches `local.derived.runners_kv_resource_group`
+# default; CI parity check enforced.
+
+resource "azapi_resource" "rg_fleet_runners" {
+  type      = "Microsoft.Resources/resourceGroups@2024-03-01"
+  name      = local.derived.runners_kv_resource_group
+  parent_id = "/subscriptions/${local.derived.acr_subscription_id}"
+  location  = local.derived.acr_location
+
+  body = {}
 }
 
 # --- Runner UAMI -------------------------------------------------------------
@@ -102,8 +120,8 @@ module "runner" {
   postfix  = local.runner_postfix
   location = local.derived.acr_location
 
-  resource_group_creation_enabled = true
-  resource_group_name             = local.runner_resource_group
+  resource_group_creation_enabled = false
+  resource_group_name             = azapi_resource.rg_fleet_runners.name
 
   # GitHub + GitHub App authentication ---------------------------------------
   version_control_system_type                               = "github"

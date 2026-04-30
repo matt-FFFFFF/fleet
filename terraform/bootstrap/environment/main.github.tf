@@ -80,10 +80,6 @@ module "env_github" {
       role_definition_id = "/subscriptions/${local.derived.state_subscription}/providers/Microsoft.Authorization/roleDefinitions/${local.role_blob_data_ctrb}"
       scope              = azapi_resource.state_container_env.id
     }
-    fleet_kv_secrets_user = {
-      role_definition_id = "/subscriptions/${local.derived.acr_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_kv_secrets_user}"
-      scope              = local.runners_kv_id
-    }
     acr_uaa_bounded = {
       role_definition_id = "/subscriptions/${local.derived.acr_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_rbac_admin}"
       scope              = local.fleet_acr_id

@@ -32,7 +32,7 @@
 resource "azapi_resource" "runners_kv" {
   type      = "Microsoft.KeyVault/vaults@2023-07-01"
   name      = local.derived.runners_kv_name
-  parent_id = azapi_resource.rg_fleet_shared.id
+  parent_id = azapi_resource.rg_fleet_runners.id
   location  = local.derived.runners_kv_location
 
   body = {
@@ -87,7 +87,7 @@ locals {
 resource "azapi_resource" "runners_kv_pe" {
   type      = "Microsoft.Network/privateEndpoints@2023-11-01"
   name      = "pe-${local.derived.runners_kv_name}-vault"
-  parent_id = azapi_resource.rg_fleet_shared.id
+  parent_id = azapi_resource.rg_fleet_runners.id
   location  = local.derived.runners_kv_location
 
   body = {

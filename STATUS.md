@@ -39,13 +39,18 @@
 ### Stage -1 — `terraform/bootstrap/`
 
 - [~] `bootstrap/fleet/` — code complete; not applied.
-  - [ ] **Refactor**: rename fleet KV → runner-pool KV
+  - [~] **Refactor**: rename fleet KV → runner-pool KV
         (`kv-<fleet>-runners` in `rg-fleet-runners`); drop all secrets
         except `fleet-runners-app-pem` and `fleet-meta-app-pem`.
+        Steps 2-3 done (rename + reparent to `rg-fleet-runners`); RG
+        ownership pulled out of vendored runner module.
 - [~] `bootstrap/environment/` — code complete; not applied.
-  - [ ] **Refactor**: env=mgmt absorbs fleet ACR + PE +
+  - [~] **Refactor**: env=mgmt absorbs fleet ACR + PE +
         `length(mgmt_clusters) == 1` precondition; publishes
         `ACR_*` repo-level vars; drops `fleet_kv_secrets_user`.
+        Steps 1+3 done (ACR absorbed; `fleet_kv_secrets_user` removed);
+        `length == 1` precondition + `ACR_*` repo-level publishes
+        pending.
 - [~] `bootstrap/team/` — refactored; awaits `team-bootstrap.yaml` CI flow.
 
 ### Stage 1 — `terraform/stages/1-cluster`

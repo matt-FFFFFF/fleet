@@ -62,8 +62,8 @@ run "defaults_derive_names_per_naming_contract" {
   }
 
   assert {
-    condition     = output.derived.runners_kv_resource_group == "rg-fleet-shared"
-    error_message = "Runners KV must default its RG to acr.resource_group when runners_keyvault.resource_group is absent."
+    condition     = output.derived.runners_kv_resource_group == "rg-fleet-runners"
+    error_message = "Runners KV must default its RG to `rg-fleet-runners` when runners_keyvault.resource_group is absent."
   }
 
   assert {

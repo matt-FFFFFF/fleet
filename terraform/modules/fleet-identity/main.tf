@@ -48,7 +48,7 @@ locals {
       try(var.fleet_doc.runners_keyvault.name_override, ""),
       substr("kv-${local.fleet.name}-runners", 0, 24),
     )
-    runners_kv_resource_group = try(var.fleet_doc.runners_keyvault.resource_group, var.fleet_doc.acr.resource_group)
+    runners_kv_resource_group = try(var.fleet_doc.runners_keyvault.resource_group, "rg-fleet-runners")
     runners_kv_location       = try(var.fleet_doc.runners_keyvault.location, local.mgmt_location)
   }
 

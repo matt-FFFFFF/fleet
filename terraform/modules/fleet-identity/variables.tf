@@ -14,7 +14,7 @@ variable "fleet_doc" {
       acr.subscription_id      (string, required)
       acr.location             (string, required)
       runners_keyvault.name_override   (string, optional)
-      runners_keyvault.resource_group  (string, optional; defaults to acr.resource_group)
+      runners_keyvault.resource_group  (string, optional; defaults to "rg-fleet-runners")
       runners_keyvault.location        (string, optional; defaults to envs.mgmt.location)
       state.storage_account_name_override (string, optional)
       state.resource_group     (string, required)

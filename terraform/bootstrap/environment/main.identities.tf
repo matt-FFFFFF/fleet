@@ -34,7 +34,7 @@ locals {
   # by a prior env=mgmt run and its name derivation is fleet-wide).
   runners_kv_id = join("/", [
     "/subscriptions", local.derived.acr_subscription_id,
-    "resourceGroups", local.derived.acr_resource_group,
+    "resourceGroups", local.derived.runners_kv_resource_group,
     "providers/Microsoft.KeyVault/vaults", local.derived.runners_kv_name,
   ])
   fleet_acr_id = var.env == "mgmt" ? azapi_resource.fleet_acr[0].id : join("/", [
