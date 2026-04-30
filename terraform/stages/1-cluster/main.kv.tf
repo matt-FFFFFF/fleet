@@ -64,7 +64,7 @@ resource "time_rotating" "kargo_oidc_secret" {
 resource "azuread_application_password" "kargo_oidc_secret" {
   count = local.mgmt_role_cluster ? 1 : 0
 
-  application_id = "/applications/${var.kargo_aad_application_object_id}"
+  application_id = azuread_application.kargo[0].id
   display_name   = "kargo-oidc-client-secret"
   # 90-day end_date (60d rotation + 30d overlap window during rollover).
   # Anchored to the current rotation tick so the new password's lifetime
@@ -77,10 +77,6 @@ resource "azuread_application_password" "kargo_oidc_secret" {
 
   lifecycle {
     create_before_destroy = true
-    precondition {
-      condition     = var.kargo_aad_application_object_id != null
-      error_message = "kargo_aad_application_object_id is required on management clusters (cluster.role == \"management\"). Publish the Stage 0 output `kargo_aad_application_object_id` as the `KARGO_AAD_APPLICATION_OBJECT_ID` repo variable and wire it into TF_VAR_kargo_aad_application_object_id in tf-apply.yaml."
-    }
   }
 }
 

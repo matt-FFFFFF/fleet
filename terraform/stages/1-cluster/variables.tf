@@ -178,16 +178,16 @@ variable "kargo_mgmt_uami_principal_id" {
 
 variable "kargo_aad_application_object_id" {
   description = <<-EOT
-    Directory object id of the Kargo AAD application, owned by Stage 0.
-    Consumed ONLY by the **management cluster's** Stage 1 plan as the
-    `application_id` of the `azuread_application_password` resource
-    that mints the `kargo-oidc-client-secret` written into the cluster
-    KV (PLAN §4 Stage 1 lines 1769-1782). Workload clusters accept a
-    null value here — the secret-rotation resources are gated on
-    `local.mgmt_cluster`.
+    DEPRECATED — to be removed in a follow-up commit. The Kargo AAD app is
+    now created locally by the management cluster's Stage 1 (REFACTOR.md
+    Step 4); `application_id` flows from `azuread_application.kargo[0].id`.
+    This variable is retained nullable for one cycle so existing
+    `tf-apply.yaml` legs that still set `TF_VAR_kargo_aad_application_object_id`
+    do not break; nothing reads its value.
   EOT
   type        = string
   nullable    = true
+  default     = null
 }
 
 variable "mgmt_aks_oidc_issuer_url" {
