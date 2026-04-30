@@ -306,7 +306,7 @@ jobs:
 
       - name: Validate live clusters/_fleet.yaml
         run: |
-          tmp=$(mktemp --suffix=.json)
+          tmp=$(mktemp --suffix=.json schema-fleet.XXXXXX)
           yq -o=json '.' clusters/_fleet.yaml > "$tmp"
           npx --yes -p ajv-cli@5 -p ajv-formats@3 -- ajv validate \
             --spec=draft2020 --strict-types=false -c ajv-formats \
@@ -317,7 +317,7 @@ jobs:
         run: |
           fail=0
           while IFS= read -r f; do
-            tmp=$(mktemp --suffix=.json)
+            tmp=$(mktemp --suffix=.json schema-cluster.XXXXXX)
             if ! yq -o=json '.' "$f" > "$tmp" 2>/dev/null; then
               echo "::error file=$f::yaml parse failed"
               fail=$((fail + 1))

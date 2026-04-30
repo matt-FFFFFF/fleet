@@ -36,9 +36,10 @@ validate() {
   local schema="$1" yaml_file="$2" expected="$3" # expected ∈ {valid,invalid}
   # ajv-cli infers format from extension; force `.json` so it parses as
   # JSON rather than re-trying YAML on its own (which chokes on the
-  # nested-flow output yq produces).
+  # nested-flow output yq produces). Use a 6-X template so GNU mktemp
+  # (Linux/CI) accepts it; macOS BSD mktemp accepts both.
   local tmp
-  tmp="$(mktemp -t schema-test).json" || return 1
+  tmp="$(mktemp -t schema-test.XXXXXX).json" || return 1
   if ! yq -o=json '.' "$yaml_file" > "$tmp" 2>/dev/null; then
     red "  YQ-FAIL  $(basename "$yaml_file") — yaml parse failed"
     rm -f "$tmp"
