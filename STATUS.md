@@ -39,28 +39,26 @@
 ### Stage -1 — `terraform/bootstrap/`
 
 - [~] `bootstrap/fleet/` — code complete; not applied.
-  - [ ] GH Apps manifest-flow helper not written.
+  - [ ] **Refactor**: rename fleet KV → runner-pool KV
+        (`kv-<fleet>-runners` in `rg-fleet-runners`); drop all secrets
+        except `fleet-runners-app-pem` and `fleet-meta-app-pem`.
 - [~] `bootstrap/environment/` — code complete; not applied.
+  - [ ] **Refactor**: env=mgmt absorbs fleet ACR + PE +
+        `length(mgmt_clusters) == 1` precondition; publishes
+        `ACR_*` repo-level vars; drops `fleet_kv_secrets_user`.
 - [~] `bootstrap/team/` — refactored; awaits `team-bootstrap.yaml` CI flow.
-
-### Stage 0 — `terraform/stages/0-fleet`
-
-- [~] Scaffolded; not applied.
-  - [x] ACR (Premium, zone-redundant, admin disabled).
-  - [x] Fleet Key Vault consumed.
-  - [x] Argo AAD application + service principal.
-  - [x] Argo RP `client_secret` rotation (60d cadence).
-  - [x] Kargo AAD application + service principal.
-  - [x] Kargo mgmt UAMI + `AcrPull` on fleet ACR.
-  - [x] Redirect URIs derived from cluster inventory.
-  - [x] Outputs exported per PLAN §4 Stage 0 table.
-  - [x] Fleet ACR private from first apply via `snet-pe-fleet` PE.
 
 ### Stage 1 — `terraform/stages/1-cluster`
 
 - [~] Networking slice — code complete; not applied.
   - [x] Identity/RBAC follow-up (cluster KV, UAMIs, role assignments,
         managed Prometheus, mgmt-only Kargo OIDC rotation).
+  - [ ] **Refactor**: mgmt cluster Stage 1 absorbs Argo + Kargo AAD
+        apps + RP-secret rotation, `uami-kargo-mgmt` + AcrPull, and
+        publishes `ARGO_AAD_APP_ID` / `KARGO_AAD_*` /
+        `KARGO_MGMT_UAMI_*` / `MGMT_CLUSTER_KV_ID` repo vars.
+  - [ ] **Refactor**: spoke `ra_eso_fleet_kv` →
+        `ra_eso_mgmt_cluster_kv` (consumes `mgmt_cluster_kv_id`).
 - [x] Pod CIDR / service CIDR fleet-wide constants in `modules/aks-cluster`.
 - [x] `validate.yaml` subnet_slot PR-check.
 - [x] `tf-apply.yaml` workflow.
@@ -110,8 +108,6 @@
 - [ ] `lint-teams.sh` team-config linter.
 - [ ] `helm lint` over `platform-gitops/components/*`.
 - [ ] `kargo lint` over `platform-gitops/kargo/**`.
-- [ ] `stage0-publisher` GitHub App + `init-gh-apps.sh` helper —
-      unblocks `publish-stage0` job (currently `if: false`).
 - [ ] `terraform/stages/2-kubernetes/` module — unblocks Stage 2 plan/apply.
 - [ ] Nightly drift-detection workflow.
 
@@ -134,7 +130,6 @@
   - [~] `_fleet.yaml` + `_defaults.yaml`.
   - [~] `bootstrap/fleet` — not applied.
   - [~] `bootstrap/environment` — not applied.
-  - [~] `stages/0-fleet` — not applied.
   - [~] `stages/1-cluster` — not applied.
   - [x] `config-loader/load.sh` naming-derivation parity CI diff.
   - [x] CI workflows.
@@ -160,7 +155,8 @@
 - [x] §16.2 Bootstrap TF reads yaml.
 - [x] §16.3 `init-fleet.sh` wrapper over `init/` TF module.
 - [x] §16.4 `init-gh-apps.sh` — manifest flow.
-  - [ ] Stage 0 wiring of GH App credentials (TODO).
+  - [x] `fleet-meta` GH App provisioning + KV PEM seeding.
+  - [x] `fleet-runners` GH App provisioning + KV PEM seeding.
 - [x] §16.5 GitHub template mechanics; `import` block for fleet repo.
 - [x] §16.6 `docs/naming.md`.
   - [x] CI diff between `load.sh` and bootstrap HCL locals.
