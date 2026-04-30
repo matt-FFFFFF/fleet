@@ -135,20 +135,6 @@ variable "route_table_resource_id" {
 # same snake-case name for every Stage 1 leg. No remote state, no
 # plan-time data sources — everything arrives as a string.
 
-variable "runners_kv_id" {
-  description = <<-EOT
-    DEPRECATED — to be removed in a follow-up commit. The runner-pool
-    KV is no longer consumed by Stage 1 (REFACTOR.md Step 4 retargeted
-    spoke ESO from the runner-pool KV to the mgmt cluster KV via
-    `mgmt_cluster_kv_id`). Retained nullable for one cycle so any
-    `tf-apply.yaml` leg still passing TF_VAR_runners_kv_id does not
-    break; nothing reads its value.
-  EOT
-  type        = string
-  nullable    = true
-  default     = null
-}
-
 variable "mgmt_cluster_kv_id" {
   description = <<-EOT
     Full ARM id of the **management cluster's** Key Vault
@@ -202,20 +188,6 @@ variable "kargo_mgmt_uami_principal_id" {
   EOT
   type        = string
   nullable    = false
-}
-
-variable "kargo_aad_application_object_id" {
-  description = <<-EOT
-    DEPRECATED — to be removed in a follow-up commit. The Kargo AAD app is
-    now created locally by the management cluster's Stage 1 (REFACTOR.md
-    Step 4); `application_id` flows from `azuread_application.kargo[0].id`.
-    This variable is retained nullable for one cycle so existing
-    `tf-apply.yaml` legs that still set `TF_VAR_kargo_aad_application_object_id`
-    do not break; nothing reads its value.
-  EOT
-  type        = string
-  nullable    = true
-  default     = null
 }
 
 variable "mgmt_aks_oidc_issuer_url" {

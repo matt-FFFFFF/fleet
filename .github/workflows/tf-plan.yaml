@@ -5,9 +5,7 @@ name: tf-plan
 #   - PR trigger; self-hosted runners (runners KV + tfstate SA are
 #     private-only, GitHub-hosted runners cannot reach them).
 #   - Change detection via `.github/scripts/detect-affected-clusters.sh`
-#     emits `{stage0: bool, clusters: [...]}`.
-#   - Stage 0 leg (if `terraform/stages/0-fleet/**` changed): single job
-#     under `environment: fleet-stage0`, OIDC-authed as `uami-fleet-stage0`.
+#     emits `{clusters: [...]}`.
 #   - Per-cluster leg: matrix per affected cluster; `environment:
 #     fleet-<env>` (derived from the cluster path), OIDC-authed as
 #     `uami-fleet-<env>`. Currently runs Stage 1 plan only — Stage 2 is
@@ -17,10 +15,12 @@ name: tf-plan
 #     sticky PR comment.
 #
 # Fleet-scope repo variables read by this workflow's terraform legs come
-# from `bootstrap/fleet` (via `fleet-stage0` env) and `stages/0-fleet`
-# (via `stage0-publisher` App → repo-scope vars). Per-env repo variables
-# (`<ENV>_<REGION>_VNET_RESOURCE_ID`, `FLEET_ENV_UAMI_PRINCIPAL_ID`,
-# etc.) come from `bootstrap/environment` (via `fleet-<env>` env).
+# from `bootstrap/fleet` (via the `fleet-meta` GH environment),
+# `bootstrap/environment` env=mgmt (ACR_*), and Stage 1 mgmt apply
+# (`MGMT_*`, `ARGO_*`, `KARGO_*` — published by `tf-apply.yaml`).
+# Per-env repo variables (`<ENV>_<REGION>_VNET_RESOURCE_ID`,
+# `FLEET_ENV_UAMI_PRINCIPAL_ID`, etc.) come from `bootstrap/environment`
+# (via `fleet-<env>` env).
 
 on:
   pull_request:
@@ -53,23 +53,22 @@ defaults:
     shell: bash
 
 # Note: `id-token: write` is granted at job-level on the jobs that
-# call `azure/login` (stage0, cluster). Granting it workflow-wide
-# would force every job — including utility jobs without an
-# `environment:` (detect, summarize) — to satisfy
-# `include_claim_keys=environment`, which `bootstrap/fleet`
-# configures repo-wide. GitHub refuses to start such jobs with the
-# error "the claim 'environment' cannot be `null` or empty".
+# call `azure/login` (cluster). Granting it workflow-wide would force
+# every job — including utility jobs without an `environment:` (detect,
+# summarize) — to satisfy `include_claim_keys=environment`, which
+# `bootstrap/fleet` configures repo-wide. GitHub refuses to start such
+# jobs with the error "the claim 'environment' cannot be `null` or
+# empty".
 
 jobs:
   # -------------------------------------------------------------------------
-  # 1. Discover affected clusters + stage0 flag. Emits `matrix` outputs
-  #    consumed by the per-cluster and stage0 jobs below.
+  # 1. Discover affected clusters. Emits `matrix` outputs consumed by the
+  #    per-cluster job below.
   # -------------------------------------------------------------------------
   detect:
     name: detect affected
     runs-on: ubuntu-24.04
     outputs:
-      stage0:      ${{ steps.detect.outputs.stage0 }}
       clusters:    ${{ steps.detect.outputs.clusters }}
       any:         ${{ steps.detect.outputs.any }}
       initialized: ${{ steps.init_guard.outputs.initialized }}
@@ -92,7 +91,6 @@ jobs:
           if [[ "$INITIALIZED" != "true" ]]; then
             # Emit valid-JSON defaults so downstream `fromJSON(...)`
             # expressions don't hard-fail on empty strings.
-            echo 'stage0=false'   >> "$GITHUB_OUTPUT"
             echo 'clusters=[]'    >> "$GITHUB_OUTPUT"
             echo 'any=false'      >> "$GITHUB_OUTPUT"
             exit 0
@@ -100,77 +98,13 @@ jobs:
           git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
           result="$(.github/scripts/detect-affected-clusters.sh)"
           echo "$result" | jq .
-          stage0="$(echo "$result" | jq -r .stage0)"
           clusters="$(echo "$result" | jq -c .clusters)"
-          any="$([[ "$stage0" == "true" ]] && echo true || echo "$(echo "$clusters" | jq 'length > 0')")"
-          echo "stage0=$stage0" >> "$GITHUB_OUTPUT"
+          any="$(echo "$clusters" | jq 'length > 0')"
           echo "clusters=$clusters" >> "$GITHUB_OUTPUT"
           echo "any=$any" >> "$GITHUB_OUTPUT"
 
-  stage0:
-    name: stage0 plan
-    needs: detect
-    if: needs.detect.outputs.initialized == 'true' && needs.detect.outputs.stage0 == 'true'
-    runs-on: [self-hosted]
-    environment: fleet-stage0
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Read Terraform version
-        id: tf_version
-        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
-        with:
-          terraform_version: ${{ steps.tf_version.outputs.version }}
-          terraform_wrapper: false
-
-      - name: Azure login (OIDC)
-        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
-        with:
-          client-id:       ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id:       ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: terraform init
-        uses: ./.github/actions/tf-backend-config
-        with:
-          working-directory: terraform/stages/0-fleet
-          state-key: stage0/fleet.tfstate
-        env:
-          TFSTATE_RESOURCE_GROUP:  ${{ vars.TFSTATE_RESOURCE_GROUP }}
-          TFSTATE_STORAGE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
-          TFSTATE_CONTAINER:       ${{ vars.TFSTATE_CONTAINER }}
-          AZURE_SUBSCRIPTION_ID:   ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: terraform plan
-        working-directory: terraform/stages/0-fleet
-        env:
-          ARM_USE_OIDC: "true"
-          # JSON object string; Terraform parses TF_VAR_<name> as
-          # HCL/JSON for complex types, so the bare JSON published by
-          # bootstrap/fleet to vars.MGMT_PE_FLEET_SUBNET_IDS deserialises
-          # directly into the map(string) variable.
-          TF_VAR_mgmt_pe_fleet_subnet_ids: ${{ vars.MGMT_PE_FLEET_SUBNET_IDS }}
-        run: |
-          terraform plan -no-color -out plan.tfplan \
-            | tee plan.txt
-          terraform show -no-color plan.tfplan > plan.show.txt
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: plan-stage0
-          path: |
-            terraform/stages/0-fleet/plan.tfplan
-            terraform/stages/0-fleet/plan.show.txt
-          retention-days: 7
-
   # -------------------------------------------------------------------------
-  # 3. Per-cluster plan matrix. Each leg picks the env-scoped GH environment
+  # 2. Per-cluster plan matrix. Each leg picks the env-scoped GH environment
   #    (`fleet-<env>`) and authenticates as `uami-fleet-<env>`.
   #
   #    `stages/1-cluster` plan: renders tfvars via config-loader, reads
@@ -239,11 +173,13 @@ jobs:
         env:
           ARM_USE_OIDC: "true"
           TFVARS: ${{ steps.tfvars.outputs.file }}
-          # Fleet-scope repo variables (published by stages/0-fleet apply).
-          TF_VAR_runners_kv_id:                     ${{ vars.RUNNERS_KV_ID }}
+          # Fleet-scope repo variables (published by bootstrap/fleet,
+          # bootstrap/environment env=mgmt, and Stage 1 mgmt apply).
+          # Post-REFACTOR.md Step 4: RUNNERS_KV_ID is no longer consumed
+          # by Stage 1 — spoke ESO targets MGMT_CLUSTER_KV_ID instead.
           TF_VAR_acr_resource_id:                   ${{ vars.ACR_RESOURCE_ID }}
           TF_VAR_kargo_mgmt_uami_principal_id:      ${{ vars.KARGO_MGMT_UAMI_PRINCIPAL_ID }}
-          TF_VAR_kargo_aad_application_object_id:   ${{ vars.KARGO_AAD_APPLICATION_OBJECT_ID }}
+          TF_VAR_mgmt_cluster_kv_id:                ${{ vars.MGMT_CLUSTER_KV_ID }}
           TF_VAR_mgmt_aks_oidc_issuer_url:          ${{ vars.MGMT_AKS_OIDC_ISSUER_URL }}
           # Per-env repo variables (published by bootstrap/environment).
           TF_VAR_fleet_env_uami_principal_id:       ${{ vars.FLEET_ENV_UAMI_PRINCIPAL_ID }}
@@ -304,12 +240,12 @@ jobs:
           retention-days: 7
 
   # -------------------------------------------------------------------------
-  # 4. Consolidate every plan into one tf-summarize-formatted sticky PR
-  #    comment. Runs after detect + stage0 + cluster (whichever fired).
+  # 3. Consolidate every plan into one tf-summarize-formatted sticky PR
+  #    comment. Runs after detect + cluster (whichever fired).
   # -------------------------------------------------------------------------
   summarize:
     name: summarize plans
-    needs: [detect, stage0, cluster]
+    needs: [detect, cluster]
     if: always() && needs.detect.outputs.initialized == 'true' && needs.detect.outputs.any == 'true'
     runs-on: ubuntu-24.04
     steps:
@@ -325,7 +261,7 @@ jobs:
 
       # Skip the rest if nothing was uploaded. `detect.any == 'true'`
       # only tells us a plan job _ran_; it doesn't guarantee any job
-      # produced a plan artefact (a stage0 plan that errored before
+      # produced a plan artefact (a plan that errored before
       # `terraform plan -out` writes nothing). Without this guard the
       # sticky comment renders as a bare "## Terraform plan" header.
       - name: Check for plan artefacts

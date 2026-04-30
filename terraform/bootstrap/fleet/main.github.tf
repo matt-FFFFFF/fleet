@@ -8,8 +8,8 @@
 # block), and one for the team-repo-template repo (created fresh).
 #
 # The fleet-repo call also owns:
-#   * the `fleet-stage0` + `fleet-meta` GitHub Actions environments,
-#   * each environment's UAMI + federated credential + env-scoped RBAC,
+#   * the `fleet-meta` GitHub Actions environment,
+#   * the environment's UAMI + federated credential + env-scoped RBAC,
 #   * the `main`-branch ruleset (replaces the legacy
 #     `github_branch_protection` resource; Kargo-bot bypass is deferred to
 #     PLAN §7 / §15).
@@ -20,7 +20,6 @@
 # -----------------------------------------------------------------------------
 
 locals {
-  role_def_contributor_acr_sub        = "/subscriptions/${local.derived.acr_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_contributor}"
   role_def_blob_contributor_state_sub = "/subscriptions/${local.derived.state_subscription}/providers/Microsoft.Authorization/roleDefinitions/${local.role_blob_data_ctrb}"
 }
 
@@ -73,40 +72,6 @@ module "fleet_repo" {
   }
 
   environments = {
-    stage0 = {
-      environment = "fleet-stage0"
-      # reviewers: none (0 reviewers required — stage-0 runs unattended
-      # under repo-admin-only bypass).
-      deployment_policy = { protected_branches = true, custom_branch_policies = false }
-      # `variables` intentionally left at default `{}` here; env variables
-      # that reference the module's own UAMI output (client_id) are set by
-      # `github_actions_environment_variable.stage0_*` below to break the
-      # otherwise-inevitable module-call-to-child-output cycle.
-
-      identity = {
-        name      = "uami-fleet-stage0"
-        parent_id = azapi_resource.rg_fleet_shared.id
-        location  = local.derived.acr_location
-        # Preserve the legacy FIC name (`gh-fleet-stage0`) so the refactor
-        # does not cause a state rename.
-        fic_name = "gh-fleet-stage0"
-        # `subject` deliberately omitted — the submodule auto-builds
-        # `repository_owner_id:<id>:repository_id:<id>:environment:fleet-stage0`
-        # from the root module's `actions_oidc_subject_claims` config.
-      }
-
-      identity_role_assignments = {
-        rg_contrib = {
-          role_definition_id = local.role_def_contributor_acr_sub
-          scope              = azapi_resource.rg_fleet_shared.id
-        }
-        blob_contrib = {
-          role_definition_id = local.role_def_blob_contributor_state_sub
-          scope              = azapi_resource.state_container_fleet.id
-        }
-      }
-    }
-
     meta = {
       environment = "fleet-meta"
       # 2-reviewer gate for meta-level operations. `teams` / `users` are
@@ -114,14 +79,19 @@ module "fleet_repo" {
       # block is present so the reviewer requirement itself is enforced.
       reviewers         = { teams = [], users = [] }
       deployment_policy = { protected_branches = true, custom_branch_policies = false }
-      # See stage0 above re: `variables`.
+      # `variables` intentionally left at default `{}` here; env variables
+      # that reference the module's own UAMI output (client_id) are set by
+      # `github_actions_environment_variable.meta` below to break the
+      # otherwise-inevitable module-call-to-child-output cycle.
 
       identity = {
         name      = "uami-fleet-meta"
         parent_id = azapi_resource.rg_fleet_shared.id
         location  = local.derived.acr_location
         fic_name  = "gh-fleet-meta"
-        # `subject` deliberately omitted — see fleet-stage0 above.
+        # `subject` deliberately omitted — the submodule auto-builds
+        # `repository_owner_id:<id>:repository_id:<id>:environment:fleet-meta`
+        # from the root module's `actions_oidc_subject_claims` config.
       }
 
       identity_role_assignments = {
@@ -204,16 +174,16 @@ module "team_template_repo" {
 }
 
 # -----------------------------------------------------------------------------
-# GitHub Apps: `fleet-meta` and `stage0-publisher`.
+# GitHub Apps: `fleet-meta` and `fleet-runners`.
 #
 # The `integrations/github` provider does not create GitHub Apps themselves —
 # only installations/permissions on an existing App. GH Apps must be created
 # out-of-band via the UI or via the `init-gh-apps.sh` manifest-flow helper
 # at the repo root (PLAN §16.4, implemented).
 #
-# The helper creates all three Apps (`fleet-meta`, `stage0-publisher`,
-# `fleet-runners`), records their installation metadata in
-# `./.gh-apps.state.json`, and writes a narrow per-module overlay at
+# The helper creates the two Apps (`fleet-meta`, `fleet-runners`),
+# records their installation metadata in `./.gh-apps.state.json`, and
+# writes a narrow per-module overlay at
 # `terraform/bootstrap/fleet/.gh-apps.auto.tfvars` carrying
 # `fleet_runners_app_pem` + `fleet_runners_app_pem_version` — the two
 # variables this stage declares (see `variables.tf`). It also patches
@@ -221,15 +191,8 @@ module "team_template_repo" {
 # installation_id}` so this stage's runner module validation passes.
 # The installation's repository selection must include the fleet repo
 # (`local.fleet.github_repo`); the helper does not enforce this, so a
-# mis-scoped install will surface here or in Stage 0 rather than during
+# mis-scoped install will surface here rather than during
 # `init-gh-apps.sh` itself.
-#
-# TODO(phase2-stage0-gh-apps): declare matching `variable` blocks in
-# terraform/stages/0-fleet/ for the `fleet-meta` / `stage0-publisher`
-# credentials, and have tf-apply.yaml derive a Stage-0 tfvars file
-# from `<repo-root>/.gh-apps.state.json` at apply time. No Stage-0
-# `.auto.tfvars` file is emitted by `init-gh-apps.sh` — the state
-# file is authoritative.
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
@@ -242,21 +205,6 @@ module "team_template_repo" {
 # -----------------------------------------------------------------------------
 
 locals {
-  stage0_env_vars = {
-    AZURE_CLIENT_ID         = module.fleet_repo.environments["stage0"].identity.client_id
-    AZURE_TENANT_ID         = local.fleet.tenant_id
-    AZURE_SUBSCRIPTION_ID   = local.derived.acr_subscription_id
-    TFSTATE_CONTAINER       = local.derived.state_container
-    TFSTATE_STORAGE_ACCOUNT = local.derived.state_storage_account
-    TFSTATE_RESOURCE_GROUP  = local.derived.state_resource_group
-    FLEET_NAME              = local.fleet.name
-    # PLAN §3.4: Stage 0 lands the fleet ACR PE in the mgmt VNet's
-    # `snet-pe-fleet` co-located with `acr.location`. The tf-apply.yaml
-    # workflow parses this JSON map and passes it in as the
-    # `mgmt_pe_fleet_subnet_ids` tfvar. Also published on the
-    # `fleet-meta` env below for observability/diagnostics.
-    MGMT_PE_FLEET_SUBNET_IDS = jsonencode(local.mgmt_snet_pe_fleet_ids)
-  }
   meta_env_vars = {
     AZURE_CLIENT_ID         = module.fleet_repo.environments["meta"].identity.client_id
     AZURE_TENANT_ID         = local.fleet.tenant_id
@@ -311,14 +259,6 @@ locals {
     MGMT_PE_FLEET_SUBNET_IDS = jsonencode(local.mgmt_snet_pe_fleet_ids)
     MGMT_RUNNERS_SUBNET_IDS  = jsonencode(local.mgmt_snet_runners_ids)
   }
-}
-
-resource "github_actions_environment_variable" "stage0" {
-  for_each      = local.stage0_env_vars
-  repository    = local.fleet.github_repo
-  environment   = module.fleet_repo.environments["stage0"].environment.environment
-  variable_name = each.key
-  value         = each.value
 }
 
 resource "github_actions_environment_variable" "meta" {

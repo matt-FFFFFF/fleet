@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# init-gh-apps.sh — provision the three GitHub Apps the fleet repo needs
+# init-gh-apps.sh — provision the two GitHub Apps the fleet repo needs
 # before `terraform/bootstrap/fleet` can apply (PLAN §16.4).
 #
 # Apps created (one per loop iteration):
 #   - fleet-meta          admin-class App used by env/team-bootstrap workflows
-#   - stage0-publisher    narrow App used by Stage 0 to publish repo variables
+#                          and by Stage 1 mgmt to publish mgmt-cluster repo vars
 #   - fleet-runners       repo-scoped App used by KEDA to scale the self-hosted
 #                          runner pool (actions:read + metadata:read)
 #
@@ -23,7 +23,7 @@
 #      in the browser; the script does not verify repo inclusion.)
 #   7. Persist credentials to ./.gh-apps.state.json (mode 0600, gitignored).
 #
-# After all three Apps exist, the script:
+# After both Apps exist, the script:
 #   - Writes terraform/bootstrap/fleet/.gh-apps.auto.tfvars (gitignored,
 #     mode 0600) containing the four PEM-related variables
 #     `bootstrap/fleet/variables.tf` declares: `fleet_runners_app_pem`,
@@ -273,18 +273,17 @@ PY
 # placement in the manifest below.
 
 apps_meta_perms='{"administration":"write","environments":"write","actions_variables":"write","secrets":"write","contents":"write"}'
-apps_stage0_perms='{"actions_variables":"write"}'
 # fleet-runners needs `administration:write` to mint repo-scoped runner
 # registration tokens (POST /repos/{owner}/{repo}/actions/runners/registration-token).
 # `actions:read` is for the KEDA scaler to enumerate queued workflow
 # runs; `metadata:read` is the implicit minimum for any installed App.
 apps_runners_perms='{"administration":"write","actions":"read","metadata":"read"}'
 
-# fleet-meta and stage0-publisher write to the repo only; fleet-runners reads.
-# All three are repo-scoped (no organization permissions requested).
+# fleet-meta writes to the repo; fleet-runners reads.
+# Both are repo-scoped (no organization permissions requested).
 
-APP_SLUGS=("fleet-meta" "stage0-publisher" "fleet-runners")
-APP_PERMS=("$apps_meta_perms" "$apps_stage0_perms" "$apps_runners_perms")
+APP_SLUGS=("fleet-meta" "fleet-runners")
+APP_PERMS=("$apps_meta_perms" "$apps_runners_perms")
 
 # ---- manifest flow per App --------------------------------------------------
 

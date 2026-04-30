@@ -39,11 +39,13 @@
 ### Stage -1 — `terraform/bootstrap/`
 
 - [~] `bootstrap/fleet/` — code complete; not applied.
-  - [~] **Refactor**: rename fleet KV → runner-pool KV
+  - [x] **Refactor**: rename fleet KV → runner-pool KV
         (`kv-<fleet>-runners` in `rg-fleet-runners`); drop all secrets
         except `fleet-runners-app-pem` and `fleet-meta-app-pem`.
-        Steps 2-3 done (rename + reparent to `rg-fleet-runners`); RG
-        ownership pulled out of vendored runner module.
+  - [x] **Refactor**: drop `stage0-publisher` GH App + `fleet-stage0`
+        environment + `uami-fleet-stage0` + Graph
+        `Application.ReadWrite.OwnedBy` grant; `azuread` provider
+        removed.
 - [~] `bootstrap/environment/` — code complete; not applied.
   - [~] **Refactor**: env=mgmt absorbs fleet ACR + PE +
         `length(mgmt_clusters) == 1` precondition; publishes
@@ -58,15 +60,12 @@
 - [~] Networking slice — code complete; not applied.
   - [x] Identity/RBAC follow-up (cluster KV, UAMIs, role assignments,
         managed Prometheus, mgmt-only Kargo OIDC rotation).
-  - [~] **Refactor**: mgmt cluster Stage 1 absorbs Argo + Kargo AAD
+  - [x] **Refactor**: mgmt cluster Stage 1 absorbs Argo + Kargo AAD
         apps + RP-secret rotation, `uami-kargo-mgmt` + AcrPull, and
         publishes `ARGO_AAD_APP_ID` / `KARGO_AAD_*` /
-        `KARGO_MGMT_UAMI_*` / `MGMT_CLUSTER_KV_ID` repo vars.
-        4a-b-c done (AAD apps + RP rotation in `main.aad.argocd.tf` +
-        `main.aad.kargo.tf`; `uami-kargo-mgmt` + AcrPull in
-        `main.identities.kargo.tf`; spoke ESO retargeted to mgmt
-        cluster KV in `ra_eso_mgmt_cluster_kv`); repo-var publishes
-        pending Step 5.
+        `KARGO_MGMT_UAMI_*` / `MGMT_CLUSTER_KV_ID` / `MGMT_AKS_*`
+        repo vars (via `tf-apply.yaml` post-apply step gated on
+        `matrix.cluster.role == 'management'`).
   - [~] **Refactor**: spoke `ra_eso_fleet_kv` →
         `ra_eso_mgmt_cluster_kv` (consumes `mgmt_cluster_kv_id`).
         Done (Step 4c).

@@ -19,14 +19,6 @@ output "fleet_shared_resource_group_id" {
   value = azapi_resource.rg_fleet_shared.id
 }
 
-output "fleet_stage0_uami" {
-  value = {
-    resource_id  = module.fleet_repo.environments["stage0"].identity.id
-    client_id    = module.fleet_repo.environments["stage0"].identity.client_id
-    principal_id = module.fleet_repo.environments["stage0"].identity.principal_id
-  }
-}
-
 output "fleet_meta_uami" {
   value = {
     resource_id  = module.fleet_repo.environments["meta"].identity.id

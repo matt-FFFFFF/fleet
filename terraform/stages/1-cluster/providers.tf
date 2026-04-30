@@ -18,20 +18,21 @@
 # `bootstrap/fleet` publishes the fleet-scope repo + fleet-meta
 # variables this stack needs: `MGMT_VNET_RESOURCE_IDS` (JSON-encoded
 # `{region: vnet-resource-id}` map) on the `fleet-meta` GitHub
-# Environment; `RUNNERS_KV_ID`, `ACR_RESOURCE_ID`,
-# `KARGO_MGMT_UAMI_PRINCIPAL_ID`, `KARGO_AAD_APPLICATION_OBJECT_ID` as
-# fleet-scope repo variables. `bootstrap/environment` publishes the
+# Environment. `bootstrap/environment` env=mgmt publishes `ACR_*` as
+# fleet-scope repo variables. The mgmt cluster's own Stage 1 apply
+# publishes `MGMT_CLUSTER_KV_ID`, `ARGO_AAD_APP_ID`, `KARGO_*`,
+# `MGMT_AKS_*` as fleet-scope repo variables for spoke clusters'
+# Stage 1/2 to consume. `bootstrap/environment` publishes the
 # per-env variables (`FLEET_ENV_UAMI_PRINCIPAL_ID`,
 # `MONITOR_WORKSPACE_ID`, `DCE_ID`, `ACTION_GROUP_ID`) and the
 # per-env-region networking variables
 # (`<ENV>_<REGION>_VNET_RESOURCE_ID`,
 # `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`,
-# `<ENV>_<REGION>_ROUTE_TABLE_RESOURCE_ID`). Stage 0 does **not**
-# proxy any of these — adopters wire them directly from the
-# `bootstrap/*` outputs into the `tf-apply.yaml` workflow (PLAN §10;
-# not yet implemented — see STATUS §10), which pipes the values into
-# `TF_VAR_*` so this stack never does a plan-time Azure data-source
-# call. The mgmt VNet id is selected per-cluster via
+# `<ENV>_<REGION>_ROUTE_TABLE_RESOURCE_ID`). Adopters wire all of
+# these from the bootstrap/Stage-1-mgmt outputs into the
+# `tf-apply.yaml` workflow, which pipes the values into `TF_VAR_*`
+# so this stack never does a plan-time Azure data-source call.
+# The mgmt VNet id is selected per-cluster via
 # `fromJSON(vars.MGMT_VNET_RESOURCE_IDS)[derived.networking.peer_mgmt_region]`
 # (same-region-else-first resolution done by config-loader/load.sh)
 # and piped into `TF_VAR_mgmt_region_vnet_resource_id`.

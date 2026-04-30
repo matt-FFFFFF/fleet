@@ -102,9 +102,51 @@ output "cluster_keyvault_uri" {
   value       = module.cluster_kv.vault_uri
 }
 
-output "runners_kv_id" {
-  description = "Runner-pool Key Vault ARM id — passthrough from `var.runners_kv_id` (published by Stage 0) so Stage 2 doesn't reach back to Stage 0 state."
-  value       = var.runners_kv_id
+# --- Mgmt-only repo-var outputs (REFACTOR.md Step 4) ------------------------
+#
+# Published by tf-apply.yaml (publish-stage1-mgmt job) as repo-level
+# GitHub variables consumed by spoke Stage 1 / Stage 2 plans:
+#
+#   MGMT_CLUSTER_KV_ID                — spoke ESO `ra_eso_mgmt_cluster_kv` scope
+#   ARGO_AAD_APP_ID                   — Stage 2 (Argo Helm values + platform-identity)
+#   KARGO_AAD_APP_ID                  — mgmt Stage 2 (Kargo Helm values)
+#   KARGO_AAD_APPLICATION_OBJECT_ID   — vestigial (Kargo password rotation now
+#                                       references the local resource directly);
+#                                       published for adopters that may have
+#                                       external integrations referencing it.
+#   KARGO_MGMT_UAMI_PRINCIPAL_ID      — spoke Stage 1 AKS RBAC Reader principal
+#   KARGO_MGMT_UAMI_CLIENT_ID         — mgmt Stage 2 Kargo SA workload-identity annotation
+#
+# All null on spoke clusters.
+
+output "mgmt_cluster_keyvault_id" {
+  description = "Mgmt cluster Key Vault ARM id. Published as MGMT_CLUSTER_KV_ID repo var; consumed by spoke Stage 1 (`ra_eso_mgmt_cluster_kv`) so spoke ESO can read fleet-shared secrets (`argocd-oidc-client-secret`, …) from the mgmt cluster KV. Null on spokes."
+  value       = local.mgmt_role_cluster ? module.cluster_kv.resource_id : null
+}
+
+output "argocd_aad_application_id" {
+  description = "Argo AAD app clientId. Published as ARGO_AAD_APP_ID repo var; consumed by every cluster's Stage 2 (Argo Helm values + platform-identity). Null on spokes."
+  value       = local.mgmt_role_cluster ? azuread_application.argocd[0].client_id : null
+}
+
+output "kargo_aad_application_id" {
+  description = "Kargo AAD app clientId. Published as KARGO_AAD_APP_ID repo var; consumed by mgmt Stage 2 (Kargo Helm values). Null on spokes."
+  value       = local.mgmt_role_cluster ? azuread_application.kargo[0].client_id : null
+}
+
+output "kargo_aad_application_object_id" {
+  description = "Kargo AAD app directory object id. Published as KARGO_AAD_APPLICATION_OBJECT_ID repo var. Vestigial post-REFACTOR.md Step 4 (the Kargo password rotation now references the local resource directly). Null on spokes."
+  value       = local.mgmt_role_cluster ? azuread_application.kargo[0].object_id : null
+}
+
+output "kargo_mgmt_uami_principal_id" {
+  description = "Kargo UAMI principalId. Published as KARGO_MGMT_UAMI_PRINCIPAL_ID repo var; consumed by every workload cluster's Stage 1 as the principal for AKS RBAC Reader. Null on spokes."
+  value       = local.mgmt_role_cluster ? azapi_resource.uami_kargo_mgmt[0].output.properties.principalId : null
+}
+
+output "kargo_mgmt_uami_client_id" {
+  description = "Kargo UAMI clientId. Published as KARGO_MGMT_UAMI_CLIENT_ID repo var; consumed by mgmt Stage 2 as the workload-identity client-id annotation on the kargo-controller SA. Null on spokes."
+  value       = local.mgmt_role_cluster ? azapi_resource.uami_kargo_mgmt[0].output.properties.clientId : null
 }
 
 # --- DNS outputs (consumed by platform-gitops ApplicationSet params) --------

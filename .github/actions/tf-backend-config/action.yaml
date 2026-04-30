@@ -11,7 +11,7 @@
 # call to one line and centralises the convention here.
 #
 # State-storage variables are published to env-scope by:
-#   - bootstrap/fleet         → fleet-stage0  (TFSTATE_RESOURCE_GROUP,
+#   - bootstrap/fleet         → fleet-meta    (TFSTATE_RESOURCE_GROUP,
 #                                              TFSTATE_STORAGE_ACCOUNT,
 #                                              TFSTATE_CONTAINER=tfstate-fleet)
 #   - bootstrap/environment   → fleet-<env>   (same names, but
@@ -25,18 +25,6 @@
 # adopters this is the same as `AZURE_SUBSCRIPTION_ID`. Multi-subscription
 # adopters that want a separate state subscription should override
 # `subscription_id` via the `subscription-id` input.
-#
-# Usage (stage0):
-#
-#   - uses: ./.github/actions/tf-backend-config
-#     with:
-#       working-directory: terraform/stages/0-fleet
-#       state-key:         stage0/fleet.tfstate
-#     env:
-#       TFSTATE_RESOURCE_GROUP:  ${{ vars.TFSTATE_RESOURCE_GROUP }}
-#       TFSTATE_STORAGE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
-#       TFSTATE_CONTAINER:       ${{ vars.TFSTATE_CONTAINER }}
-#       AZURE_SUBSCRIPTION_ID:   ${{ vars.AZURE_SUBSCRIPTION_ID }}
 #
 # Usage (stage1, per-cluster matrix leg):
 #
@@ -57,15 +45,16 @@ description: |
 
 inputs:
   working-directory:
-    description: Stage directory containing the root module (e.g. `terraform/stages/0-fleet`).
+    description: Stage directory containing the root module (e.g. `terraform/stages/1-cluster`).
     required: true
   state-key:
     description: |
       Backend `key` (state-file path inside the container). Conventional
       values:
-        - stage0: `stage0/fleet.tfstate`
-        - stage1: `<region>/<cluster_name>/stage1.tfstate`
-        - stage2: `<region>/<cluster_name>/stage2.tfstate`
+        - bootstrap/fleet:       `bootstrap/fleet.tfstate`
+        - bootstrap/environment: `bootstrap/environment/<env>.tfstate`
+        - stage1:                `<region>/<cluster_name>/stage1.tfstate`
+        - stage2:                `<region>/<cluster_name>/stage2.tfstate`
     required: true
   subscription-id:
     description: |

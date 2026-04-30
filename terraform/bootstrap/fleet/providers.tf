@@ -6,10 +6,6 @@ terraform {
       source  = "Azure/azapi"
       version = "~> 2.9"
     }
-    azuread = {
-      source  = "hashicorp/azuread"
-      version = "~> 3.8"
-    }
     # NOTE: azurerm is a narrow carveout — it is used ONLY transitively by
     # the vendored `modules/cicd-runners/` module (see PLAN §1 and
     # `terraform/modules/cicd-runners/VENDORING.md`). bootstrap/fleet itself
@@ -55,11 +51,6 @@ provider "azapi" {
   subscription_id = local.fleet_doc.acr.subscription_id
   # Operator runs `az login` (interactive) before `terraform apply`.
   use_cli = true
-}
-
-provider "azuread" {
-  tenant_id = local.fleet.tenant_id
-  use_cli   = true
 }
 
 provider "azurerm" {
