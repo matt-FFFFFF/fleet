@@ -1,0 +1,40 @@
+# Should fail: missing required `fleet.name`.
+fleet:
+  display_name: Acme
+  tenant_id: 11111111-1111-1111-1111-111111111111
+  github_org: acme-co
+  github_repo: platform-fleet
+  team_template_repo: team-repo-template
+acr:
+  name_override: ""
+  resource_group: rg-fleet-shared
+  subscription_id: 33333333-3333-3333-3333-333333333333
+  location: eastus
+  sku: Premium
+runners_keyvault:
+  name_override: ""
+  resource_group: rg-fleet-shared
+  location: eastus
+state:
+  storage_account_name_override: ""
+  resource_group: rg-fleet-tfstate
+  subscription_id: 33333333-3333-3333-3333-333333333333
+  containers: { fleet: tfstate-fleet }
+networking: { private_dns_zones: {}, envs: {} }
+github_app:
+  fleet_runners: { app_id: null, installation_id: null, private_key_kv_secret: fleet-runners-app-pem }
+  fleet_meta:    { app_id: null, client_id: null, installation_id: null, private_key_kv_secret: fleet-meta-app-pem }
+aad:
+  argocd:  { display_name: a, owners: [], group_claim_name: groups }
+  kargo:   { display_name: a, owners: [], group_claim_name: groups }
+  grafana: { sku: Standard, zone_redundancy: true, api_key_enabled: false, deterministic_outbound_ip: true }
+  aks:     { tenant_id: 11111111-1111-1111-1111-111111111111, disable_local_accounts: true, enable_azure_rbac: true }
+observability:
+  network_isolation: { mode: network_security_perimeter, nsp_profile_name: default, grafana_private_dns_zone: x }
+  monitor_workspace: { public_network_access: Disabled }
+  data_collection_endpoint: { public_network_access: Disabled }
+  action_group: { short_name_prefix: acme }
+envs: {}
+dns:
+  fleet_root: int.acme.example
+  resource_group_pattern: rg-dns-{env}

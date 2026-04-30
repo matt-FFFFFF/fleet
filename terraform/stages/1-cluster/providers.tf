@@ -1,37 +1,31 @@
 # stages/1-cluster/providers.tf
 #
-# Provider set: azapi + azurerm + azuread + time + random. Plans against
-# the **cluster's own subscription** (read from the loader-emitted
+# Provider set: azapi + azurerm + random. Plans against the
+# **cluster's own subscription** (read from the loader-emitted
 # `cluster.subscription_id`, which falls back to
 # `environments.<env>.subscription_id` per PLAN §3.3). Every AKS, KV,
 # UAMI, subnet, and DNS resource authored here lives there.
 #
-# `azuread` + `time` are present ONLY for the management cluster's
-# Kargo OIDC-client-secret rotation (PLAN §4 Stage 1 lines 1772-1778):
-# an `azuread_application_password` scoped to the Stage 0-owned Kargo
-# AAD app, rotated every 60 days via a `time_rotating` resource, and
-# written into the cluster KV as an azapi KV secret. On workload
-# clusters these providers are configured but unused (the rotation
-# resources are gated on `local.mgmt_cluster`); declaring them
-# unconditionally keeps the provider surface uniform across legs.
-#
-# `bootstrap/fleet` publishes the fleet-scope repo + fleet-meta
-# variables this stack needs: `MGMT_VNET_RESOURCE_IDS` (JSON-encoded
-# `{region: vnet-resource-id}` map) on the `fleet-meta` GitHub
-# Environment; `FLEET_KEYVAULT_ID`, `ACR_RESOURCE_ID`,
-# `KARGO_MGMT_UAMI_PRINCIPAL_ID`, `KARGO_AAD_APPLICATION_OBJECT_ID` as
-# fleet-scope repo variables. `bootstrap/environment` publishes the
-# per-env variables (`FLEET_ENV_UAMI_PRINCIPAL_ID`,
-# `MONITOR_WORKSPACE_ID`, `DCE_ID`, `ACTION_GROUP_ID`) and the
-# per-env-region networking variables
-# (`<ENV>_<REGION>_VNET_RESOURCE_ID`,
-# `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`,
-# `<ENV>_<REGION>_ROUTE_TABLE_RESOURCE_ID`). Stage 0 does **not**
-# proxy any of these — adopters wire them directly from the
-# `bootstrap/*` outputs into the `tf-apply.yaml` workflow (PLAN §10;
-# not yet implemented — see STATUS §10), which pipes the values into
-# `TF_VAR_*` so this stack never does a plan-time Azure data-source
-# call. The mgmt VNet id is selected per-cluster via
+# Repo-variable inputs (all consumed via `TF_VAR_*` piped from
+# `tf-apply.yaml`, never via plan-time Azure data-source calls):
+#   - `bootstrap/fleet` publishes `MGMT_VNET_RESOURCE_IDS` on the
+#     `fleet-meta` GitHub Environment, plus `ARGO_AAD_APP_ID`,
+#     `KARGO_AAD_APP_ID`, `KARGO_AAD_APPLICATION_OBJECT_ID` as
+#     repo-level vars (the AAD apps are operator-owned in
+#     `bootstrap/fleet`; see PLAN §4 Stage -1).
+#   - `bootstrap/environment` env=mgmt publishes `ACR_*` as
+#     repo-level vars.
+#   - The mgmt cluster's own Stage 1 apply publishes
+#     `MGMT_CLUSTER_KV_ID`, `MGMT_AKS_*`, and
+#     `KARGO_MGMT_UAMI_*` as repo-level vars for spoke clusters'
+#     Stage 1/2 to consume.
+#   - `bootstrap/environment` publishes the per-env variables
+#     (`FLEET_ENV_UAMI_PRINCIPAL_ID`, `MONITOR_WORKSPACE_ID`,
+#     `DCE_ID`, `ACTION_GROUP_ID`) and the per-env-region
+#     networking variables (`<ENV>_<REGION>_VNET_RESOURCE_ID`,
+#     `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`,
+#     `<ENV>_<REGION>_ROUTE_TABLE_RESOURCE_ID`).
+# The mgmt VNet id is selected per-cluster via
 # `fromJSON(vars.MGMT_VNET_RESOURCE_IDS)[derived.networking.peer_mgmt_region]`
 # (same-region-else-first resolution done by config-loader/load.sh)
 # and piped into `TF_VAR_mgmt_region_vnet_resource_id`.
@@ -51,18 +45,6 @@ terraform {
     azurerm = {
       source  = "hashicorp/azurerm"
       version = "~> 4.46"
-    }
-    # Mgmt-cluster-only (Kargo OIDC secret rotation). Declared
-    # unconditionally so the provider set is uniform across legs;
-    # workload clusters initialize the provider but author no
-    # `azuread_*` resources.
-    azuread = {
-      source  = "hashicorp/azuread"
-      version = "~> 3.0"
-    }
-    time = {
-      source  = "hashicorp/time"
-      version = "~> 0.12"
     }
     random = {
       source  = "hashicorp/random"
@@ -87,9 +69,4 @@ provider "azurerm" {
   subscription_id = local.cluster.subscription_id
   use_oidc        = true
   features {}
-}
-
-provider "azuread" {
-  tenant_id = local.fleet.tenant_id
-  use_oidc  = true
 }

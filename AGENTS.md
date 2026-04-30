@@ -7,7 +7,7 @@ full before proposing or writing any change.
 
 - **`PLAN.md`** is **the** source of truth for intent, design, and
   deviations. It answers "what should be." Sections are stable and
-  numbered; cite them when explaining work (e.g. "per §4 Stage 0").
+  numbered; cite them when explaining work (e.g. "per §4 Stage 1").
   When an implementation deviates from PLAN, update the plan.
   Do not provide history or rationale in PLAN; it is a design document, not a journal.
 - **`STATUS.md`** is a **tracking aid** for the plan — a one-line-per-
@@ -49,15 +49,16 @@ full before proposing or writing any change.
    and stage TF `yamldecode(file(...))` it. **Never** reintroduce
    `var.fleet` / `var.environment` or duplicate subscription IDs.
 5. **Naming derivation parity.** If you touch a name derivation rule,
-   touch all three: `docs/naming.md`, `config-loader/load.sh`, and
-   the HCL `local.derived` in the affected bootstrap/stage module.
+   touch all four: `docs/naming.md`, `config-loader/load.sh`,
+   the HCL `local.derived` in the affected bootstrap/stage module,
+   and the relevant `schemas/<doc>.vN.schema.json`.
 6. **Version constraints.** Pessimistic-minor everywhere
    (`~> X.Y`). Module `required_version` floor: `~> 1.14` (minimum
    Terraform supported by the codebase; required for reliable
    short-circuit evaluation of `||` in `validation {}` blocks). The
    **exact** Terraform version used by CI and local dev is pinned in
-   `.terraform-version` at the repo root — all three workflows
-   (`template-selftest.yaml`, `tflint.yaml`, `validate.yaml`) read it
+   `.terraform-version` at the repo root — both workflows
+   (`template-selftest.yaml`, `validate.yaml`) read it
    via a `tf_version` step. Bump `.terraform-version` to upgrade CI;
    bump the `~> 1.14` floor only when raising the minimum (touch every
    `required_version` in `terraform/**/providers.tf` + `terraform.tf`
@@ -83,11 +84,17 @@ clusters/
   {mgmt,nonprod,prod}/    per-env scopes; cluster.yaml under <region>/<name>/
 terraform/
   bootstrap/{fleet,environment,team}/  Stage -1
-  stages/{0-fleet,1-cluster,2-kubernetes}/  Stage 0/1/2
+  stages/{1-cluster,2-kubernetes}/     Stage 1/2
   modules/                             reusable modules
   config-loader/load.sh                yq deep-merge → tfvars.json
+schemas/
+  fleet.v1.schema.json                 contract for clusters/_fleet.yaml
+  cluster.v1.schema.json               contract for clusters/**/cluster.yaml + _defaults.yaml
+  README.md                            versioning policy + bump rules
+  tests/                               valid/invalid fixtures + test.sh
 docs/
   adoption.md naming.md                contracts
+  findings.md                          open design/implementation findings (detailed rationale for STATUS Rework items)
   onboarding-*.md upgrades.md promotion.md   operator UX
 .github/
   workflows/                           CI

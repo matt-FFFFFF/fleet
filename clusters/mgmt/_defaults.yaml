@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=/schemas/cluster.v1.schema.json
 # Env-scope defaults for management clusters. Only one mgmt cluster is
 # expected in practice, but this file stays here for consistency.
 #

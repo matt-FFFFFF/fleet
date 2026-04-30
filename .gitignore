@@ -9,6 +9,12 @@
 *.tfstate
 *.tfstate.*
 *.tfplan
+# Saved plan files — `terraform plan -out tfplan.<stage>` is the
+# recommended apply pattern; the resulting binary plan + its JSON
+# rendering can carry sensitive state and must never be committed.
+tfplan
+tfplan.*
+tfplan.*.json
 crash.log
 crash.*.log
 

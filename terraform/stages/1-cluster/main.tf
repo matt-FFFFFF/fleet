@@ -11,12 +11,13 @@
 #                       children of the env VNet
 #   main.aks.tf       : AKS cluster (via modules/aks-cluster) + per-cluster
 #                       private DNS zone (via modules/cluster-dns)
-#   main.kv.tf        : cluster Key Vault + mgmt-only Kargo OIDC secret
-#                       rotation (azuread_application_password + time_rotating
-#                       + KV secret writes)
+#   main.kv.tf        : cluster Key Vault (also serves as the mgmt-shared
+#                       fleet KV on `cluster.role == "management"`; see
+#                       file header for the bootstrap/fleet two-pass
+#                       contract)
 #   main.identities.tf: per-cluster UAMIs (external-dns, ESO, team-<team>)
 #   main.rbac.tf      : role assignments on every scope this stage touches
-#                       (cluster KV, fleet KV, fleet ACR, this AKS resource,
+#                       (cluster KV, runners KV, fleet ACR, this AKS resource,
 #                       the per-cluster private DNS zone, the env AMW)
 #   main.monitoring.tf: managed Prometheus DCR/DCRA + recording rule groups
 #                       (gated on `platform.observability.managed_prometheus.enabled`)
@@ -32,14 +33,13 @@
 # sources at plan time (PLAN §10). Cross-stage values
 # (`MGMT_VNET_RESOURCE_IDS` JSON map on `fleet-meta`,
 # `<ENV>_<REGION>_{VNET,NODE_ASG,ROUTE_TABLE}_RESOURCE_ID` on the
-# per-env GH Environment, fleet-scope ids like `FLEET_KEYVAULT_ID` /
-# `ACR_RESOURCE_ID` / `KARGO_*` from Stage 0) flow in as repo/env
-# variables (TF_VAR_*) — Stage 0 does **not** proxy the env-scope
-# values (see PLAN §4 Stage -1 "Implementation status 2026-04-19" for
-# the cycle-break rationale). `tf-apply.yaml` resolves the cluster's
-# mgmt peer region (`derived.networking.peer_mgmt_region`,
-# same-region-else-first from `networking.envs.mgmt.regions.*`) and
-# indexes the JSON map to set `TF_VAR_mgmt_region_vnet_resource_id`
+# per-env GH Environment, fleet-scope ids like `ACR_RESOURCE_ID`,
+# `MGMT_CLUSTER_KV_ID`, `KARGO_*` from `bootstrap/environment` env=mgmt
+# and Stage 1 mgmt apply) flow in as repo/env variables (TF_VAR_*).
+# `tf-apply.yaml` resolves the cluster's mgmt peer region
+# (`derived.networking.peer_mgmt_region`, same-region-else-first from
+# `networking.envs.mgmt.regions.*`) and indexes the JSON map to set
+# `TF_VAR_mgmt_region_vnet_resource_id`
 # per cluster.
 
 locals {

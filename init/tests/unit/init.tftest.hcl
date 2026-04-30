@@ -24,6 +24,7 @@ variables {
   github_repo        = "platform-fleet"
   team_template_repo = "team-repo-template"
   primary_region     = "eastus"
+  egress_next_hop_ip = ""
   dns_fleet_root     = "int.acme.example"
   template_commit    = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 
@@ -364,6 +365,40 @@ run "reject_primary_region_uppercase" {
   expect_failures = [var.primary_region]
 }
 
+run "reject_egress_next_hop_ip_not_ipv4" {
+  command = plan
+  variables {
+    egress_next_hop_ip = "not-an-ip"
+  }
+  expect_failures = [var.egress_next_hop_ip]
+}
+
+run "reject_egress_next_hop_ip_octet_overflow" {
+  command = plan
+  variables {
+    egress_next_hop_ip = "10.0.0.300"
+  }
+  expect_failures = [var.egress_next_hop_ip]
+}
+
+run "render_egress_next_hop_ip_broadcast" {
+  command = apply
+  variables {
+    egress_next_hop_ip = "10.0.0.4"
+  }
+  # Single top-level prompt fans out into every env's primary_region entry
+  # (PLAN §3.4; F13 Option B). Per-env / multi-region overrides go in
+  # _fleet.yaml post-init.
+  assert {
+    condition = alltrue([
+      yamldecode(local_file.fleet_yaml.content).networking.envs.mgmt.regions.eastus.egress_next_hop_ip == "10.0.0.4",
+      yamldecode(local_file.fleet_yaml.content).networking.envs.nonprod.regions.eastus.egress_next_hop_ip == "10.0.0.4",
+      yamldecode(local_file.fleet_yaml.content).networking.envs.prod.regions.eastus.egress_next_hop_ip == "10.0.0.4",
+    ])
+    error_message = "egress_next_hop_ip must broadcast to every env's primary_region entry."
+  }
+}
+
 run "reject_dns_fleet_root_uppercase" {
   command = plan
   variables {
@@ -461,16 +496,17 @@ run "render_networking_shape" {
     error_message = "create_reverse_peering must be omitted from the template (default true applied downstream)."
   }
 
-  # egress_next_hop_ip is emitted as null on every env-region so that
-  # `yamldecode(...).networking.envs.<env>.regions.<region>` exposes the
-  # key to fleet-identity + config-loader. Adopters overwrite after init.
+  # egress_next_hop_ip defaults to empty string (variable default), which
+  # the template renders as YAML null on every env-region. Adopters who
+  # supply the prompt see the IP broadcast into all envs in primary_region
+  # (covered by run "render_egress_next_hop_ip_broadcast" below).
   assert {
     condition = alltrue([
       yamldecode(local_file.fleet_yaml.content).networking.envs.mgmt.regions.eastus.egress_next_hop_ip == null,
       yamldecode(local_file.fleet_yaml.content).networking.envs.nonprod.regions.eastus.egress_next_hop_ip == null,
       yamldecode(local_file.fleet_yaml.content).networking.envs.prod.regions.eastus.egress_next_hop_ip == null,
     ])
-    error_message = "networking.envs.<env>.regions.<region>.egress_next_hop_ip must be emitted as null on every env-region (PLAN §3.4; adopters fill it in post-init)."
+    error_message = "Empty/unset egress_next_hop_ip must render as null on every env-region (PLAN §3.4; F13 Option B opt-out)."
   }
 
   # Legacy fleet-plane mgmt VNet block is gone.

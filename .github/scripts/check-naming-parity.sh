@@ -73,7 +73,14 @@ mapfile -t cluster_paths < <(
   find "$repo_root/clusters" \
     -mindepth 4 -maxdepth 4 -name cluster.yaml | sed 's|/cluster\.yaml$||' | sort
 )
-[[ "${#cluster_paths[@]}" -gt 0 ]] || die "no clusters found under $repo_root/clusters/<env>/<region>/<name>/"
+# Adopters between `init-fleet.sh` and their first `clusters/.../cluster.yaml`
+# have zero clusters in tree. Per-cluster derivations are vacuously
+# correct in that case; the fleet-scope ACR check below still runs,
+# anchored to the loader output of `_fleet.yaml` itself rather than a
+# representative cluster.
+if [[ "${#cluster_paths[@]}" -eq 0 ]]; then
+  info "no clusters under $repo_root/clusters/<env>/<region>/<name>/ yet — running fleet-scope checks only"
+fi
 
 info "found ${#cluster_paths[@]} cluster(s)"
 
@@ -106,7 +113,7 @@ info "found ${#cluster_paths[@]} cluster(s)"
 # the first cluster's loader output):
 #   .derived.acr_login_server          derived to "<acr_name>.azurecr.io"
 #   .fleet.fleet.name                  (sanity only — not a derivation)
-# The loader doesn't re-emit .state_* / acr_* / fleet_kv_* verbatim
+# The loader doesn't re-emit .state_* / acr_* / runners_kv_* verbatim
 # (they flow from `_fleet.yaml` directly through the merged doc), so
 # the HCL-side fleet-scope check here is ACR-login-server only; the
 # rest are covered by fleet-identity unit tests + bootstrap validate.
@@ -116,6 +123,10 @@ trace() { printf '  mismatch: %s\n    loader: %s\n    hcl:    %s\n' "$1" "$2" "$
 
 # Fleet-scope ACR login server: formula is `<acr_name>.azurecr.io` in
 # loader; HCL `derived.acr_name` is the authoritative acr_name.
+# This value is consumed inside the per-cluster loop below — when the
+# adopter has zero clusters in tree the comparison is vacuous, but
+# `derived.acr_name` is independently asserted by the
+# `terraform/bootstrap/fleet` validate-workflow leg.
 hcl_acr_name="$(jq -r '.acr_name' <<<"$hcl_derived")"
 hcl_acr_login="${hcl_acr_name}.azurecr.io"
 

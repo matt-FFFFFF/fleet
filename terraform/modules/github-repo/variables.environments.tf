@@ -13,8 +13,9 @@ The map key is an arbitrary identifier to avoid known-after-apply issues.
 - `variables` - Map of environment variables (arbitrary key):
   - `name` - The variable name.
   - `value` - The variable value.
-- `secrets` - Map of environment secrets (arbitrary key). Values are NOT managed by Terraform:
-  - `name` - The secret name.
+- `secrets` - **Currently disabled** (must be empty / omitted).
+  Pending provider migration off `plaintext_value`; see VENDORING.md
+  and `modules/environment/main.tf` for context.
 - `deployment_policy` - Deployment branch policy:
   - `protected_branches` - Whether only protected branches can deploy.
   - `custom_branch_policies` - Whether only matching branch/tag patterns can deploy.
@@ -90,5 +91,18 @@ DESCRIPTION
       length(v.tag_policies) == 0 || (v.deployment_policy != null && v.deployment_policy.custom_branch_policies)
     ])
     error_message = "tag_policies requires deployment_policy with custom_branch_policies = true."
+  }
+
+  validation {
+    # `secrets` passthrough is disabled in this vendored fork pending
+    # provider migration off `plaintext_value` (see
+    # modules/environment/main.tf). The field is retained on the type
+    # for caller compatibility but a non-empty map is rejected so
+    # callers don't silently lose secret declarations.
+    condition = alltrue([
+      for k, v in var.environments :
+      length(v.secrets) == 0
+    ])
+    error_message = "github-repo: var.environments[*].secrets is currently disabled (provider deprecated `plaintext_value`). Re-enable the resource in modules/environment/main.tf and the passthrough in main.environments.tf before populating this map; see VENDORING.md."
   }
 }

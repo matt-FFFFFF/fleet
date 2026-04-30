@@ -100,6 +100,31 @@ variable "primary_region" {
   }
 }
 
+variable "egress_next_hop_ip" {
+  description = <<-EOT
+    Hub firewall / NVA private IP that AKS api-server and node traffic
+    route 0.0.0.0/0 at, in `primary_region`. Broadcast into every env's
+    single-region entry (`networking.envs.<env>.regions.<primary_region>.
+    egress_next_hop_ip`) so cluster apply does not fail-fast on a
+    missing UDR (PLAN §3.4; docs/findings.md F13). Empty string opts
+    out (adopter-managed routing) and renders as YAML null; per-env
+    NVAs or additional regions are configured by editing _fleet.yaml
+    post-init.
+  EOT
+  type        = string
+  default     = ""
+  validation {
+    # IPv4 dotted-quad in 0-255 per octet, or empty string (opt-out).
+    # init-fleet.sh's `default: <token>` convention substitutes the empty
+    # string when the adopter accepts the default with blank input.
+    condition = (
+      var.egress_next_hop_ip == ""
+      || can(regex("^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$", var.egress_next_hop_ip))
+    )
+    error_message = "egress_next_hop_ip must be an IPv4 address (dotted-quad, e.g. 10.0.0.4) or empty (opt-out)."
+  }
+}
+
 
 variable "dns_fleet_root" {
   description = "DNS root zone under which per-cluster private zones are created (e.g. int.acme.example)."
@@ -119,7 +144,7 @@ variable "template_commit" {
 # ---- networking (PLAN §3.1 / §3.4) — central BYO references ----------------
 #
 # Four central private DNS zones — all BYO, never created by this repo.
-# Every PE created by the repo (tfstate SA, fleet KV, fleet ACR, env
+# Every PE created by the repo (tfstate SA, runners KV, fleet ACR, env
 # Grafana) registers into the matching central zone.
 #
 # Pod CIDRs: every cluster uses the same CGNAT `/16` (100.64.0.0/16),
@@ -138,7 +163,7 @@ variable "networking_pdz_blob" {
 }
 
 variable "networking_pdz_vaultcore" {
-  description = "Full ARM resource id of the BYO privatelink.vaultcore.azure.net private DNS zone (fleet KV PE registers here)."
+  description = "Full ARM resource id of the BYO privatelink.vaultcore.azure.net private DNS zone (runners KV PE registers here)."
   type        = string
   validation {
     condition     = can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.vaultcore\\.azure\\.net$", var.networking_pdz_vaultcore))

@@ -1,0 +1,6 @@
+# Should fail: cluster.role is not in the allowed enum.
+cluster:
+  role: control-plane
+  resource_group: rg-aks-mgmt-eastus-01
+networking:
+  subnet_slot: 0

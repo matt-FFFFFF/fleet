@@ -42,9 +42,10 @@ manage upgrades, and add Kargo promotion.
 | Kargo GitHub auth               | Dedicated GitHub App; PEM in Key Vault; synced by ESO                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Kargo RBAC                      | Same `oidcGroup` as Argo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Container registry              | One ACR per fleet; hosts images and Helm OCI charts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Key Vault                       | Two-tier: one **fleet KV** created by `bootstrap/fleet` (Stage -1, alongside the tfstate SA and runner pool — co-located to break the runner-pool KV-reference cycle) strictly for secrets consumed by more than one cluster (e.g., Argo GitHub App PEM, Argo OIDC client secret, runner-pool GH App PEM); **one cluster KV per cluster** (Stage 1) for cluster-local secrets. Stage 0 owns *seeding and rotating* secrets into the fleet KV (`Key Vault Secrets Officer` role assignment on the vault). Mgmt-cluster-only secrets (Kargo GitHub App PEM, Kargo OIDC client secret) live in the mgmt cluster's KV, not the fleet KV.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| AAD app registrations           | Managed by Terraform (Stage 0) — one for Argo, one for Kargo. Both are mgmt-only OIDC clients (Argo and Kargo run only on the mgmt cluster). Each app carries **Federated Identity Credentials** keyed off the **mgmt** cluster's OIDC issuer URL (subjects: the Argo / Kargo ServiceAccounts on mgmt) so workload→AAD calls from the central Argo / Kargo controllers are secret-less. A **single residual `client_secret` per app** remains, used **only** by the OIDC RP auth-code flow for human login (Argo/Dex upstream don't yet support `client_assertion` RP auth); auto-rotated on every Stage 0 apply with a short TTL. Spoke AKS clusters do **not** carry FICs on the Argo or Kargo AAD apps; their per-spoke `uami-argocd-spoke-<cluster>` UAMI carries the FIC instead, with mgmt as the issuer.                                                                                                                              |
-| Residual long-lived secrets     | **Exactly one class**: the Argo and Kargo AAD-app `client_secret` values used by their OIDC RP auth-code flows (human login). Stored in fleet KV, rotated on every Stage 0 apply (`end_date_relative` short TTL), reflected to cluster via ESO, picked up by Argo/Kargo on restart. All other fleet credentials — CI→Azure, workload→Azure, CI→Graph, AAD-app→Azure (`client_credentials`) — are federated and secret-less. Tracked in §15 with upstream removal trigger.                                                                                               |
+| Key Vault                       | Two-tier: one **runner-pool KV** (`kv-<fleet>-runners` in `rg-fleet-runners`) created by `bootstrap/fleet` (Stage -1, alongside the tfstate SA and runner pool — co-located to break the runner-pool KV-reference cycle) holding **only** `fleet-runners-app-pem` (consumed by the KEDA scaler) and `fleet-meta-app-pem` (consumed by env- and team-bootstrap workflows); **one cluster KV per cluster** (Stage 1) for cluster-local secrets. The mgmt cluster's KV (Stage 1 mgmt) doubles as the **fleet-shared mgmt cluster KV** holding the Argo + Kargo OIDC RP `client_secret` values and other mgmt-only secrets; ESO on every cluster (mgmt + spokes) reads them from the mgmt cluster KV.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| AAD app registrations           | Managed by Terraform on `bootstrap/fleet` (operator-applied) — one for Argo, one for Kargo. Both are mgmt-only OIDC clients (Argo and Kargo run only on the mgmt cluster). Each app carries **Federated Identity Credentials** keyed off the **mgmt** cluster's OIDC issuer URL (subjects: the Argo / Kargo ServiceAccounts on mgmt) so workload→AAD calls from the central Argo / Kargo controllers are secret-less. The FICs themselves are added in mgmt's Stage 2 (the issuer URL is a Stage 1 output). A **single residual `client_secret` per app** remains, used **only** by the OIDC RP auth-code flow for human login (Argo/Dex upstream don't yet support `client_assertion` RP auth); long-lived (2-year `end_date`) — re-rolled by operator on demand, not auto-rotated — and written into the mgmt cluster KV by `bootstrap/fleet` once the KV exists (two-pass apply: bootstrap/fleet → Stage 1 mgmt → bootstrap/fleet, then idempotent). Spoke AKS clusters do **not** carry FICs on the Argo or Kargo AAD apps; their per-spoke `uami-argocd-spoke-<cluster>` UAMI carries the FIC instead, with mgmt as the issuer.                                                                                                                              |
+| Residual long-lived secrets     | **Exactly one class**: the Argo and Kargo AAD-app `client_secret` values used by their OIDC RP auth-code flows (human login). Created in `bootstrap/fleet` with a 2-year `end_date`, written into the **mgmt cluster KV** on the second `bootstrap/fleet` pass (after Stage 1 mgmt creates the KV), reflected to every cluster via ESO (each cluster's ESO UAMI holds `Key Vault Secrets User` on the mgmt cluster KV), picked up by Argo/Kargo on restart. Re-rolled on demand by operator (taint or new `_version` keeper); not on a schedule. All other fleet credentials — CI→Azure, workload→Azure, CI→Graph, AAD-app→Azure (`client_credentials`) — are federated and secret-less. Tracked in §15 with upstream removal trigger.                                                                                               |
+| Mgmt cluster cardinality        | **Exactly one** mgmt cluster per fleet. Enforced by `bootstrap/environment` env=mgmt as a `length(local.mgmt_clusters) == 1` precondition. Hub-and-spoke Argo and the singleton Kargo control plane assume one mgmt cluster; multi-mgmt is explicitly out of scope.                                                                                                                                                                                              |
 | Metrics                         | **Azure Managed Prometheus** — one **Azure Monitor Workspace per env** (created by `bootstrap/environment`) plus a **Data Collection Endpoint** per env; both are members of a per-env **Network Security Perimeter** (no public ingress). Each cluster gets a DCR + DCRA in Stage 1 pointing at its env's DCE+AMW; AKS `azureMonitorProfile.metrics` enabled; the env NSP inbound rule admits the env subscription so cluster addon identities can ingest.                                                                                                             |
 | Dashboards                      | **Azure Managed Grafana** — one instance per env (created by `bootstrap/environment`) with **public network access disabled** and a standard **Private Endpoint** in the env hub VNet (private DNS zone `privatelink.grafana.azure.com`). AAD-auth; env's AMW wired as default data source via the native `azureMonitorWorkspaceIntegrations` child; Grafana's outbound to AMW/DCE is admitted by an **NSP inbound access rule** scoped to Grafana's subscription. Admin role granted to the env's `aad.grafana.admins` group.                                          |
 | Alert routing                   | One Azure Monitor **Action Group** per env (prod → PagerDuty, nonprod → Slack); `prometheusRuleGroups` in Stage 1 reference the env-local AG by derived name                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -53,13 +54,13 @@ manage upgrades, and add Kargo promotion.
 | Cluster autoscaler              | Enabled on all node pools via `min_count`/`max_count`; profile tunables in cluster config                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | AKS Terraform module            | `Azure/avm-res-containerservice-managedcluster/azurerm` (pinned to an `azapi`-based version)                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Terraform providers             | `azapi` for all Azure ARM resources; **`hashicorp/azuread`** for AAD applications / federated identity credentials / client-secret rotation (typed-resource lifecycle is materially simpler than driving the low-level `microsoft/msgraph` provider via `msgraph_resource` + `addPassword`/`removePassword` action choreography); `integrations/github` for repo/env management; `kubernetes` + `helm` in Stage 2; `random` as needed. **No `azurerm`.** `azuread` is carved out specifically for AAD app lifecycle — all other Azure ARM operations remain on `azapi`. |
-| CI credential scope             | Per GitHub environment; one dedicated UAMI per env (`fleet-stage0`, `fleet-mgmt`, `fleet-nonprod`, `fleet-prod`) plus a privileged `fleet-meta` for bootstrap ops. Azure RBAC scoped per env.                                                                                                                                                                                                                                                                                                                                                                           |
+| CI credential scope             | Per GitHub environment; one dedicated UAMI per env (`fleet-mgmt`, `fleet-nonprod`, `fleet-prod`) plus a privileged `fleet-meta` for bootstrap ops. Azure RBAC scoped per env.                                                                                                                                                                                                                                                                                                                                                                           |
 | Bootstrap model                 | `bootstrap/fleet` run locally once; `bootstrap/environment` and `bootstrap/team` run via GH Actions under the `fleet-meta` environment (2-reviewer gate).                                                                                                                                                                                                                                                                                                                                                                                                               |
-| Stage 0 output propagation      | Published to repo variables by the Stage 0 workflow; Stage 1 consumes `vars.*`. **`terraform_remote_state` is never used.** Cross-stage values flow as follows: Stage 0 → Stage 1 via repo variables (fleet-wide, fan-out to many clusters); Stage 1 → Stage 2 via **in-job `terraform output -json` piped into `stage2.auto.tfvars.json`** (single cluster, single CI job). Stage 2 therefore makes zero Azure data-source calls at plan time. Fleet-wide singletons needed by per-cluster stages (e.g., the Kargo mgmt UAMI `principalId`, the mgmt cluster's `MGMT_AKS_OIDC_ISSUER_URL` / `MGMT_AKS_HOST` / `MGMT_AKS_CLUSTER_CA_CERTIFICATE` consumed by spoke Stage 2 for hub-and-spoke Argo registration) live in Stage 0, **or** are published as repo variables by the mgmt cluster's Stage 1 (the one place a Stage 1 also publishes repo vars). No Stage 1-to-Stage 1 cross-cluster propagation outside that mgmt-only carve-out. |
+| Cross-stage output propagation  | Published to repo variables by the publishing stage; downstream stages consume `vars.*`. **`terraform_remote_state` is never used.** Cross-stage values flow as follows: `bootstrap/fleet` → downstream via repo-level vars (e.g., `RUNNERS_KV_NAME`, `MGMT_VNET_RESOURCE_IDS`, `ARGO_AAD_APP_ID`, `KARGO_AAD_APP_ID`, `KARGO_AAD_APPLICATION_OBJECT_ID`); `bootstrap/environment` env=mgmt → downstream via repo-level vars (`ACR_RESOURCE_ID`, `ACR_NAME`, `ACR_LOGIN_SERVER`); `bootstrap/environment` (every env) → Stage 1 via env-scoped vars (`<ENV>_<REGION>_VNET_RESOURCE_ID`, etc.); Stage 1 mgmt → spoke Stage 1 / Stage 2 via repo-level vars (`MGMT_AKS_*`, `KARGO_MGMT_UAMI_PRINCIPAL_ID`, `KARGO_MGMT_UAMI_CLIENT_ID`, `MGMT_CLUSTER_KV_ID`); Stage 1 → Stage 2 via **in-job `terraform output -json` piped into `stage2.auto.tfvars.json`** (single cluster, single CI job). Stage 2 therefore makes zero Azure data-source calls at plan time. No Stage 1-to-Stage 1 cross-cluster propagation outside the mgmt-only carve-out. |
 | DNS for ingress                 | Opinionated: single `fleet_root` in `clusters/_fleet.yaml`; each cluster's private zone FQDN auto-derived from its directory path as `<name>.<region>.<env>.<fleet_root>`; linked to supplied VNets; external-dns scoped to its own zone only                                                                                                                                                                                                                                                                                                                           |
-| Self-hosted CI runners          | Single shared repo-scoped GitHub Actions runner pool on **Azure Container Apps + KEDA** (label `self-hosted`), created by `bootstrap/fleet` via a vendored `Azure/terraform-azurerm-avm-ptn-cicd-agents-and-runners` module. Trust boundary is the GitHub Environment + federated credential (not the VNet). Per-pool private ACR; LAW; no NAT / no public IP (egress via UDR through the hub firewall). A dedicated `fleet-runners` GitHub App (`actions:read` + `metadata:read`) drives KEDA polling; its PEM lives in the fleet KV and is referenced into the Container App Job as a Key Vault secret reference (never plaintext). |
+| Self-hosted CI runners          | Single shared repo-scoped GitHub Actions runner pool on **Azure Container Apps + KEDA** (label `self-hosted`), created by `bootstrap/fleet` via a vendored `Azure/terraform-azurerm-avm-ptn-cicd-agents-and-runners` module. Trust boundary is the GitHub Environment + federated credential (not the VNet). Per-pool ACR + LAW. **Private networking is deferred** (`use_private_networking = false` at the callsite) until an AMPLS/NSP path for the LAW + DCE lands; without one, the module's default flips LAW public ingestion/query off and the pool ingests zero rows (see §15 "Runner-pool LAW + ACR private networking deferred"). The ACR is therefore created with public network access enabled and pulls traverse the public endpoint; egress from the runner Container App is platform-managed (no callsite-owned NAT or public IP). A dedicated `fleet-runners` GitHub App (`actions:read` + `metadata:read`) drives KEDA polling; its PEM lives in the runner-pool KV and is referenced into the Container App Job as a Key Vault secret reference (never plaintext). |
 | `azurerm` carveout (runners)    | Narrow, **module-internal-only** carveout inside the vendored `terraform/modules/cicd-runners/` tree, mirroring the existing `azuread` carveout rationale: the upstream AVM module relies on `azurerm_container_app_job`, `azurerm_private_dns_*`, `azurerm_nat_*`, `azurerm_public_ip`, and the `Azure/avm-res-containerregistry-registry` child module. `bootstrap/fleet` itself authors zero `azurerm_*` resources or data sources — the `provider "azurerm"` block in `bootstrap/fleet/providers.tf` exists only because Terraform requires the parent to configure every provider any child references. |
-| Secret retrieval                | Key Vault-reference on workload resources wherever the target service supports it (e.g. Container App Job `secret { keyVaultUrl + identity }`); **ephemeral `azapi_resource_action`** (confirmed on `azapi ~> 2.9`) whenever Terraform itself must read a KV secret to make an Azure API call that takes the plaintext. Plaintext KV secret values **never** enter Terraform state. Driver: `azurerm_container_app_job.secret.value` has no `write_only` on `azurerm 4.69.0`; `azurerm_key_vault_secret.value_wo` is present and is the preferred path for writes. |
+| Secret retrieval & writes       | **Reads (workload):** Key Vault-reference on workload resources wherever the target service supports it (e.g. Container App Job `secret { keyVaultUrl + identity }`). **Reads (Terraform-side):** ephemeral `azapi_resource_action` (confirmed on `azapi ~> 2.9`) whenever Terraform itself must read a KV secret to make an Azure API call that takes the plaintext. **Writes:** `azapi_data_plane_resource` against `Microsoft.KeyVault/vaults/secrets@7.4` with write-only `sensitive_body { value = … }` + `sensitive_body_version { value = … }` so the plaintext travels over the KV PE and never enters Terraform state; rotation is driven by bumping the opaque `*_version` token. Canonical exemplar: `terraform/bootstrap/fleet/main.kv.tf` (fleet-runners + fleet-meta PEMs) and `main.aad.tf` (Argo + Kargo OIDC RP `client_secret`). **No `azurerm_key_vault_secret`** — consistent with the top-level "No `azurerm`" rule above; the runners-module `azurerm` carveout is module-internal-only and does not author KV secrets. Plaintext KV secret values never enter Terraform state on either the read or write path. |
 
 ---
 
@@ -76,18 +77,11 @@ fleet/
 │
 ├── terraform/
 │   ├── bootstrap/
-│   │   ├── fleet/                  # human-run once; seeds state SAs, fleet-stage0 + fleet-meta UAMIs, GH repo/env/vars
-│   │   ├── environment/            # Actions-run; per-env UAMI + state container + GH environment + variables
+│   │   ├── fleet/                  # human-run once; seeds state SAs, fleet-meta UAMI, runner-pool KV, GH repo/env/vars
+│   │   ├── environment/            # Actions-run; per-env UAMI + state container + GH environment + variables; env=mgmt also creates fleet ACR
 │   │   └── team/                   # Actions-run; invokes GH module to mint team repo from template
 │   ├── stages/
-│   │   ├── 0-fleet/                # fleet-global: ACR + AAD app registrations
-│   │   │   ├── backend.tf
-│   │   │   ├── providers.tf
-│   │   │   ├── variables.tf
-│   │   │   ├── main.acr.tf
-│   │   │   ├── main.aad.tf         # Argo + Kargo AAD apps, service principals
-│   │   │   └── outputs.tf
-│   │   ├── 1-cluster/              # AKS + UAMIs + KV access + DNS role assignments + ACR pull role
+│   │   ├── 1-cluster/              # AKS + UAMIs + KV access + DNS role assignments + ACR pull role; mgmt cluster also creates uami-kargo-mgmt
 │   │   │   ├── backend.tf
 │   │   │   ├── providers.tf
 │   │   │   ├── variables.tf
@@ -115,7 +109,7 @@ fleet/
 │   ├── _defaults.yaml              # fleet-wide defaults (incl. ACR reference)
 │   ├── _template/                  # scaffold for `cp -r` onboarding
 │   │   └── cluster.yaml
-│   ├── _fleet.yaml                 # fleet-scope config consumed by Stage 0 (ACR name, AAD display names)
+│   ├── _fleet.yaml                 # fleet-scope config consumed by bootstrap stages and Stage 1 (ACR name, AAD display names, runner-pool KV name)
 │   ├── mgmt/
 │   │   └── eastus/aks-mgmt-01/cluster.yaml
 │   ├── nonprod/
@@ -253,11 +247,11 @@ node_pools:
 
 platform:
   # keyvault is NOT declared per cluster. The cluster KV is created by
-  # Stage 1 and named `kv-<cluster.name>` (derived). The fleet KV is
-  # owned by `bootstrap/fleet` (Stage -1); its id/name flow to Stage 1
-  # via the `vars.FLEET_KEYVAULT_{ID,NAME}` repo variables published
-  # by Stage 0.
-  acr:                                                           # fleet-wide; resolved from Stage 0 outputs
+  # Stage 1 and named `kv-<cluster.name>` (derived). The runner-pool KV
+  # is owned by `bootstrap/fleet` (Stage -1); its name flows to bootstrap
+  # workflows via the `vars.RUNNERS_KV_NAME` repo variable published
+  # by `bootstrap/fleet`.
+  acr:                                                           # fleet-wide; resolved from `bootstrap/environment` env=mgmt repo vars (`ACR_*`)
     login_server: acmefleet.azurecr.io
     resource_id: /subscriptions/.../registries/acmefleet
   # Optional override: `platform.keyvault.name` to override the derived name
@@ -300,7 +294,7 @@ region / cluster files override only what they need.
 
 ### 3.1 Fleet config — `clusters/_fleet.yaml`
 
-Fleet-scope configuration consumed by Stage 0 and referenced by Stage 1.
+Fleet-scope configuration consumed by every bootstrap stage and Stage 1.
 Declared once; operators do not re-state any of these values per cluster.
 
 ```yaml
@@ -309,22 +303,24 @@ fleet:
   tenant_id: 00000000-0000-0000-0000-000000000000
 
 acr:
-  name: acmefleet # Stage 0 creates acmefleet.azurecr.io
+  name: acmefleet # bootstrap/environment env=mgmt creates acmefleet.azurecr.io
   resource_group: rg-fleet-shared
   location: eastus
   sku: Premium
 
-keyvault: # FLEET KV (one, created by bootstrap/fleet — Stage -1)
-  name: kv-acme-fleet
-  resource_group: rg-fleet-shared
+runners_keyvault: # RUNNER-POOL KV (one, created by bootstrap/fleet — Stage -1)
+  name: kv-acme-runners
+  resource_group: rg-fleet-runners
   location: eastus
-  # Stores: Argo/Kargo GH App PEMs, AAD OIDC client secrets, fleet-wide
-  # pull creds, fleet-runners GH App PEM. Strictly private: public
-  # network access disabled, default-deny network ACLs, private
-  # endpoint supplied via networking.fleet_kv.private_endpoint.*
+  # Stores: fleet-runners-app-pem (KEDA scaler), fleet-meta-app-pem
+  # (env-bootstrap + team-bootstrap workflows). Strictly private:
+  # public network access disabled, default-deny network ACLs, private
+  # endpoint supplied via networking.runners_kv.private_endpoint.*
   # (operator-owned subnet + central privatelink.vaultcore.azure.net
   # zone, symmetric with the tfstate SA and runner ACR).
   # Per-cluster KVs are created by Stage 1 and named kv-<cluster.name>.
+  # Argo / Kargo OIDC RP client_secrets live in the mgmt cluster KV
+  # (created by Stage 1 mgmt), not here.
 
 aad:
   argocd:
@@ -588,11 +584,11 @@ the per-cluster tfvars.json before Terraform ever sees it:
 | `dns.zone_rg`             | `platform.dns.resource_group` override else `dns.resource_group_pattern` with `{env}` substituted  |
 | `keyvault.name`           | `platform.keyvault.name` override else `kv-<cluster.name>` (truncated to 24 chars per Azure limit) |
 | `keyvault.resource_group` | `platform.keyvault.resource_group` override else `<cluster.resource_group>`                        |
-| `acr.login_server`        | `<fleet.acr.name>.azurecr.io` (or Stage 0 output if overridden)                                    |
+| `acr.login_server`        | `<fleet.acr.name>.azurecr.io` (or override from `bootstrap/environment` env=mgmt repo var if set)  |
 | `cluster.domain`          | `<dns.zone_fqdn>` (used for `argocd.<domain>`, `kargo.<domain>`)                                   |
 | `networking.vnet_name`    | `vnet-<fleet.name>-<env>-<region>` (uniform across all envs incl. mgmt)                            |
 | `networking.net_rg_name`  | `rg-net-<env>-<region>`                                                                             |
-| `networking.snet_pe_fleet.cidr` | first `/26` of the mgmt-env-region VNet's address_space (`snet-pe-fleet`; houses CI-plane PEs — tfstate SA, fleet KV, fleet ACR). Present only on mgmt VNets; owned by `bootstrap/fleet`. |
+| `networking.snet_pe_fleet.cidr` | first `/26` of the mgmt-env-region VNet's address_space (`snet-pe-fleet`; houses CI-plane PEs — tfstate SA, runner-pool KV, fleet ACR). Present only on mgmt VNets; owned by `bootstrap/fleet` (runner-pool KV) and `bootstrap/environment` env=mgmt (fleet ACR). |
 | `networking.snet_runners.cidr` | second derived slice of the mgmt-env-region VNet's address_space sized for an ACA Container App Environment (workload profile `/23`; `snet-runners`, ACA-delegated). Present only on mgmt VNets; owned by `bootstrap/fleet`. |
 | `networking.snet_pe_env.cidr` | first `/26` of the cluster-workload zone within the env-region VNet (`snet-pe-env`; houses env Grafana PE and cluster-PE workloads — including mgmt cluster KV PE on mgmt VNets). Present on every env VNet; owned by `bootstrap/environment`. |
 | `networking.snet_aks_api.cidr` | i-th `/28` of the API pool, where i = `networking.subnet_slot`. Parent VNet = the cluster's env-region VNet. |
@@ -628,8 +624,13 @@ next-hop IP that both AKS api-server and node traffic route
 `0.0.0.0/0` at is carried as `egress_next_hop_ip` on each env-region
 entry in `_fleet.yaml`
 (`networking.envs.<env>.regions.<region>.egress_next_hop_ip`);
-adopters fill this in with their hub firewall / NVA private IP before
-creating a cluster in that region. `bootstrap/environment` always
+`init-fleet.sh` prompts once for the hub firewall / NVA private IP
+in `primary_region` and broadcasts the value into every env's
+single-region entry, since most adopters run one central NVA per
+region (Option B in `docs/findings.md` F13). Adopters with per-env
+NVAs, or who add additional regions post-init, edit `_fleet.yaml`
+directly. Blank input on the prompt maps to `null` (opt-out for
+adopter-managed routing). `bootstrap/environment` always
 authors the `rt-aks-<env>-<region>` route table shell on every
 env-region VNet (mgmt included); the `0.0.0.0/0` route entry is only
 created when `egress_next_hop_ip` is non-null. The route table is
@@ -774,7 +775,7 @@ across all envs including mgmt — and the fleet-plane zone owned by
 │
 └── 10.x0.8.0/21     fleet-plane zone (bootstrap/fleet; second half of VNet)
     ├── 10.x0.8.0/23    snet-runners     (ACA-delegated Container App Environment)
-    └── 10.x0.10.0/26   snet-pe-fleet    (tfstate SA, fleet KV, fleet ACR PEs)
+    └── 10.x0.10.0/26   snet-pe-fleet    (tfstate SA, runner-pool KV, fleet ACR PEs)
 ```
 
 Capacity per env-region VNet `/N`:
@@ -924,14 +925,14 @@ Design notes:
   pre-grants the `fleet-<env>` UAMI scoped `Network Contributor`
   on the env-region NSGs so the cross-stage write succeeds.
 
-**Repo variables published (extends §4 Stage 0 / §4 `bootstrap/environment`).**
+**Repo variables published (extends §4 `bootstrap/environment` / §4 Stage 1 mgmt).**
 
 | Variable                              | Shape                                        | Published by            | Consumed by                                                                                                          |
 | ------------------------------------- | -------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `<ENV>_<REGION>_VNET_RESOURCE_ID`     | scalar ARM id                                | `bootstrap/environment` | Stage 1 (subnet parent, DNS zone link); env observability wiring; cross-env spoke reverse-peering target for mgmt VNets |
 | `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID` | scalar ARM id                                | `bootstrap/environment` | Stage 1 (AKS node-pool ASG attachment, or NSG rule author)                                                           |
 | `MGMT_VNET_RESOURCE_IDS`              | `jsonencode({ <region> = <vnet-resource-id> })` | `bootstrap/fleet`       | `bootstrap/environment` (env=mgmt branch carves cluster-workload subnets as azapi children of these VNets; non-mgmt envs resolve mgmt↔env reverse-peering targets by iterating this map with same-region-else-first fallback); Stage 1 (mgmt DNS zone VNet link in the cluster's region) |
-| `MGMT_PE_FLEET_SUBNET_IDS`            | `jsonencode({ <region> = <subnet-resource-id> })` | `bootstrap/fleet`    | (consumed inside `bootstrap/fleet` for tfstate SA / fleet KV / fleet ACR PEs; published for observability/diagnostics) |
+| `MGMT_PE_FLEET_SUBNET_IDS`            | `jsonencode({ <region> = <subnet-resource-id> })` | `bootstrap/fleet`    | `bootstrap/fleet` (tfstate SA + runner-pool KV PEs); `bootstrap/environment` env=mgmt (fleet ACR PE) |
 | `MGMT_RUNNERS_SUBNET_IDS`             | `jsonencode({ <region> = <subnet-resource-id> })` | `bootstrap/fleet`    | (consumed inside `bootstrap/fleet` for the ACA runner-pool Container App Environment; published for diagnostics)       |
 
 Non-mgmt env-region variables are scalar because each
@@ -1018,9 +1019,9 @@ identities and GitHub scaffolding that CI-run stages depend on.
 All three roots compose the vendored `terraform/modules/github-repo`
 module (fork of `terraform-github-repository-and-content`; see
 `terraform/modules/github-repo/VENDORING.md`). `bootstrap/fleet`
-owns the fleet repo, both its GH Actions environments (`fleet-stage0`,
-`fleet-meta`), their UAMIs + federated credentials, env-scoped RBAC,
-and the `main`-branch protection ruleset via a single
+owns the fleet repo, its `fleet-meta` GH Actions environment, the
+`fleet-meta` UAMI + federated credential, env-scoped RBAC, and the
+`main`-branch protection ruleset via a single
 `module "fleet_repo"` call. `bootstrap/environment` calls the
 `modules/github-repo/modules/environment` submodule directly (the
 fleet repo itself is already owned by `bootstrap/fleet`) and
@@ -1035,7 +1036,7 @@ Env variables that reference a module's own UAMI output
 `github_actions_environment_variable` resources, not via the module's
 `variables` input, to avoid a module-to-child-output cycle.
 
-The fleet Key Vault is owned by `bootstrap/fleet` (Stage -1),
+The runner-pool Key Vault is owned by `bootstrap/fleet` (Stage -1),
 co-located with the tfstate SA and runner pool. The Stage -1 runner
 pool's Container App Job holds a Key Vault reference to
 `fleet-runners-app-pem`, which ACA validates (via the attached UAMI)
@@ -1045,16 +1046,45 @@ graph as the runner module. The vault is strictly private
 (`publicNetworkAccess = Disabled`, `networkAcls.defaultAction =
 Deny`, `bypass = None`) with a PE on the derived `snet-pe-fleet`
 subnet registering into the central
-`privatelink.vaultcore.azure.net` zone. Stage 0 holds
-`Key Vault Secrets Officer` on the vault (for rotating
-`argocd-oidc-client-secret` and seeding GH App PEMs) and references
-the KV by a derived id reconstructed from `_fleet.yaml`. The
-`uami-fleet-runners` identity and its `Key Vault Secrets User` role
-assignment on the vault also live in `bootstrap/fleet` (same apply
-graph as the runner module's KV reference). PEM seeding of
-`fleet-runners-app-pem` is done by the post-bootstrap
-`init-gh-apps.sh` helper, which must run from a host with data-plane
-reach to the KV.
+`privatelink.vaultcore.azure.net` zone. Its content is limited to
+two GitHub App PEMs: `fleet-runners-app-pem` (consumed by the KEDA
+scaler) and `fleet-meta-app-pem` (consumed by env- and team-bootstrap
+workflows). The `uami-fleet-runners` identity and its `Key Vault
+Secrets User` role assignment on the vault also live in
+`bootstrap/fleet` (same apply graph as the runner module's KV
+reference). PEM seeding of both secrets is done **in the same
+apply** via `azapi_data_plane_resource` PUTs against the vault's
+data-plane URI: `init-gh-apps.sh` (§16.4) materialises the two PEMs
+into `./.gh-apps.state.json` and the operator exports them as
+`TF_VAR_fleet_runners_app_pem` / `TF_VAR_fleet_meta_app_pem` before
+running `bootstrap/fleet`. The PUTs run as the signed-in operator,
+so the same plan also issues a `Key Vault Secrets Officer` role
+assignment to the operator on the runners KV (mirror of the
+operator → mgmt-cluster-KV self-grant on the second pass). Both
+roles are deterministic-name (`uuidv5` over scope|principalId|role)
+so re-runs are idempotent. Without the operator self-grant, the
+data-plane PUTs would 403 on first apply.
+
+`bootstrap/fleet` also creates the Argo CD and Kargo AAD application
+registrations + service principals + long-lived (2-year) client
+secrets. The applications themselves and their `ARGO_AAD_APP_ID` /
+`KARGO_AAD_APP_ID` / `KARGO_AAD_APPLICATION_OBJECT_ID` repo-level
+GitHub Actions variables are unconditional. The OIDC `client_secret`
+KV writes to the mgmt cluster KV are gated on
+`var.mgmt_cluster_kv_id != null`, which is unset on the first apply
+(before Stage 1 mgmt creates the KV) and set on the second apply
+(after). This two-pass ordering is the deliberate chicken/egg
+resolution: AAD-app creation requires Microsoft Graph permissions
+the operator holds (Global Admin / Cloud Application Administrator)
+but no Stage 1 CI identity should hold, so the apps live in the
+human-run root; the mgmt cluster KV that receives their secrets is
+created by Stage 1 mgmt, so the secret-write step necessarily lags.
+Secrets are not on automatic rotation — re-roll on demand by
+operator (taint or bump a `_version` keeper).
+
+Argo / Kargo OIDC RP `client_secret` values, plus mgmt-only
+fleet-shared secrets (e.g. `argocd-oidc-client-secret`), live in
+the **mgmt cluster KV** (Stage 1 mgmt), not in the runner-pool KV.
 
 #### `bootstrap/fleet/` — human-run, one-time per repo
 
@@ -1074,13 +1104,11 @@ messages; the rest must be arranged out-of-band by the adopter org.
   `_fleet.yaml.fleet.tenant_id`. Both `azapi` and `azuread`
   providers run with `use_cli = true`; no service-principal env
   vars are read.
-- Tenant role: **Privileged Role Administrator** (or Global
-  Administrator) — required to consent to the Microsoft Graph
-  app-role assignment that grants `fleet-stage0`
-  `Application.ReadWrite.OwnedBy`, AND to manually issue the
-  matching grant on `uami-fleet-mgmt` after `bootstrap/environment`
-  env=mgmt runs (see §5 adopter onboarding). Without it the apply
-  errors at the `azuread_app_role_assignment` step.
+- Tenant role: **Global Administrator** or **Cloud Application
+  Administrator** — required to create the Argo / Kargo AAD
+  application registrations + service principals via the `azuread`
+  provider in `bootstrap/fleet`. No standing Microsoft Graph grant
+  is issued on any UAMI; AAD-app lifecycle is operator-owned.
 - Subscription role on `_fleet.yaml.acr.subscription_id` (the
   fleet-shared subscription): **Owner** (or Contributor + User
   Access Administrator). Used to create resource groups, the
@@ -1095,20 +1123,36 @@ messages; the rest must be arranged out-of-band by the adopter org.
 - Names that must be free (or correspond to overrides in
   `_fleet.yaml`): storage account `st<fleet.name>tfstate`
   (≤ 24 chars; collides on the global namespace), and resource
-  groups `rg-fleet-tfstate` and `rg-fleet-shared` in the shared
+  groups `rg-fleet-tfstate` and `rg-fleet-runners` in the shared
   subscription must not pre-exist with conflicting state.
 
 **Networking (Stage -1 runner pool + private tfstate SA)**
 
-- Pre-existing VNet in `rg-fleet-shared` (or in the hub
+> **Status — runner pool networking is currently public.** The
+> bootstrap/fleet callsite passes `use_private_networking = false`
+> to the vendored `cicd-runners` module pending an AMPLS or NSP
+> path for the runner LAW + DCE (see §15 "Runner-pool LAW + ACR
+> private networking deferred"). The subnet / PE / private-DNS-zone
+> wiring described below remains the intended end state and is
+> still authored by `main.network.tf` for the rest of the fleet
+> plane (tfstate SA, runners KV, ACR); the runner Container App
+> Environment, runner ACR, and runner LAW simply do not consume it
+> today. Re-enabling `use_private_networking = true` is gated on
+> the §15 deferral closing.
+
+- Pre-existing VNet in `rg-fleet-runners` (or in the hub
   connectivity subscription, peered to the fleet subscription)
   with two subnets: one delegated to `Microsoft.App/environments`
-  for the runner pool (`snet-runners` by convention), and one for
-  private endpoints (`snet-pe-fleet`). The runner subnet must
-  carry a UDR routing egress through the hub firewall; the module
-  callsite sets `nat_gateway_creation_enabled = false` and
-  `public_ip_creation_enabled = false`, so there is no runner-
-  local NAT or public IP.
+  for the runner pool (`snet-runners` by convention; **unused
+  while private networking is off** but still authored), and one
+  for private endpoints (`snet-pe-fleet`; consumed by the tfstate
+  SA, runners KV, and fleet ACR PEs). Once the §15 deferral closes
+  and the callsite flips back to `use_private_networking = true`,
+  the runner subnet must carry a UDR routing egress through the hub
+  firewall; even with private networking re-enabled the callsite
+  keeps `nat_gateway_creation_enabled = false` and
+  `public_ip_creation_enabled = false`, so there is no
+  runner-local NAT or public IP.
 - Central `privatelink.blob.core.windows.net` private DNS zone in
   the hub connectivity subscription (shared across the tenant).
   Referenced by resource id from
@@ -1117,22 +1161,21 @@ messages; the rest must be arranged out-of-band by the adopter org.
   hub/connectivity sub (shared with every other ACR PE in the
   tenant). Referenced by resource id from
   `_fleet.yaml.networking.runner.container_registry_private_dns_zone_id`.
-  The runner-pool module is invoked with
+  Currently unused by the runner ACR (private networking is off —
+  see §15 "Runner-pool LAW + ACR private networking deferred");
+  remains required because the **fleet ACR** in
+  `bootstrap/environment` env=mgmt and the **per-cluster ACRs**
+  consume it. When the runner pool's private networking is
+  re-enabled, the runner-pool module is invoked with
   `container_registry_private_dns_zone_creation_enabled = false`
   and only registers A-records into this zone via the PE's DNS
   zone group — no zone is ever created by this repo.
 - Tenant-scope role: **`Private DNS Zone Contributor`** on *both*
   central zones (blob + ACR) — for the operator on first apply,
-  and for the `fleet-stage0` UAMI (for subsequent re-runs).
+  and for the `fleet-meta` UAMI (for subsequent re-runs).
 - VNet-reachable workstation (jump host / Azure Bastion / VPN)
-  for every re-run of `bootstrap/fleet` after the first apply;
-  the tfstate storage account is PE-only once Stage -1 has run.
-- One-time first-apply escape hatch:
-  `var.allow_public_state_during_bootstrap = true` leaves the
-  tfstate SA's public endpoint Enabled (with `networkAcls.defaultAction
-  = "Deny"` still in place) long enough to seed the PE + DNS zone
-  group. The flag must be flipped back to `false` on the second
-  apply. No long-lived public exposure.
+  for every run of `bootstrap/fleet`, including the first; the
+  tfstate storage account is PE-only from creation.
 
 **GitHub**
 
@@ -1145,7 +1188,7 @@ messages; the rest must be arranged out-of-band by the adopter org.
   an organization). Used by the `integrations/github` provider
   for repo settings, branch protection, environments, environment
   variables, and creating the team-repo template repo.
-- Both **GitHub Apps** (`fleet-meta`, `stage0-publisher`) created
+- Both **GitHub Apps** (`fleet-meta`, `fleet-runners`) created
   and installed on the fleet repo, with their app-id, client-id,
   PEM, and webhook secret captured. This is **not**
   `terraform apply`-able from the platform's API — the GitHub App
@@ -1154,29 +1197,25 @@ messages; the rest must be arranged out-of-band by the adopter org.
   `./init-gh-apps.sh` (repo root, next to `init-fleet.sh`), which
   automates everything *except* the click-to-create step. It
   persists the full GitHub App payload to `./.gh-apps.state.json`
-  and writes a narrow per-module overlay at
-  `terraform/bootstrap/fleet/.gh-apps.auto.tfvars` carrying only
-  the `fleet-runners` PEM that `bootstrap/fleet` consumes.
-  **Deferred (§16.4 Stage 0 wiring):** Stage 0's `variable` blocks
-  for `fleet-meta` / `stage0-publisher` credentials and the
-  KV-seed / repo-variable-publish resources that consume them are
-  not yet present. When they land, Stage 0 will derive its tfvars
-  from `./.gh-apps.state.json` at apply time.
+  and seeds both PEMs (`fleet-runners-app-pem`,
+  `fleet-meta-app-pem`) into the runner-pool KV at the end of its
+  run. `bootstrap/fleet` consumes the `fleet-runners` PEM
+  out-of-band via `terraform/bootstrap/fleet/.gh-apps.auto.tfvars`
+  (narrow per-module overlay) for the runner Container App Job's
+  KV reference.
   **Today (Phase 1):** `bootstrap/fleet` **does** require the
-  `fleet-runners` GitHub App — it seeds the App's PEM into the fleet
-  Key Vault as the `fleet-runners-app-pem` secret via
+  `fleet-runners` GitHub App — it seeds the App's PEM into the
+  runner-pool KV as the `fleet-runners-app-pem` secret via
   `azapi_data_plane_resource` (the `fleet_runners_app_pem` variable in
   `terraform/bootstrap/fleet/variables.tf` is `nullable = false`).
-  Adopters who opt not to run `init-gh-apps.sh` must create the three
+  Adopters who opt not to run `init-gh-apps.sh` must create the two
   Apps manually via *Organization settings → Developer settings →
-  GitHub Apps* with the permissions listed in §4 Stage 0, and supply
+  GitHub Apps* with the permissions listed in §16.4, and supply
   the `fleet-runners` PEM directly via `TF_VAR_fleet_runners_app_pem`
   or a hand-written `terraform/bootstrap/fleet/.gh-apps.auto.tfvars`.
-  The `fleet-meta` and `stage0-publisher` Apps are **not** required
-  for `bootstrap/fleet` apply — Stage 0 does not yet declare input
-  variables for them, so their credentials currently have no TF
-  consumer (they're supplied directly to workflow secrets by the
-  operator).
+  The `fleet-meta` App is **not** required for `bootstrap/fleet`
+  apply — its PEM is consumed by env- and team-bootstrap workflows
+  via the runner-pool KV at workflow runtime.
 - Repo `<github_org>/<team_template_repo>` (default
   `team-repo-template`) must **not** pre-exist; it is created
   fresh by `bootstrap/fleet` with `prevent_destroy = true`.
@@ -1205,21 +1244,20 @@ messages; the rest must be arranged out-of-band by the adopter org.
   `bootstrap/environment` runs for that env).
 - **Future (once §16.4 lands):** `init-gh-apps.sh` (at the repo
   root) has been run successfully, persisting the full GH App
-  payload to `./.gh-apps.state.json`. Stage 0 derives the GH App
-  PEMs / webhook secrets / IDs it needs from that state file (or
-  an equivalently-shaped tfvars file generated from it) — see §16.4
-  for the exact variable names. The fleet Key Vault is created by
-  `bootstrap/fleet`; **Stage 0 seeds the GH App PEMs + webhook
-  secrets into it** (Stage 0 holds `Key Vault Secrets Officer` on
-  the vault). `bootstrap/fleet` does not write or manage the GitHub
-  App credentials beyond seeding the `fleet-runners` PEM that its
-  own runner pool consumes.
+  payload to `./.gh-apps.state.json` and seeding both
+  `fleet-runners-app-pem` and `fleet-meta-app-pem` into the
+  runner-pool KV created by `bootstrap/fleet` (the script uses
+  the operator's tenant-admin credentials and data-plane reach to
+  the KV). `bootstrap/fleet` consumes only the `fleet-runners` PEM
+  for its own runner pool's KV reference; `fleet-meta-app-pem` is
+  consumed by env- and team-bootstrap workflows at runtime via
+  Key Vault references. No GitHub App credentials beyond these two
+  PEMs live in the runner-pool KV.
   **Today (Phase 1):** the broader §16.4 GH App bootstrap is not yet
   a prerequisite, but `bootstrap/fleet` **does** already require the
   `fleet-runners` PEM input (via `fleet_runners_app_pem` in
   `terraform/bootstrap/fleet/variables.tf`, `nullable = false`) and
-  seeds only that one Key Vault secret; Stage 0 has not yet added
-  the broader §16.4 GH App input variables / KV-seed resources.
+  seeds only that one Key Vault secret.
 
 Creates:
 
@@ -1239,16 +1277,19 @@ Creates:
 - **Fleet-plane subnets** on each mgmt env-region VNet (derived CIDRs
   per §3.4 / docs/naming.md):
   - `snet-pe-fleet` — `/26` in the fleet-plane zone of the mgmt
-    VNet; houses the tfstate SA PE, fleet KV PE, fleet ACR PE. NSG
-    `nsg-pe-fleet-<region>` authored here.
+    VNet; houses the tfstate SA PE, runner-pool KV PE, and (consumed
+    cross-stage by `bootstrap/environment` env=mgmt) the fleet ACR
+    PE. NSG `nsg-pe-fleet-<region>` authored here.
   - `snet-runners` — `/23` in the fleet-plane zone; delegated to
     `Microsoft.App/environments` for the ACA runner pool's Container
     App Environment. NSG `nsg-runners-<region>` authored here.
     `route_table` UDR for hub-egress is adopter-referenced (BYO).
-  Existing PE/ACA references in `main.state.tf` / `main.fleet-kv.tf`
-  / `main.runner.tf` / `main.acr.tf` (fleet ACR PE) land on these
-  derived subnet ids; `_fleet.yaml` exposes no operator-visible
-  subnet-id fields for them.
+  Existing PE/ACA references in `main.state.tf` /
+  `main.runners-kv.tf` / `main.runner.tf` land on these derived
+  subnet ids (the fleet ACR PE is created cross-stage by
+  `bootstrap/environment` env=mgmt and resolves the same subnet via
+  `vars.MGMT_PE_FLEET_SUBNET_IDS`); `_fleet.yaml` exposes no
+  operator-visible subnet-id fields for them.
 - **`Network Contributor` on each mgmt env-region VNet resource id
   → `fleet-meta` UAMI** — lets `bootstrap/environment` carve
   cluster-workload subnets onto the pre-existing mgmt VNets under
@@ -1257,11 +1298,6 @@ Creates:
 - **Fleet TF state storage account** (`rg-fleet-tfstate`) with
   `tfstate-fleet` container, soft-delete + versioning on. All downstream
   stages' state lands here (including per-env containers).
-- **`fleet-stage0` UAMI** + federated credential
-  `repo:<org>/fleet:environment:fleet-stage0`. RBAC:
-  `Contributor` on `rg-fleet-shared`; `Storage Blob Data Contributor` on
-  `tfstate-fleet` container; Graph `Application.ReadWrite.OwnedBy`
-  (owner-scoped CRUD on the two AAD apps Stage 0 creates).
 - **`fleet-meta` UAMI** + federated credential
   `repo:<org>/fleet:environment:fleet-meta`. RBAC:
   `User Access Administrator` + `Contributor` at
@@ -1270,26 +1306,29 @@ Creates:
   not mutate AAD apps, so the previous
   `AppRoleAssignment.ReadWrite.All` grant is not needed. This is
   the privileged identity used by env-bootstrap and team-bootstrap
-  workflows.
-- **`fleet-meta` GitHub App** (admin-class) and **`stage0-publisher`
+  workflows, and also publishes repo variables (via the `fleet-meta`
+  GitHub App's `Variables: write` permission) on behalf of
+  `bootstrap/environment` env=mgmt and Stage 1 mgmt.
+- **`fleet-meta` GitHub App** (admin-class) and **`fleet-runners`
   GitHub App** (narrow). Both are created **out of band** by the
   `init-gh-apps.sh` helper (§16.4) before this stage runs, because
   the GitHub App Manifest flow requires a one-time browser consent
-  click that no API can bypass. **`bootstrap/fleet` does not touch
-  GH App credentials** — the fleet Key Vault is created by
-  `bootstrap/fleet` itself, but storing the PEMs / webhook secrets
-  there is Stage 0's job (Stage 0 holds `Key Vault Secrets Officer`
-  on the vault for exactly this purpose). `bootstrap/fleet`'s only
-  involvement with the Apps is creating the `fleet-stage0` /
-  `fleet-meta` GitHub environments that Stage 0 later populates
-  with App-derived variables.
+  click that no API can bypass. **`bootstrap/fleet` itself only
+  consumes the `fleet-runners` PEM** (for the runner Container App
+  Job's KV reference). The runner-pool Key Vault is created by
+  `bootstrap/fleet`; `init-gh-apps.sh` seeds both PEMs
+  (`fleet-runners-app-pem`, `fleet-meta-app-pem`) into it
+  post-bootstrap. The `fleet-meta` GitHub environment is created
+  by `bootstrap/fleet` and populated with App-derived variables.
   - Required permissions per App (asserted by the manifest):
     - `fleet-meta`: `administration:write`, `environments:write`,
       `variables:write`, `secrets:write`, `contents:write` —
       the privileged identity used by env-bootstrap and
-      team-bootstrap workflows.
-    - `stage0-publisher`: `variables:write` only — used by the
-      Stage 0 workflow to publish outputs as repo variables (§10).
+      team-bootstrap workflows AND by the repo-variable publish
+      steps in `bootstrap/environment` env=mgmt and Stage 1 mgmt
+      (§10).
+    - `fleet-runners`: `actions:read` + `metadata:read` only —
+      consumed by the KEDA scaler attached to the runner pool.
 - **Fleet GitHub repo** — **created** via the organization's user-supplied
   **GH-repo Terraform module** (module source TBD; placeholder in Phase 1
   scaffold; replaced once published module path is known). Applies branch
@@ -1298,18 +1337,18 @@ Creates:
   `platform-gitops/components/*/environments/{dev,staging}/values.yaml`).
   Idempotent: if the repo already exists from a prior run, managed as
   data (no create).
-- **`fleet-stage0` and `fleet-meta` GitHub environments** on the fleet
-  repo, with their variables/secrets populated.
+- **`fleet-meta` GitHub environment** on the fleet repo, with its
+  variables/secrets populated.
 - **Team-repo template repo** (`<org>/team-repo-template`) — created
   via the same GH-repo module, seeded with `services/<example>/{base,environments}`
   layout, CI for image build/push to fleet ACR, and README.
 
 State backend: local (bootstrap creates the remote backend).
 
-Re-run trigger: rare — rotate `fleet-meta` / `fleet-stage0` federated-credential
-subjects (e.g. repo rename or org move), rebuild/rotate meta UAMIs or their
-RBAC, change fleet-repo settings owned by this stage (branch protection,
-`fleet-stage0` / `fleet-meta` environment reviewer policy), bump the GH-repo
+Re-run trigger: rare — rotate the `fleet-meta` federated-credential
+subject (e.g. repo rename or org move), rebuild/rotate the meta UAMI or
+its RBAC, change fleet-repo settings owned by this stage (branch
+protection, `fleet-meta` environment reviewer policy), bump the GH-repo
 module version, or add a new fleet-wide meta identity. Adding a new
 environment does **not** require re-running Stage -1 — that is handled
 entirely by `bootstrap/environment`.
@@ -1318,9 +1357,9 @@ entirely by `bootstrap/environment`.
 
 `bootstrap/fleet` also stands up the fleet's **single shared self-hosted
 GitHub Actions runner pool** so every downstream tfstate-writing workflow
-(`env-bootstrap.yaml`, `team-bootstrap.yaml`, `tf-plan.yaml`, `tf-apply.yaml`,
-`stage0.yaml`) can run inside the adopter's VNet and reach the private-only
-tfstate storage account. Implementation lives in
+(`env-bootstrap.yaml`, `team-bootstrap.yaml`, `tf-plan.yaml`,
+`tf-apply.yaml`) can run inside the adopter's VNet and reach the
+private-only tfstate storage account. Implementation lives in
 `terraform/bootstrap/fleet/main.runner.tf` and calls the vendored
 `terraform/modules/cicd-runners/` module (see its `VENDORING.md` for the
 delta against upstream `Azure/terraform-azurerm-avm-ptn-cicd-agents-and-runners@v0.5.2`).
@@ -1329,34 +1368,31 @@ Key design choices:
 
 - **Single pool, repo-scoped**, label `self-hosted`. The trust boundary for
   what each workflow can touch is the GitHub Environment + federated credential
-  (per-env `fleet-<env>` UAMI, `fleet-meta` for env/team bootstrap,
-  `fleet-stage0` for Stage 0), **not** network reachability. A shared pool
-  keeps runner plumbing off the critical path for new envs.
+  (per-env `fleet-<env>` UAMI, `fleet-meta` for env/team bootstrap and for
+  Stage 1 mgmt repo-var publishing), **not** network reachability. A shared
+  pool keeps runner plumbing off the critical path for new envs.
 - **GH App authentication for KEDA polling**, driven by a dedicated
-  `fleet-runners` GitHub App (third App in the inventory alongside
-  `fleet-meta` and `stage0-publisher` — see §16.4). Permissions:
-  `actions:read` + `metadata:read`. The PEM lives in the fleet KV under
+  `fleet-runners` GitHub App (second App in the inventory alongside
+  `fleet-meta` — see §16.4). Permissions: `actions:read` +
+  `metadata:read`. The PEM lives in the runner-pool KV under
   `fleet-runners-app-pem` (seeded post-bootstrap by `init-gh-apps.sh`;
   see §16.4) and is resolved into the
   Container App Job as a **Key Vault secret reference** (`{ keyVaultUrl,
   identity }`) via a callsite-created `uami-fleet-runners` UAMI.
   `bootstrap/fleet` grants that UAMI `Key Vault Secrets User` on the
-  fleet KV it creates in the same apply graph — the KV, the secret
+  runner-pool KV it creates in the same apply graph — the KV, the secret
   path, and the role assignment must all exist before ACA validates
   the Container App Job's KV reference at PUT time, which is why
-  fleet-KV ownership sits in Stage -1 rather than Stage 0. The PEM
-  never enters Terraform state. Vendor patch documented in
+  runner-pool-KV ownership sits in Stage -1. The PEM never enters
+  Terraform state. Vendor patch documented in
   `modules/cicd-runners/VENDORING.md` §4.
 - **Private tfstate SA**: `bootstrap/fleet/main.state.tf` sets
-  `publicNetworkAccess = var.allow_public_state_during_bootstrap ? "Enabled"
-  : "Disabled"` (default `false`) with `networkAcls.defaultAction = "Deny"`
-  always, and seeds a `Microsoft.Network/privateEndpoints` + optional
+  `publicNetworkAccess = "Disabled"` with `networkAcls.defaultAction
+  = "Deny"`, and seeds a `Microsoft.Network/privateEndpoints` +
   `privateDnsZoneGroups` child referencing the central
-  `privatelink.blob.core.windows.net` zone from `_fleet.yaml`. **Two-phase
-  first apply** (see Prerequisites above): first apply with
-  `allow_public_state_during_bootstrap = true` to seed the PE / DNS zone
-  group; second apply (and every subsequent re-run) with the flag flipped
-  back to `false`, from a VNet-reachable workstation.
+  `privatelink.blob.core.windows.net` zone from `_fleet.yaml`. The
+  apply must run from a VNet-reachable workstation from the very
+  first invocation (see Prerequisites above).
 - **Per-pool private ACR + per-pool LAW** (`container_registry_creation_enabled
   = true`, `log_analytics_workspace_creation_enabled = true`). Keeps the
   runner plumbing off the fleet-ACR ABAC delegation path and gives each
@@ -1377,25 +1413,18 @@ Key design choices:
   tfstate.private_endpoint.*}`. See `docs/adoption.md` §3 + §5.1 for the
   full list of post-init fields.
 
-**Stage 0 implication (follow-up, not in Stage -1):** `bootstrap/fleet`
-creates the fleet KV and grants `uami-fleet-runners` `Key Vault Secrets
-User` on it, but does **not** write any secret material. Stage 0 must
-(a) seed `fleet-runners-app-pem` (plus the other GH App PEMs and
-webhook secrets) into the fleet KV — it holds `Key Vault Secrets
-Officer` on the vault via a role assignment granted in `bootstrap/fleet`
-to the `fleet-stage0` UAMI — and (b) publish the `fleet-runners` App
-IDs as repo variables.
-
 **Ordering constraint:** `init-gh-apps.sh` (§16.4) must run **before**
 `bootstrap/fleet` — the vendored runner module's variable validation
 refuses empty `version_control_system_github_application_{id,installation_id}`
 when `authentication_method = "github_app"`, so
 `github_app.fleet_runners.{app_id, installation_id}` must be populated
 in `clusters/_fleet.yaml` before the first `bootstrap/fleet` apply.
-The PEM itself is only resolved at runtime (KV reference), so the
-first apply succeeds once the IDs are present; the Container App Job
-then fails deterministically at scale-out until Stage 0 seeds the
-PEM. Tracked as an outside-PLAN scaffolding row in STATUS.md.
+The `fleet-runners` PEM itself is only resolved at runtime (KV
+reference), so the first apply succeeds once the IDs are present;
+the Container App Job then fails deterministically at scale-out
+until `init-gh-apps.sh` seeds the PEM into the runner-pool KV
+post-bootstrap. Tracked as an outside-PLAN scaffolding row in
+STATUS.md.
 
 #### `bootstrap/environment/` — Actions-run via `env-bootstrap.yaml`
 
@@ -1425,6 +1454,39 @@ Creates:
     cluster-workload subnets onto them as azapi children, using the
     `Network Contributor` grant `bootstrap/fleet` placed on the
     `fleet-meta` UAMI.
+
+    **Mgmt-singleton precondition.** Exactly one cluster in the
+    fleet may carry `cluster.role = management`. This stage's
+    `env=mgmt` branch evaluates `length([for c in
+    local.clusters : c if c.env == "mgmt" && c.role ==
+    "management"]) == 1` as a `precondition` on every mgmt-only
+    resource (fleet ACR, ACR PE, ACR repo-vars). Adding a second
+    mgmt cluster fails plan deterministically — the architecture
+    assumes a single hub for Argo / Kargo / Grafana / fleet ACR.
+
+    **Fleet ACR (env=mgmt only).**
+    - **Azure Container Registry** (`azapi_resource`
+      `Microsoft.ContainerRegistry/registries`, Premium SKU for
+      geo-replication + OCI artifact / Helm chart support) named
+      `<fleet.name>fleet` per `_fleet.yaml.acr.name`, in
+      `rg-fleet-shared` per `_fleet.yaml.acr.resource_group`.
+      `properties.publicNetworkAccess = "Disabled"`,
+      `properties.networkRuleSet.defaultAction = "Deny"`. Single
+      registry for all fleet images and Helm charts; teams push to
+      `<acr>.azurecr.io/<team>/<image>` and
+      `<acr>.azurecr.io/helm/<chart>`.
+    - **Private endpoint** for the ACR registering into the
+      `snet-pe-fleet` subnet — resolved cross-stage from
+      `vars.MGMT_PE_FLEET_SUBNET_IDS` (published by `bootstrap/fleet`).
+      DNS zone group references the central `privatelink.azurecr.io`
+      zone (BYO, from
+      `_fleet.yaml.networking.private_dns_zones.azurecr`).
+    - **Repo-level variables published** via
+      `github_actions_variable` (visibility = `all`), gated on the
+      mgmt-singleton precondition: `ACR_RESOURCE_ID`, `ACR_NAME`,
+      `ACR_LOGIN_SERVER`. Consumed by Stage 1 mgmt (AcrPull on
+      `uami-kargo-mgmt`), Stage 1 spokes (kubelet AcrPull
+      delegation), and team-repo CI (image push targets).
   - **Uniform cluster-workload subnets (every env, mgmt included).**
     Authored as azapi children on the env-region VNet per §3.4:
     - `snet-pe-env` — first `/26` of the cluster-reserved zone;
@@ -1475,7 +1537,11 @@ Creates:
   `repo:<org>/fleet:environment:fleet-<env>`. RBAC:
   - `Contributor` at subscription or env-root RG scope.
   - `Storage Blob Data Contributor` on `tfstate-<env>`.
-  - `Key Vault Secrets User` on fleet KV.
+  - `Key Vault Secrets User` on the **mgmt cluster KV** (resource id
+    consumed via `vars.MGMT_CLUSTER_KV_ID`, published by Stage 1 mgmt).
+    For `env=mgmt` apply this is created in a follow-up apply once
+    Stage 1 mgmt has published the variable; non-mgmt envs consume
+    it on first apply.
   - `User Access Administrator` scoped **only** to the fleet ACR
     resource id, with an **ABAC condition constraining role assignments
     to the `AcrPull` role definition and `ServicePrincipal` principal
@@ -1626,218 +1692,6 @@ Creates:
 State backend: `tfstate-fleet` container, key
 `bootstrap/team/<team>.tfstate`.
 
-### Stage 0 — `terraform/stages/0-fleet`
-
-Fleet-global, applied once and thereafter on additions only. Single state
-file `fleet.tfstate` in a dedicated `tfstate-fleet` container.
-
-Creates:
-
-- **Azure Container Registry** (`azapi_resource`
-  `Microsoft.ContainerService/registries` — Premium SKU for
-  geo-replication + OCI artifact / Helm chart support). Single registry
-  for all fleet images and Helm charts; teams push to
-  `<acr>.azurecr.io/<team>/<image>` and `<acr>.azurecr.io/helm/<chart>`.
-- **Fleet Key Vault secrets** — the vault itself
-  (`Microsoft.KeyVault/vaults`, Standard SKU, RBAC authorization mode,
-  purge protection on, strictly private) is created by `bootstrap/fleet`
-  (Stage -1); Stage 0 references it by a derived id reconstructed from
-  `_fleet.yaml` (no data-source lookup — avoids needing read-plane
-  permissions at plan time) and holds `Key Vault Secrets Officer` on
-  the vault (role assignment granted to the `fleet-stage0` UAMI in
-  `bootstrap/fleet`). Stage 0 is responsible for **seeding and
-  rotating** the fleet-wide secret material — values that must be read
-  by more than one cluster. Per-cluster or single-cluster secrets
-  belong in that cluster's own KV.
-  - `argocd-github-app-pem` — the central ArgoCD on the mgmt cluster
-    reads it to authenticate to GitHub for platform-gitops pulls.
-  - `argocd-oidc-client-secret` — the central ArgoCD on the mgmt
-    cluster reads it for human SSO auth-code flow.
-  - `fleet-meta-app-pem`, `fleet-meta-webhook-secret`,
-    `stage0-publisher-app-pem`, `stage0-publisher-webhook-secret`,
-    `fleet-runners-app-pem`, `fleet-runners-webhook-secret` —
-    the three GH Apps created out-of-band by `init-gh-apps.sh`
-    (§16.4). Values are sourced from `./.gh-apps.state.json` (which
-    the script persists) — Stage 0's tf-apply workflow reads them
-    via a state-derived tfvars file. Downstream workflows read them
-    at run time via the `fleet-meta` / `stage0-publisher` UAMIs;
-    the `fleet-runners-app-pem` is consumed by the runner-pool
-    Container App Job via Key Vault secret reference (never
-    plaintext in state, never via Terraform read). `bootstrap/fleet`
-    creates the vault with no secrets in it; the runner pool's
-    Container App Job deterministically fails scale-out until
-    Stage 0 seeds the PEM (tracked as an ordering constraint in
-    §4 Stage -1 `bootstrap/fleet` → *Runner infrastructure*).
-  - additional fleet-wide secrets added over time.
-  Kargo GitHub App PEM and Kargo OIDC client secret are **not** here
-  — only the mgmt cluster uses them, so they live in the mgmt
-  cluster's KV (see Stage 1).
-- **Argo AAD application registration** (`azuread_application`) —
-  single-tenant (`sign_in_audience = "AzureADMyOrg"`), used as the
-  OIDC client by the central ArgoCD instance on the **management
-  cluster** (Argo is hub-and-spoke per §1; spoke clusters do not run
-  ArgoCD). `group_membership_claims = ["SecurityGroup"]`.
-  `web.redirect_uris` contains exactly one entry — the mgmt
-  cluster's Argo callback URL, derived from its directory path
-  (`https://argocd.<mgmt-name>.<region>.mgmt.<fleet_root>/auth/callback`).
-  Stage 0 owns it atomically; adding or removing a workload
-  (spoke) cluster never touches the redirect list, only adding /
-  removing the mgmt cluster does.
-  **Federated Identity Credentials on this AAD app**
-  (`azuread_application_federated_identity_credential`) are added
-  by the **mgmt cluster's Stage 2** (needs the mgmt AKS OIDC issuer
-  URL, a Stage 1 output). Subjects =
-  `system:serviceaccount:argocd:argocd-server`,
-  `system:serviceaccount:argocd:argocd-application-controller`, and
-  `system:serviceaccount:argocd:argocd-applicationset-controller`;
-  audience = `api://AzureADTokenExchange`. These let the central
-  Argo controllers authenticate to AAD-protected APIs (e.g., the
-  AKS AAD server app, when minting per-spoke tokens via the exec
-  plugin) as the Argo app without any shared secret. **No
-  per-spoke FIC on the Argo AAD app exists** — spoke access flows
-  through each spoke's own `uami-argocd-spoke-<cluster>` UAMI (see
-  Stage 1), not through the Argo AAD app.
-  A **single RP `client_secret`** is still required solely for the
-  OIDC auth-code flow (human SSO login) — Argo's upstream OIDC/Dex
-  does not yet support `client_assertion` RP authentication. Managed
-  as an `azuread_application_password` with `end_date_relative =
-"2160h"` (90 days) and a `rotate_when_changed` keeper pinned to a
-  `time_rotating` resource (`rotation_days = 60`). TF handles
-  rotation inline: on each apply, if the keeper has advanced, a new
-  password is created before the old one is destroyed — so the
-  existing secret remains valid through the rotation window while
-  ESO fans out the new value. The resulting `.value` is written to
-  the fleet KV as an `azapi_resource`
-  `Microsoft.KeyVault/vaults/secrets` (new secret version); ESO on
-  the mgmt cluster syncs it into the `argocd` namespace and Argo
-  reloads on secret change. No out-of-band rotation workflow needed.
-- **Kargo AAD application registration** (`azuread_application`) —
-  same shape as the Argo app. `web.redirect_uris` contains only the
-  **mgmt cluster's** Kargo callback URL (derived from the mgmt
-  cluster's directory path the same way Argo URIs are).
-  **The `azuread_application_password` for Kargo is NOT created here**
-  — it's created in the mgmt cluster's Stage 1 alongside the mgmt
-  cluster KV that stores it (see Stage 1). Stage 0 only exports
-  `kargo_aad_application_id` and `kargo_aad_application_object_id`
-  for downstream stages. This keeps the secret and its destination
-  KV in the same plan, and keeps a mgmt-only secret out of the
-  fleet-wide KV.
-  Per-cluster FICs on the Kargo AAD app are still added in Stage 2,
-  gated on `cluster.role == "management"` (covering
-  `system:serviceaccount:kargo:kargo-controller` and
-  `system:serviceaccount:kargo:kargo-api`).
-- Group-claim configuration on both apps so `groups` claim emits security
-  group object IDs (these match `oidcGroup` in team YAML).
-- The RP `client_secret` values above are the **only fleet secrets
-  under TF auto-rotation**; every other AAD↔workload and
-  AAD↔CI credential is federated (FIC).
-- **Kargo mgmt UAMI** (`azapi_resource`
-  `Microsoft.ManagedIdentity/userAssignedIdentities`) named
-  `uami-kargo-mgmt`, placed in `rg-fleet-shared` in
-  `sub-fleet-shared`. It's a fleet-wide singleton (exactly one,
-  attached to the mgmt cluster) so it lives here, not in any
-  cluster's Stage 1, which means its `principalId` flows through
-  the standard Stage 0 → repo variable publish path and is
-  consumed by every workload cluster's Stage 1 as
-  `vars.KARGO_MGMT_UAMI_PRINCIPAL_ID`. No cross-cluster CI
-  ordering or cross-subscription data-source lookup required.
-  Carries two role assignments total across the fleet:
-  - **`AcrPull` on the fleet ACR** — granted here in Stage 0. Lets
-    Kargo Warehouses that subscribe to ACR repositories authenticate
-    as this UAMI (no image-pull secrets).
-  - **`AKS RBAC Reader` on every workload AKS cluster** — granted
-    in each workload cluster's Stage 1 (see Stage 1 role
-    assignments). Lets Kargo read Argo `Application` CRs on
-    workload clusters for health verification.
-  Azure Workload Identity annotates a K8s ServiceAccount with
-  exactly one `client-id`, so the Kargo controller SA federates to
-  exactly this one UAMI — both capabilities must live on it.
-  The **FIC** binding this UAMI to the Kargo controller SA
-  (`system:serviceaccount:kargo:kargo-controller` on the mgmt
-  cluster) is created by the **mgmt cluster's Stage 2** (where
-  the mgmt AKS OIDC issuer URL is available).
-Outputs — published to fleet-wide GitHub repository variables by the
-Stage 0 workflow (via the `stage0-publisher` GitHub App) and consumed
-by downstream stages as `vars.<UPPER_SNAKE_NAME>`. All values are
-non-sensitive identity facts (ids, names, principal/client ids); no
-secret material is ever a Stage 0 output.
-
-**Fleet shared infrastructure**
-
-| TF output                     | Repo variable                   | Consumed by                                                                                             |
-| ----------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `acr_login_server`            | `ACR_LOGIN_SERVER`              | Stage 1 (AcrPull target hint); Stage 2 (Argo/Kargo Helm image refs); team repo CI for `docker push`     |
-| `acr_resource_id`             | `ACR_RESOURCE_ID`               | Stage 1 (AcrPull role-assignment scope for each cluster's kubelet identity)                             |
-| `fleet_keyvault_id`           | `FLEET_KEYVAULT_ID`             | Stage 1 (`Key Vault Secrets User` role-assignment scope for each cluster's ESO UAMI)                    |
-| `fleet_keyvault_name`         | `FLEET_KEYVAULT_NAME`           | Stage 2 (`platform-identity` secret, ESO `ClusterSecretStore`, ephemeral azapi KV read for Argo creds)  |
-| `fleet_resource_group_name`   | `FLEET_RESOURCE_GROUP_NAME`     | Stage 1 (scoping lookups) — informational                                                               |
-
-**AAD applications** (object_id = directory object id; application_id = client id / `appId`)
-
-| TF output                               | Repo variable                             | Consumed by                                                                                                                       |
-| --------------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `argocd_aad_application_id`             | `ARGOCD_AAD_APPLICATION_ID`               | Stage 2 on every cluster — Argo Helm OIDC `clientID`; `platform-identity` secret                                                  |
-| `argocd_aad_application_object_id`      | `ARGOCD_AAD_APPLICATION_OBJECT_ID`        | Stage 2 on every cluster — parent ref for per-cluster `azuread_application_federated_identity_credential`                         |
-| `kargo_aad_application_id`              | `KARGO_AAD_APPLICATION_ID`                | Mgmt Stage 2 — Kargo Helm OIDC `clientID`                                                                                         |
-| `kargo_aad_application_object_id`       | `KARGO_AAD_APPLICATION_OBJECT_ID`         | Mgmt Stage 1 — parent ref for `azuread_application_password` (Kargo RP secret generation); mgmt Stage 2 — parent ref for Kargo FIC |
-
-**Kargo mgmt UAMI** (fleet-wide singleton, single SA federates to it)
-
-| TF output                         | Repo variable                       | Consumed by                                                                                                                 |
-| --------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `kargo_mgmt_uami_resource_id`     | `KARGO_MGMT_UAMI_RESOURCE_ID`       | Mgmt Stage 2 — parent ref for `fc-kargo-mgmt` FIC (`.../federatedIdentityCredentials`)                                      |
-| `kargo_mgmt_uami_principal_id`    | `KARGO_MGMT_UAMI_PRINCIPAL_ID`      | Every workload cluster's Stage 1 — `AKS RBAC Reader` role-assignment `properties.principalId` on the workload AKS resource  |
-| `kargo_mgmt_uami_client_id`       | `KARGO_MGMT_UAMI_CLIENT_ID`         | Mgmt Stage 2 — `azure.workload.identity/client-id` annotation on the `kargo-controller` ServiceAccount                      |
-
-**GitHub Apps** (Apps themselves are created by `init-gh-apps.sh`
-out-of-band per §16.4; Stage 0 receives their ids/client ids via
-a tfvars file derived from `./.gh-apps.state.json` and publishes
-them as repo variables so downstream workflows can mint
-installation tokens)
-
-| TF output                           | Repo variable                  | Consumed by                                                                                      |
-| ----------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------ |
-| `fleet_meta_app_id`                 | `FLEET_META_APP_ID`            | `env-bootstrap.yaml`, `team-bootstrap.yaml` — installation-token minting under `fleet-meta` UAMI |
-| `fleet_meta_app_client_id`          | `FLEET_META_APP_CLIENT_ID`     | same workflows — App client id for JWT `iss` claim                                               |
-| `stage0_publisher_app_id`           | `STAGE0_PUBLISHER_APP_ID`      | `tf-apply.yaml` (Stage 0 `publish-stage0-outputs` step) — token to `PATCH` repo variables        |
-| `stage0_publisher_app_client_id`    | `STAGE0_PUBLISHER_APP_CLIENT_ID`| same                                                                                             |
-
-
-**Not published as repo variables** (available from other sources, no indirection needed):
-
-- `tenant_id`, `subscription_id` — already env variables on the `fleet-<env>` GitHub environment; Stage 0 doesn't re-export them.
-- Fleet KV secret *names* (e.g., `argocd-github-app-pem`, `argocd-oidc-client-secret`) — string constants, declared as `locals` in Stage 2, not Stage 0 outputs.
-- AAD app RP `client_secret` values — never outputs; materialized by `azuread_application_password` into fleet KV (Argo) or mgmt cluster KV (Kargo, in Stage 1).
-
-**Publishing mechanism**: a final `publish-stage0-outputs` step in
-`.github/workflows/tf-apply.yaml` calls `terraform -chdir=... output
--json` and, for each entry above, `PATCH /repos/{org}/{repo}/actions/variables/{name}`
-authenticated as the `stage0-publisher` GitHub App. Absent variables
-are created with `POST`. The App's only permission on the repo is
-`variables:write`, so even a compromised Stage 0 run cannot touch
-secrets, code, or environment-scoped variables.
-
-The **per-env observability stack** (Azure Monitor Workspace + Managed
-Grafana + Action Group) is **not** created here — it lives in
-`bootstrap/environment` so its lifecycle matches env onboarding, its
-state file sits alongside the env's other env-scope resources, and
-prod's stack is never touched when a new non-prod env is added. See
-§4.1.
-
-Why AAD apps live in Terraform: they are long-lived, fleet-wide identity
-artifacts; their client IDs must be pinned into both per-cluster Argo
-helm values and the `platform-identity` secret. Managing them as code
-keeps redirect URI additions PR-reviewed and tracked alongside cluster
-onboarding.
-
-Stage 0 depends on: `bootstrap/fleet` (Stage -1) — the fleet KV it
-seeds secrets into, and the `fleet-stage0` UAMI + GitHub environment
-it runs under, are all created there. Stage 0 does **not** create
-per-cluster KVs — those are created in Stage 1 when the owning cluster
-is provisioned. It also no longer creates the fleet KV itself; it only
-seeds / rotates secrets inside it and publishes its id/name as repo
-variables for downstream consumption.
-
 ### Stage 1 — `terraform/stages/1-cluster`
 
 Inputs: merged tfvars.json produced from the cluster YAML hierarchy.
@@ -1868,21 +1722,65 @@ envs.<env>.aks.admin_groups` — pure break-glass; members
   `<keyvault.name>` (derived per §3.3) in `<keyvault.resource_group>`.
   Holds cluster-local secrets: TLS wildcard, observability API keys,
   team-owned app secrets. On the **management cluster only**, also
-  holds Kargo-specific fleet secrets (only the mgmt cluster reads
-  them):
-  - `kargo-oidc-client-secret` — created in this same Stage 1 plan
-    as an `azuread_application_password` on the Stage 0-owned Kargo
-    app (referenced via `vars.KARGO_AAD_APPLICATION_OBJECT_ID`),
-    `end_date_relative = "2160h"`, `rotate_when_changed` keyed off
-    a `time_rotating` resource (`rotation_days = 60`),
-    create-before-destroy — then the resulting `.value` is written
-    via `azapi_resource` `Microsoft.KeyVault/vaults/secrets`.
+  serves as the destination for Argo + Kargo fleet-shared OIDC RP
+  secrets and other mgmt-only fleet secrets that ESO on every
+  cluster (mgmt + spokes) reads from this KV via cross-VNet PE
+  access. Stage 1 mgmt creates the KV itself; the fleet-shared
+  secret values below are **written by `bootstrap/fleet`** on its
+  second-pass apply (after `MGMT_CLUSTER_KV_ID` is published as a
+  repo var by Stage 1 mgmt — see §4 Stage -1 two-pass description):
+  - `argocd-oidc-client-secret` — written by `bootstrap/fleet` from
+    the `azuread_application_password` resource on the Argo
+    `azuread_application` it owns. Long-lived (2-year `end_date`),
+    re-rolled on demand by operator.
+  - `kargo-oidc-client-secret` — same shape, on the Kargo
+    `azuread_application`, also owned by `bootstrap/fleet`.
+  - `argocd-github-app-pem` — the central ArgoCD reads it to
+    authenticate to GitHub for platform-gitops pulls. Seeded
+    out-of-band (manual write by the operator onboarding the
+    Argo GitHub App, or via a one-shot helper); ESO then owns
+    ongoing rotation as documented in §8.
   - `kargo-github-app-pem` — seeded out-of-band (initial manual
     write by the operator onboarding the Kargo GitHub App, or via
     a one-shot `bootstrap/` helper); ESO then owns ongoing
     rotation as documented in §8.
-  Both blocks live behind a `cluster.role == "management"` gate;
-  workload clusters' KVs don't contain them.
+  All four entries above live behind a `cluster.role == "management"`
+  gate; workload (spoke) clusters' KVs don't contain them. The mgmt
+  cluster KV PE registers into `snet-pe-env` of the mgmt env-region
+  VNet (per §3.4); spoke ESO UAMIs reach it via mgmt↔spoke peering
+  + the central `privatelink.vaultcore.azure.net` zone.
+- **Argo + Kargo AAD application registrations** are NOT authored
+  here — they live in `bootstrap/fleet` (operator-applied, Stage -1)
+  to keep Stage 1 free of Microsoft Graph permissions and AAD-app
+  blast radius. Stage 1 mgmt only creates the mgmt cluster KV (used
+  as the destination for the AAD apps' RP `client_secret` values,
+  written by `bootstrap/fleet`'s second-pass apply once
+  `MGMT_CLUSTER_KV_ID` is published) and the workload `uami-kargo-mgmt`
+  identity below. The full AAD-app design lives in §4 Stage -1
+  (`bootstrap/fleet/main.aad.tf`).
+- **Kargo mgmt UAMI** (`azapi_resource`
+  `Microsoft.ManagedIdentity/userAssignedIdentities`) named
+  `uami-kargo-mgmt`, gated on `cluster.role == "management"` and
+  placed in the mgmt cluster's resource group (Stage 1-owned).
+  Singleton (exactly one mgmt cluster per fleet, per the
+  mgmt-singleton precondition in `bootstrap/environment` env=mgmt).
+  Carries two role assignments total across the fleet:
+  - **`AcrPull` on the fleet ACR** — granted here in Stage 1 mgmt
+    (scope from `vars.ACR_RESOURCE_ID`, published by
+    `bootstrap/environment` env=mgmt). Lets Kargo Warehouses that
+    subscribe to ACR repositories authenticate as this UAMI (no
+    image-pull secrets).
+  - **`AKS RBAC Reader` on every workload AKS cluster** — granted
+    in each workload cluster's Stage 1 (see *Role assignments*
+    below). Lets Kargo read Argo `Application` CRs on workload
+    clusters for health verification.
+  Azure Workload Identity annotates a K8s ServiceAccount with
+  exactly one `client-id`, so the Kargo controller SA federates to
+  exactly this one UAMI — both capabilities must live on it. The
+  **FIC** binding this UAMI to the Kargo controller SA
+  (`system:serviceaccount:kargo:kargo-controller`) is created by
+  the mgmt cluster's Stage 2 (where the mgmt AKS OIDC issuer URL
+  is available).
 - User-assigned managed identities (`azapi_resource`
   `Microsoft.ManagedIdentity/userAssignedIdentities`):
   - `uami-external-dns-<cluster>`
@@ -1907,11 +1805,6 @@ envs.<env>.aks.admin_groups` — pure break-glass; members
     created — Argo's in-cluster ServiceAccount (`argocd-application-controller`)
     talks to the local API server at `https://kubernetes.default.svc`
     via its own ServiceAccount token, no AAD round-trip needed.
-  - The **Kargo mgmt UAMI** (`uami-kargo-mgmt`) is **not** created
-    here — it's a fleet-wide singleton and lives in Stage 0 so its
-    `principalId` propagates via the standard Stage 0 → repo
-    variable path. The FIC on it is created by the mgmt cluster's
-    Stage 2 (needs the mgmt AKS OIDC issuer URL).
 - Federated Identity Credentials (`azapi_resource`
   `Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials`):
   - **(spoke clusters only)** Three FICs on
@@ -1927,7 +1820,7 @@ envs.<env>.aks.admin_groups` — pure break-glass; members
   - All other FICs on Stage-1-owned UAMIs
     (`uami-external-dns-<cluster>`, `uami-eso-<cluster>`,
     `uami-team-<team>-<cluster>`, plus `fc-kargo-mgmt` on the
-    Stage-0-owned `uami-kargo-mgmt` for `cluster.role ==
+    mgmt-Stage-1-owned `uami-kargo-mgmt` for `cluster.role ==
     "management"`) are created in Stage 2 — they need this
     cluster's own AKS OIDC issuer URL, which is a Stage 1 output.
 - Role assignments (`azapi_resource`
@@ -1937,13 +1830,16 @@ envs.<env>.aks.admin_groups` — pure break-glass; members
     Blast radius is this one zone; no cross-cluster write access.
   - **Key Vault Secrets User on the cluster KV** → ESO UAMI. Primary
     source of cluster-local secrets.
-  - **Key Vault Secrets User on the fleet KV** (scope id consumed via
-    `vars.FLEET_KEYVAULT_ID`, published by Stage 0; the KV itself is
-    owned by `bootstrap/fleet`) → ESO UAMI. Needed for fleet-wide
-    secrets (GH App PEMs if consumed in-cluster, any additional fleet
-    secrets).
-  - **`AcrPull` on the fleet ACR** → cluster kubelet identity (read from
-    Stage 0 remote state output `acr_resource_id`).
+  - **Key Vault Secrets User on the mgmt cluster KV** (scope id
+    consumed via `vars.MGMT_CLUSTER_KV_ID`, published by Stage 1
+    mgmt) → ESO UAMI on **every cluster** (mgmt + spokes). Needed
+    for fleet-shared mgmt secrets (Argo/Kargo OIDC RP secrets,
+    Argo/Kargo GH App PEMs). The mgmt cluster's own ESO UAMI also
+    consumes this grant — it points at the same KV the cluster
+    itself owns.
+  - **`AcrPull` on the fleet ACR** → cluster kubelet identity (scope
+    from `vars.ACR_RESOURCE_ID`, published by `bootstrap/environment`
+    env=mgmt).
   - **`Azure Kubernetes Service RBAC Cluster Admin`** on the AKS
     resource id → `fleet-<env>` UAMI. Required because local accounts
     are disabled; Stage 2 must authenticate to the K8s API via AAD
@@ -1974,7 +1870,7 @@ envs.<env>.aks.admin_groups` — pure break-glass; members
     therefore do **not** receive an `AKS RBAC Reader` assignment
     for `uami-kargo-mgmt`. The role assignment body only needs
     `principalId`, sourced from `vars.KARGO_MGMT_UAMI_PRINCIPAL_ID`
-    (a Stage 0 fleet-wide repo variable). Skipped when
+    (a Stage 1 mgmt fleet-wide repo variable). Skipped when
     `cluster.role != "management"`.
   - **`Monitoring Metrics Publisher` on this env's AMW** → AKS
     cluster's data-collection identity (the AKS-managed addon
@@ -2046,11 +1942,12 @@ envs.<env>.aks.admin_groups` — pure break-glass; members
   mgmt clusters collapse to a single link. External-dns is later
   configured (via platform-gitops values) with
   `--domain-filter=<zone.fqdn>` and `--txt-owner-id=<cluster.name>`.
-- **Argo / Kargo redirect URIs** — not touched by Stage 1. The complete
-  list lives on the Stage 0-owned `azuread_application` resources,
-  derived from the cluster YAML inventory. Adding a new cluster
-  triggers a Stage 0 re-apply (standard fan-out); the redirect list
-  is updated atomically there.
+- **Argo / Kargo redirect URIs** — owned by Stage 1 on the management
+  cluster (above). Each app carries a single redirect URI derived
+  from the mgmt cluster's `dns.zone_fqdn`. Adding or removing a
+  spoke cluster does **not** change the redirect list (spokes don't
+  host Argo or Kargo). Re-applying the mgmt cluster updates the
+  list atomically.
 
 Outputs (all consumed by Stage 2 in the same CI job — see §10):
 
@@ -2059,7 +1956,6 @@ Outputs (all consumed by Stage 2 in the same CI job — see §10):
 - `eso_identity_{client_id,resource_id}`
 - `team_identities` map `{ <team> = { client_id, resource_id } }`
 - `cluster_keyvault_id`, `cluster_keyvault_name`
-- `fleet_keyvault_id`, `fleet_keyvault_name` (passed through from Stage 0 for convenience)
 - `dns_zone_fqdn`, `dns_zone_resource_id`, `ingress_domain`
 - `prometheus_dcr_id`, `prometheus_query_endpoint` (passthrough of AMW
   query endpoint for in-cluster consumers like alert renderers)
@@ -2077,10 +1973,10 @@ Outputs (all consumed by Stage 2 in the same CI job — see §10):
 - `tenant_id`, `subscription_id`
 
 **Fleet-wide Stage 1 publication** (mgmt cluster only). The mgmt
-cluster's Stage 1 additionally publishes its OIDC issuer URL and
-K8s API host/CA as fleet-wide repo variables via the
-`stage0-publisher` GH App at the end of its tf-apply job (same
-mechanism Stage 0 uses for its outputs):
+cluster's Stage 1 additionally publishes its OIDC issuer URL, K8s
+API host/CA, the mgmt cluster KV id, and the `uami-kargo-mgmt`
+identity facts as fleet-wide repo variables via the `fleet-meta`
+GH App at the end of its tf-apply job:
 
 | Stage 1 output (mgmt only)              | Repo variable                       | Consumed by                                                                                                |
 | --------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -2088,6 +1984,15 @@ mechanism Stage 0 uses for its outputs):
 | `aks_host`                              | `MGMT_AKS_HOST`                     | Every spoke cluster's Stage 2 — `host` for the aliased `kubernetes` provider that registers the spoke into the mgmt argocd namespace    |
 | `aks_cluster_ca_certificate`            | `MGMT_AKS_CLUSTER_CA_CERTIFICATE`   | Same — provider CA                                                                                          |
 | `aks_cluster_resource_id`               | `MGMT_AKS_CLUSTER_RESOURCE_ID`      | Spoke Stage 2 — for minting an AAD token scoped to the mgmt cluster (cluster-admin via `fleet-<env>` UAMI)  |
+| `cluster_keyvault_id`                   | `MGMT_CLUSTER_KV_ID`                | Every spoke cluster's Stage 1 — `Key Vault Secrets User` role-assignment scope for ESO UAMI; `bootstrap/environment` non-mgmt envs — same grant on `fleet-<env>` UAMI; `bootstrap/fleet` second-pass — input for AAD-app `client_secret` KV writes |
+| `kargo_mgmt_uami_principal_id`          | `KARGO_MGMT_UAMI_PRINCIPAL_ID`      | Every workload cluster's Stage 1 — `AKS RBAC Reader` role-assignment `properties.principalId` on the workload AKS resource |
+| `kargo_mgmt_uami_client_id`             | `KARGO_MGMT_UAMI_CLIENT_ID`         | Mgmt Stage 2 — `azure.workload.identity/client-id` annotation on the `kargo-controller` ServiceAccount     |
+
+The Argo + Kargo AAD-app identifiers (`ARGO_AAD_APP_ID`,
+`KARGO_AAD_APP_ID`, `KARGO_AAD_APPLICATION_OBJECT_ID`) are
+**not** published by Stage 1; they are published as repo-level
+GitHub Actions variables by `bootstrap/fleet` (which owns the
+applications) — see §4 Stage -1.
 
 Spokes therefore have everything they need to self-register without
 a cross-stage `terraform_remote_state` lookup or a cross-subscription
@@ -2203,7 +2108,7 @@ Creates:
   on the mgmt cluster, and in a dedicated `platform-system` namespace
   on spoke clusters (so workload-identity-consuming components can
   read it without an Argo namespace existing locally), with keys
-  `tenant_id`, `cluster_keyvault_name`, `fleet_keyvault_name`,
+  `tenant_id`, `cluster_keyvault_name`, `mgmt_cluster_keyvault_name`,
   `eso_client_id`, `external_dns_client_id`, and a
   `team_<name>_client_id` entry for every team on this cluster.
 - `kubernetes_secret_v1.argocd_repo_creds_github` populated via an
@@ -2218,13 +2123,13 @@ Creates:
   - `fc-team-<team>` for each team, subject
     `system:serviceaccount:<team>-root:workload-identity`
   - **Conditional (`cluster.role == "management"`)**:
-    `fc-kargo-mgmt` on the Stage 0-owned `uami-kargo-mgmt`
+    `fc-kargo-mgmt` on the Stage 1 mgmt-owned `uami-kargo-mgmt`
     (resource id from `var.kargo_mgmt_uami_resource_id`), subject
     `system:serviceaccount:kargo:kargo-controller`, issuer =
     `var.aks_oidc_issuer_url`. Binds the Kargo controller SA on the
     mgmt cluster to the fleet-wide Kargo UAMI; this is the only
-    place the mgmt AKS OIDC issuer URL meets the Stage 0 UAMI
-    identity, so it must happen here.
+    place the mgmt AKS OIDC issuer URL meets the mgmt-Stage-1-owned
+    UAMI identity, so it must happen here.
 - **FICs on the Argo AAD app itself** (`azuread_application_federated_identity_credential`)
   — created **only by the mgmt cluster's Stage 2** (Argo runs only
   there):
@@ -2326,13 +2231,14 @@ auth.
 A. Mgmt cluster onboarding (first cluster, prerequisite for all spokes)
    1. TF stage1 apply (mgmt)
       └─► AKS + identities + KV + DNS roles
-          + publish MGMT_AKS_{OIDC_ISSUER_URL,HOST,CLUSTER_CA_CERTIFICATE,CLUSTER_RESOURCE_ID}
-            as repo variables (stage0-publisher)
+          + publish MGMT_AKS_{OIDC_ISSUER_URL,HOST,CLUSTER_CA_CERTIFICATE,CLUSTER_RESOURCE_ID},
+            MGMT_CLUSTER_KV_ID, ARGO_AAD_APP_ID, KARGO_AAD_APP_ID,
+            KARGO_MGMT_UAMI_{PRINCIPAL_ID,CLIENT_ID} as repo variables (fleet-meta)
    2. TF stage2 apply (mgmt)
       └─► argocd namespace, ESO, FICs (incl. fc-kargo-mgmt + Argo-app FICs)
           ArgoCD helm release; platform-root Application injected
    3. ArgoCD begins syncing platform-gitops/applications/*:
-      wave 00 ESO + ClusterSecretStores (azure-keyvault-cluster + azure-keyvault-fleet; both via workload identity)
+      wave 00 ESO + ClusterSecretStores (azure-keyvault-cluster + azure-keyvault-mgmt; both via workload identity)
       wave 10 external-dns, gateway, tls-wildcard
       wave 20 observability
       wave 25 kargo            (ApplicationSet cluster-generator filtered to role=management — i.e., self only)
@@ -2447,7 +2353,7 @@ oidcGroup: aad-group-team-a
 repo:
   url: https://github.com/acme/team-a-gitops
   appPath: services # services/<app>/environments/<env>/values.yaml
-# sharedChartRepo is fleet-wide (the ACR from Stage 0); not declared per team.
+# sharedChartRepo is fleet-wide (the fleet ACR created by bootstrap/environment env=mgmt); not declared per team.
 services: # list required for Kargo warehouse generation
   - name: api
     imageRepo: acmefleet.azurecr.io/team-a/api # fleet ACR path
@@ -2540,10 +2446,11 @@ they like provided their namespaces start with `<team>-`.
 ## 8. Secrets & identity
 
 - **ArgoCD GitHub App** (already in inspiration): `contents: read`
-  installation on fleet repo + team repos; PEM in **fleet KV**
-  (read by the central Argo on the mgmt cluster). TF mgmt Stage 2
-  seeds `argocd-repo-creds` via ephemeral `data_wo`. Spoke clusters
-  do not consume this PEM directly (they don't run Argo).
+  installation on fleet repo + team repos; PEM in the **mgmt
+  cluster KV** (read by the central Argo on the mgmt cluster). TF
+  mgmt Stage 2 seeds `argocd-repo-creds` via ephemeral `data_wo`.
+  Spoke clusters do not consume this PEM directly (they don't run
+  Argo).
 - **Argo spoke registration identity** — each spoke owns a
   `uami-argocd-spoke-<cluster>` UAMI (Stage 1) carrying
   `Azure Kubernetes Service RBAC Cluster Admin` on its own AKS
@@ -2566,20 +2473,20 @@ they like provided their namespaces start with `<team>-`.
   `kargo-github-repo-creds` secret via `data_wo`; ESO on mgmt then
   owns ongoing rotation of the same secret.
 - **Kargo OIDC client**: same Azure AD tenant as Argo (separate
-  app registration in Stage 0). Client secret generated and stored
-  in the **mgmt cluster KV** (Stage 1, not fleet KV); ESO on mgmt
+  app registration in Stage 1 mgmt). Client secret generated and
+  stored in the **mgmt cluster KV** (Stage 1 mgmt); ESO on mgmt
   syncs it into the `kargo` namespace.
 - **Image registry credentials** — the fleet ACR is pulled via
   **AcrPull role assignment on each cluster's kubelet identity** (no
   image-pull secrets). Kargo Warehouses that subscribe to ACR images
   authenticate as the **single fleet-wide `uami-kargo-mgmt`
-  identity** (Stage 0), which carries two role assignments in total:
-  (1) `AcrPull` on the fleet ACR, granted in Stage 0; (2)
-  `AKS RBAC Reader` on every workload AKS cluster, granted in that
-  workload cluster's Stage 1. This consolidation is required because
-  Azure Workload Identity annotates a single K8s ServiceAccount with
-  exactly one `client-id` — the Kargo controller SA
-  (`system:serviceaccount:kargo:kargo-controller`) can therefore
+  identity** (Stage 1 mgmt), which carries two role assignments in
+  total: (1) `AcrPull` on the fleet ACR, granted in Stage 1 mgmt;
+  (2) `AKS RBAC Reader` on every workload AKS cluster, granted in
+  that workload cluster's Stage 1. This consolidation is required
+  because Azure Workload Identity annotates a single K8s
+  ServiceAccount with exactly one `client-id` — the Kargo controller
+  SA (`system:serviceaccount:kargo:kargo-controller`) can therefore
   federate to exactly one UAMI. The FIC binding that SA to
   `uami-kargo-mgmt` is created in the mgmt cluster's Stage 2
   (`fc-kargo-mgmt`). No separate `uami-kargo-acr` identity exists.
@@ -2613,18 +2520,48 @@ they like provided their namespaces start with `<team>-`.
 
 ### Runner selection
 
-Every workflow that writes to Terraform state — `env-bootstrap.yaml`,
-`team-bootstrap.yaml`, `tf-plan.yaml`, `tf-apply.yaml`, `stage0.yaml`, and
-the (deferred) `fleet-bootstrap-rerun.yaml` — **must** use
-`runs-on: [self-hosted]`. The fleet tfstate SA and the fleet KV are
-private-only; GitHub-hosted runners cannot reach them. The self-hosted
-runner pool is the single pool created by `bootstrap/fleet` (§4 Stage -1,
-"Runner infrastructure").
+Adopter workflows split runner placement by what the job actually
+touches:
 
-Template-level workflows that do **not** touch tfstate — `validate.yaml`,
-`tflint.yaml`, `template-selftest.yaml`, `status-check.yaml` — stay on
-`runs-on: ubuntu-latest`. They are deleted from adopter repos by
-`init-fleet.sh` anyway.
+- **Self-hosted (fleet runner pool, label `self-hosted`)**: every
+  job that reads or writes private Azure data planes — fleet
+  tfstate SA, runner-pool KV, mgmt cluster KV, AKS API server when
+  it is private. In concrete terms: `tf-plan.yaml`'s `cluster`
+  matrix; `tf-apply.yaml`'s `cluster` matrix; `env-bootstrap.yaml`'s
+  `bootstrap` job; `team-bootstrap.yaml`'s `bootstrap` matrix; the
+  deferred `fleet-bootstrap-rerun.yaml`. The runner pool is
+  created by `bootstrap/fleet` (§4 Stage -1, "Runner infrastructure")
+  and is the only ingress path to those private endpoints from a
+  GitHub-hosted control plane.
+
+- **Hosted (`ubuntu-24.04`)**: every job that does not touch a
+  private Azure data plane. This includes all of `validate.yaml`
+  (terraform fmt, tflint, yamllint, subnet-slots, naming-parity);
+  the initialisation-guard / detect / discover / summarize jobs in
+  `tf-plan.yaml`, `tf-apply.yaml`, `env-bootstrap.yaml`, and
+  `team-bootstrap.yaml`; and the template-only `template-selftest.yaml`
+  + `status-check.yaml` workflows.
+
+Rationale for the split: the trust-boundary argument that motivates
+self-hosted ("one image to harden, one egress path, one identity
+surface") only applies to jobs that actually use that egress path.
+Lint, formatting, marker-file checks, `git diff` matrix builders,
+and PR-comment formatters do not. Putting them on the pool would
+couple basic CI signal to a piece of infrastructure that does not
+yet exist in the template repo and is offline during pool recovery
+in adopter repos — the two scenarios where being able to lint a
+fix is most valuable.
+
+Trade-off accepted: a broken runner pool still takes Azure-touching
+CI with it (`tf-plan` cluster matrix, `tf-apply` cluster matrix,
+both bootstrap workflows). This is acceptable because the pool is
+bootstrap-laptop-applied (§4 Stage -1) — recovery is laptop-apply,
+not "another CI workflow." Crucially, lint and fmt remain green
+through the recovery, so the fix PR can still be reviewed.
+
+The Ubuntu version (`ubuntu-24.04`) and the Terraform version are
+both pinned for reproducibility — the latter via
+`.terraform-version` at the repo root, read by every workflow.
 
 ### Workflows
 
@@ -2632,6 +2569,15 @@ Template-level workflows that do **not** touch tfstate — `validate.yaml`,
   - `terraform fmt -check -recursive`
   - `tflint` per module / stage
   - `yamllint` over `clusters/` and `platform-gitops/config/`
+  - JSON-schema validation of `clusters/_fleet.yaml`
+    (`schemas/fleet.v1.schema.json`) and every cluster.yaml +
+    `_defaults.yaml` (`schemas/cluster.v1.schema.json`). Per-file,
+    pre-merge structural lint; semantic checks (uuid resolution,
+    subnet-slot uniqueness, CIDR math) stay in the bootstrap-stage HCL
+    preconditions. Schema versioning lives in the filename and `$id`;
+    bump rules in `schemas/README.md`. The bump policy is conservative:
+    schemas start at v1 and only increment on incompatible change
+    (rename / remove / type-tighten); additive changes stay on v1.
   - JSON-schema validation of merged `cluster.yaml` and `teams/*.yaml`
   - **Team-config linter** (`.github/scripts/lint-teams.sh`): for
     every `platform-gitops/config/teams/*.yaml`:
@@ -2674,28 +2620,48 @@ Template-level workflows that do **not** touch tfstate — `validate.yaml`,
      `terraform.tfvars.json` for Stage 1 and Stage 2; one matrix leg per
      affected cluster; `environment: fleet-<cluster.env>` (derived from
      the path).
-  3. If `terraform/stages/0-fleet/**` changed, a separate matrix leg
-     runs Stage 0 plan under `environment: fleet-stage0`.
-  4. Post a consolidated plan summary as a single PR comment.
+  3. Post a consolidated plan summary as a single PR comment.
 
 - **`tf-apply.yaml`** (`push` to `main`):
-  1. Same change detection, same environment mapping.
-  2. Stage 0 leg (if any) runs first and serially.
-  3. Post-Stage-0 step publishes outputs to repo variables
-     (`ACR_LOGIN_SERVER`, `ACR_RESOURCE_ID`, `FLEET_KEYVAULT_ID`,
-     `FLEET_KEYVAULT_NAME`, `ARGOCD_AAD_APPLICATION_ID`,
-     `KARGO_AAD_APPLICATION_ID`) using the `stage0-publisher` GH App.
-     Per-env obs outputs (`MONITOR_WORKSPACE_*_<ENV>`, `GRAFANA_*_<ENV>`,
-     `ACTION_GROUP_ID_<ENV>`) are published by `env-bootstrap.yaml`
-     into each env's GitHub environment, not here.
-  4. Cluster legs run after Stage 0: per cluster, a **single job** runs
-     Stage 1 apply → pipe outputs to Stage 2 tfvars → mint AAD token
-     into `TF_VAR_aks_access_token` → Stage 2 apply. Sequential within
-     the job; `prod/*` matrix serialized (`max-parallel: 1`).
+  1. **Saved-plan replay contract.** Post-merge `tf-apply` does NOT
+     re-plan on the merge commit. It downloads the merging PR's
+     `plan-*` artefacts from the matching `tf-plan` workflow run and
+     replays each one with `terraform apply <plan-file>`. Terraform's
+     own stale-plan check is the drift signal: if state has advanced
+     under the plan, apply refuses with "Saved plan is stale" and the
+     job fails loudly — exactly the desired signal that an unreviewed
+     change has slipped in. The pre-F25 behaviour (re-plan on merge,
+     then apply) silently absorbed drift, so reviewed plan ≠ applied
+     plan was undetectable.
+  2. **PR lookup.** The `discover` job resolves the PR number for the
+     merge commit via `gh api repos/<owner>/<repo>/commits/<sha>/pulls`
+     (squash-merge produces a brand-new SHA on main; the PR's tf-plan
+     ran on the PR's *head* commit, which differs). Direct pushes to
+     main with no associated PR yield zero artefacts and the apply
+     skips with success — `tf-plan`'s path filter already governs what
+     produces a plan; `tf-apply` is a strict consumer of that set.
+  3. **Matrix from artefacts.** The per-cluster matrix is built from
+     the downloaded `meta.json` files (one per `plan-*` artefact),
+     emitted by `tf-plan` alongside each binary plan. The PR's plan
+     set IS the source of truth — `detect-affected-clusters.sh` is not
+     re-run here. If the PR produced zero plans (e.g. it only touched
+     paths outside `tf-plan.yaml`'s path filter), the apply skips.
+  4. Per cluster, a **single job** replays Stage 1's saved plan →
+     pipes Stage 1 outputs into `stage2.auto.tfvars.json` → mints AAD
+     token into `TF_VAR_aks_access_token` → replays Stage 2's saved
+     plan. Sequential within the job. Blast-radius control is left to
+     the PR boundary: one PR per env (or per cluster) keeps the
+     affected-clusters set narrow, so we do not cap `max-parallel` at
+     workflow level. The mgmt cluster's Stage 1 leg additionally
+     publishes its fleet-wide repo variables (see §4 Stage 1 mgmt
+     publication table) using the `fleet-meta` GH App; the env=mgmt
+     `bootstrap/environment` apply publishes `ACR_RESOURCE_ID`,
+     `ACR_NAME`, `ACR_LOGIN_SERVER` via the same App.
 
      ```yaml
-     - name: Stage 1 apply
-       run: terraform -chdir=terraform/stages/1-cluster apply -auto-approve -var-file=$TFVARS
+     - name: Stage 1 apply (replay saved plan)
+       working-directory: terraform/stages/1-cluster
+       run: terraform apply -auto-approve plan.tfplan
      - name: Stage 1 outputs → Stage 2 tfvars
        run: |
          terraform -chdir=terraform/stages/1-cluster output -json \
@@ -2704,14 +2670,22 @@ Template-level workflows that do **not** touch tfstate — `validate.yaml`,
          cp "$RUNNER_TEMP/stage2.auto.tfvars.json" terraform/stages/2-kubernetes/
      - name: Mint AAD token → TF_VAR_aks_access_token
        run: .github/scripts/mint-aks-token.sh # the curl/jq recipe in §4 Stage 2
-     - name: Stage 2 apply
-       run: terraform -chdir=terraform/stages/2-kubernetes apply -auto-approve
+     - name: Stage 2 apply (replay saved plan)
+       working-directory: terraform/stages/2-kubernetes
+       run: terraform apply -auto-approve plan.tfplan
      ```
+
+     `terraform apply <plan-file>` does not accept `-var` / `-var-file`
+     — variables are baked into the saved plan. The pre-F25 mass of
+     `TF_VAR_*` env vars in the apply step is therefore gone; the
+     plan contains everything needed to apply.
 
      `stage2.auto.tfvars.json` holds Stage 1 infra outputs (CA marked
      `sensitive`). The AAD token flows via env var `TF_VAR_aks_access_token`
      (masked with `::add-mask::`) straight into Stage 2's `sensitive`
-     variable — never written to disk, never in TF state.
+     variable — never written to disk, never in TF state. The Stage 2
+     saved plan does not include the token; the kubernetes/helm
+     providers consume it at apply time via the env var.
   5. Summary posted back to the merged PR.
 
 ### Azure authentication
@@ -2721,21 +2695,22 @@ long-lived cloud secrets in Actions. Identities:
 
 | Identity            | Created by              | Used by                                  | Scope                                                                                                                                                                                                                                                                                         |
 | ------------------- | ----------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fleet-stage0` UAMI | `bootstrap/fleet`       | Stage 0 matrix leg                       | `rg-fleet-shared` Contributor + `tfstate-fleet` Blob Contributor + Graph `Application.ReadWrite.OwnedBy`                                                                                                                                                                                      |
-| `fleet-meta` UAMI   | `bootstrap/fleet`       | env-bootstrap + team-bootstrap workflows | Tenant/subscription-wide UAccessAdmin + Contributor (no Graph permissions)                                                                                                                                                                                                                    |
-| `fleet-mgmt` UAMI   | `bootstrap/environment` (env=mgmt) | Stage 1 mgmt cluster matrix leg | env subscription/RG Contributor + `tfstate-mgmt` Blob Contributor + fleet KV Secrets User + ACR UAccessAdmin + `User Access Administrator` scoped to the env AMW resource id + Graph `Application.ReadWrite.OwnedBy` (granted **manually** by the operator post-bootstrap; see §5.1) |
-| `fleet-<env>` UAMI  | `bootstrap/environment` | Stage 1 + Stage 2 matrix legs            | env subscription/RG Contributor + `tfstate-<env>` Blob Contributor + fleet KV Secrets User + ACR UAccessAdmin + `User Access Administrator` scoped to the env AMW resource id (to delegate `Monitoring Metrics Publisher` to cluster addon identities in Stage 1). No Graph permissions. |
+| `fleet-meta` UAMI   | `bootstrap/fleet`       | env-bootstrap + team-bootstrap workflows; `tf-apply.yaml` repo-var publish steps for env=mgmt + Stage 1 mgmt | Tenant/subscription-wide UAccessAdmin + Contributor (no Graph permissions)                                                                                                                                                                                                                    |
+| `fleet-mgmt` UAMI   | `bootstrap/environment` (env=mgmt) | Stage 1 mgmt cluster matrix leg | env subscription/RG Contributor + `tfstate-mgmt` Blob Contributor + mgmt cluster KV Secrets User + **runners KV Secrets User** (data-plane read of `fleet-meta-app-pem` so `tf-apply.yaml`'s mgmt-publish step can mint a fleet-meta App token to upsert `MGMT_*` repo vars; granted in `bootstrap/environment` env=mgmt's `main.identities.tf` since the runners KV uses RBAC authorization and subscription Contributor does **not** transitively grant data-plane access) + ACR UAccessAdmin + `User Access Administrator` scoped to the env AMW resource id + owns `uami-kargo-mgmt` (workload identity). No Graph permissions — Argo + Kargo AAD app registrations are owned by `bootstrap/fleet` (operator-applied). |
+| `fleet-<env>` UAMI  | `bootstrap/environment` | Stage 1 + Stage 2 matrix legs            | env subscription/RG Contributor + `tfstate-<env>` Blob Contributor + mgmt cluster KV Secrets User + ACR UAccessAdmin + `User Access Administrator` scoped to the env AMW resource id (to delegate `Monitoring Metrics Publisher` to cluster addon identities in Stage 1). No Graph permissions. |
 
-Stage 1 **consumes Stage 0 outputs via repo variables**
-(`vars.ACR_RESOURCE_ID`, `vars.FLEET_KEYVAULT_ID`, etc.) rather than
-`terraform_remote_state`. This removes Stage 1's need to read the
-`tfstate-fleet` container and keeps stage boundaries clean.
+Stage 1 **consumes fleet-shared outputs via repo variables**
+(`vars.ACR_RESOURCE_ID`, `vars.MGMT_CLUSTER_KV_ID`,
+`vars.ARGO_AAD_APP_ID`, etc., published by `bootstrap/fleet`,
+`bootstrap/environment` env=mgmt, and Stage 1 mgmt) rather than
+`terraform_remote_state`. This removes Stage 1's need to read
+other stages' tfstate containers and keeps stage boundaries
+clean.
 
 ### GitHub environments
 
 | Environment     | Reviewers | Purpose                          |
 | --------------- | --------- | -------------------------------- |
-| `fleet-stage0`  | 0         | Stage 0 runs                     |
 | `fleet-meta`    | 2         | Bootstrap workflows (env + team) |
 | `fleet-mgmt`    | 1         | Mgmt cluster apply               |
 | `fleet-nonprod` | 0         | Nonprod cluster apply            |
@@ -2748,11 +2723,10 @@ Each environment holds its own `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` /
 
 - Single Azure Storage account `tfstate-fleet` (created by
   `bootstrap/fleet`). Multiple containers inside:
-  - `tfstate-fleet` — Stage 0 + bootstrap/environment + bootstrap/team
+  - `tfstate-fleet` — bootstrap/environment + bootstrap/team
   - `tfstate-<env>` — per-env Stage 1 + Stage 2 (created by
     `bootstrap/environment` for that env).
 - State key within each container:
-  - Stage 0: `stage0/fleet.tfstate`
   - Stage 1: `{region}/{name}/stage1.tfstate`
   - Stage 2: `{region}/{name}/stage2.tfstate`
   - Bootstrap roots: `bootstrap/<root>/<key>.tfstate`
@@ -2858,7 +2832,7 @@ is deferred until the Kargo GitHub App is minted (see §15).
 | Team repo contract drift (`environments/<env>/values.yaml` missing). | Publish cookiecutter team-repo template; Kargo warehouse health surfaces missing paths; team ApplicationSet tolerates empty list gracefully.              |
 | Direct-to-main bot commits forbidden by org policy.                  | Flip all PromotionTemplates to PR mode and accept added latency.                                                                                          |
 | `helm_release` with `ignore_changes=[values]` drifts from TF view.   | Treat Argo as source of truth for component versions post-bootstrap; TF plans remain clean.                                                               |
-| Bumping `kubernetes.version` across many prod clusters concurrently. | CI apply matrix caps `prod/*` at `max-parallel: 1`; environments gate approval per cluster.                                                               |
+| Bumping `kubernetes.version` across many prod clusters concurrently. | Blast-radius control is at the PR boundary, not the runner: one PR per env (or per cluster) keeps the affected-clusters set narrow. Per-cluster GH environments add an approval gate on top.                                                               |
 
 ---
 
@@ -2867,37 +2841,38 @@ is deferred until the Kargo GitHub App is minted (see §15).
 ### Phase 1 — Skeleton
 
 - Repo scaffold per §2.
-- `_defaults.yaml` at fleet level; `_fleet.yaml` with ACR name + fleet
-  KV name + AAD app display names + DNS root.
+- `_defaults.yaml` at fleet level; `_fleet.yaml` with ACR name +
+  runner-pool KV name + AAD app display names + DNS root.
 - `terraform/bootstrap/fleet` — human runs locally with tenant-admin
   credentials. Produces: fleet TF state SA (private endpoint),
-  **fleet Key Vault (private endpoint)**, `uami-fleet-runners` UAMI +
-  `Key Vault Secrets User` role assignment on the fleet KV,
-  shared self-hosted GH Actions runner pool (ACA+KEDA) + per-pool
-  ACR + LAW, `fleet-stage0` + `fleet-meta` UAMIs (plus
-  `Key Vault Secrets Officer` on the fleet KV for `fleet-stage0`),
-  `fleet-meta` + `stage0-publisher` + `fleet-runners` GH Apps,
-  `fleet-stage0` + `fleet-meta` GH environments, team-repo template
-  repo, branch protection on fleet repo.
+  **runner-pool Key Vault (private endpoint)**, `uami-fleet-runners`
+  UAMI + `Key Vault Secrets User` role assignment on the runner-pool
+  KV, shared self-hosted GH Actions runner pool (ACA+KEDA) +
+  per-pool ACR + LAW, `fleet-meta` UAMI, `fleet-meta` +
+  `fleet-runners` GH Apps, `fleet-meta` GH environment, team-repo
+  template repo, branch protection on fleet repo.
 - `terraform/bootstrap/environment` — invoked via `env-bootstrap.yaml`
   for `mgmt` and `nonprod`. Produces: per-env state container, UAMI,
-  GH environment + variables, env-root resource groups.
+  GH environment + variables, env-root resource groups; **for
+  env=mgmt also the fleet ACR + ACR PE + `ACR_*` repo-level vars**.
 - One mgmt cluster (`clusters/mgmt/eastus/aks-mgmt-01`, 2× D4s_v5
   system pool only, autoscaler 2–4) and one nonprod cluster
   (`clusters/nonprod/eastus/aks-nonprod-01`, system + apps pools).
-- `terraform/stages/0-fleet` applied via CI (under `fleet-stage0`);
-  outputs auto-published to repo variables.
+  The mgmt cluster's Stage 1 owns the Argo + Kargo AAD app
+  registrations, `uami-kargo-mgmt`, the mgmt cluster KV (which
+  also holds Argo/Kargo OIDC RP secrets + GH App PEMs), and
+  publishes `MGMT_*` / `ARGO_AAD_APP_ID` / `KARGO_*` repo vars.
 - `terraform/modules/aks-cluster` (wrapping AVM
   `avm-res-containerservice-managedcluster/azurerm`) and
   `terraform/stages/1-cluster` complete, including cluster KV
   creation, private DNS zone + VNet links, and AcrPull role
-  assignment. Stage 1 consumes Stage 0 outputs via repo variables.
+  assignment. Stage 1 consumes fleet-shared outputs via repo
+  variables (`ACR_*`, `MGMT_CLUSTER_KV_ID`, `ARGO_AAD_APP_ID`, ...).
 - `terraform/config-loader/load.sh`.
 - `validate.yaml`, `tf-plan.yaml`, `tf-apply.yaml`, `env-bootstrap.yaml`
   minimally functional.
 - Exit criterion: bootstrap flows produce working CI credentials;
-  Stage 0 applies; both clusters provision and can pull from the
-  fleet ACR.
+  both clusters provision and can pull from the fleet ACR.
 
 ### Phase 2 — ArgoCD bootstrap (hub-and-spoke)
 
@@ -2909,9 +2884,10 @@ is deferred until the Kargo GitHub App is minted (see §15).
 - `platform-gitops/applications/00-eso.yaml` and
   `components/eso/`; two ClusterSecretStores using workload identity —
   `azure-keyvault-cluster` (points at this cluster's KV) and
-  `azure-keyvault-fleet` (points at the fleet KV). Team ExternalSecrets
-  default to the cluster store; platform ExternalSecrets that pull
-  fleet-wide secrets explicitly reference the fleet store.
+  `azure-keyvault-mgmt` (points at the mgmt cluster KV). Team
+  ExternalSecrets default to the cluster store; platform
+  ExternalSecrets that pull fleet-shared mgmt secrets explicitly
+  reference the mgmt store.
 - Mgmt cluster onboarded first (Argo helm release + platform-root).
   Then a single nonprod spoke onboarded, including `uami-argocd-spoke`
   + spoke FIC + cluster Secret on mgmt.
@@ -2929,7 +2905,8 @@ is deferred until the Kargo GitHub App is minted (see §15).
   - **Observability** here is the in-cluster layer only: Grafana
     Agent (or `ama-metrics` addon tuning via ConfigMap), kube-state
     scraping overrides, alert-routing CRDs. The AMW + Grafana backend
-    are already provisioned by Stage 0; per-cluster DCR/DCRA is
+    are already provisioned by `bootstrap/environment`; per-cluster
+    DCR/DCRA is
     provisioned by Stage 1. The component's job is to point workloads
     at `MONITOR_WORKSPACE_QUERY_ENDPOINT` and surface cluster-scope
     `PrometheusRule` CRDs that the TF-managed
@@ -2981,8 +2958,7 @@ is deferred until the Kargo GitHub App is minted (see §15).
 - Velero install on the mgmt cluster covering Kargo and ArgoCD state.
 - Runbooks in `docs/`: `upgrades.md`, `promotion.md`,
   `onboarding-cluster.md`, `onboarding-team.md`.
-- PR-plan matrix performance tuning: `max-parallel` caps, prod
-  serialization, caching of terraform providers.
+- PR-plan matrix performance tuning: caching of terraform providers.
 - Schema validation rolled into `validate.yaml` for `cluster.yaml` and
   team registry files.
 
@@ -2995,27 +2971,37 @@ is deferred until the Kargo GitHub App is minted (see §15).
   latest `>= 0.1` at scaffold time).
 - **Container registry**: one ACR per fleet, Premium SKU, hosts OCI
   images under `<team>/<image>` and Helm charts under `helm/<chart>`.
-  Created in Stage 0. Kubelet identity on every cluster gets `AcrPull`.
+  Created in `bootstrap/environment` env=mgmt (gated on the
+  mgmt-singleton precondition). Kubelet identity on every cluster
+  gets `AcrPull`.
 - **Key Vaults**: two-tier.
-  - **Fleet KV** (`kv-<fleet.name>-fleet`) created by `bootstrap/fleet`
-    (Stage -1, alongside the tfstate SA and runner pool — co-located
-    to break the runner-pool KV-reference deploy-time cycle). Strictly
-    private: `publicNetworkAccess = Disabled`,
+  - **Runner-pool KV** (`kv-<fleet.name>-runners`) created by
+    `bootstrap/fleet` (Stage -1, alongside the tfstate SA and runner
+    pool — co-located to break the runner-pool KV-reference
+    deploy-time cycle). Strictly private:
+    `publicNetworkAccess = Disabled`,
     `networkAcls.defaultAction = Deny`, private endpoint on the
     derived `snet-pe-fleet` subnet registering into the central
-    `privatelink.vaultcore.azure.net` zone. Stores GH App PEMs
-    (Argo, fleet-meta, stage0-publisher, fleet-runners) and AAD
-    OIDC client secrets. Secret seeding and rotation are Stage 0's
-    responsibility (it holds `Key Vault Secrets Officer` on the
-    vault). One instance for the whole fleet.
+    `privatelink.vaultcore.azure.net` zone. Stores **only** two GH
+    App PEMs (`fleet-runners-app-pem`, `fleet-meta-app-pem`),
+    seeded post-bootstrap by `init-gh-apps.sh`. One instance for
+    the whole fleet.
   - **Cluster KV** (`kv-<cluster.name>`) created by Stage 1; one per
     cluster; stores cluster-local secrets (TLS wildcard, observability
-    keys, team-owned app secrets). ESO on each cluster binds via
-    workload identity to both — primary store is the cluster KV;
-    fleet KV is used only for fleet-wide secrets.
+    keys, team-owned app secrets). The **mgmt cluster KV** doubles
+    as the fleet-shared mgmt cluster KV: it additionally stores
+    `argocd-oidc-client-secret`, `kargo-oidc-client-secret`,
+    `argocd-github-app-pem`, and `kargo-github-app-pem` (gated on
+    `cluster.role == "management"`). ESO on every cluster binds
+    via workload identity to two stores — primary is the cluster
+    KV; the mgmt cluster KV is consumed for fleet-shared mgmt
+    secrets. Spokes reach the mgmt cluster KV via mgmt↔spoke
+    peering + the central `privatelink.vaultcore.azure.net` zone.
 - **AAD app registrations**: Argo OIDC client and Kargo OIDC client
-  managed by Terraform in Stage 0; redirect URIs appended per cluster in
-  Stage 1. See §4 / Stage 0.
+  managed by Terraform in **Stage 1 mgmt** (gated on
+  `cluster.role == "management"`). Each carries a single
+  mgmt-cluster-local redirect URI; spoke onboarding does not touch
+  the redirect list. See §4 / Stage 1.
 - **Management cluster sizing**: 2× `Standard_D4s_v5` in the system
   pool; **no apps pool**. All platform + Kargo workloads tolerate the
   system pool (ArgoCD, Kargo, ESO, external-dns). Autoscaler range 2–4.
@@ -3028,15 +3014,12 @@ is deferred until the Kargo GitHub App is minted (see §15).
   `sub-fleet-prod`). Each per-env UAMI receives `Contributor` at
   subscription scope. Subscription IDs are surfaced in each GH
   environment's variables.
-- **Graph app-roles for bootstrap UAMIs**:
-  `Application.ReadWrite.OwnedBy` on `fleet-stage0` (created by
-  `bootstrap/fleet`) and on `fleet-mgmt` (granted **manually** by the
-  operator after `bootstrap/environment` env=mgmt — the single one-off
-  is not worth a long-lived `AppRoleAssignment.ReadWrite.All` grant
-  on `fleet-meta`; see §5.1). Per-env UAMIs in non-mgmt envs hold no
-  Graph permissions. Both grants are owner-scoped / narrow
-  replacements for the previously-held tenant-wide
-  `Application Administrator` directory role.
+- **Graph app-roles for bootstrap UAMIs**: none. AAD application
+  registrations (Argo + Kargo) are created in `bootstrap/fleet` by
+  the operator's interactive `az login` session (Global Admin /
+  Cloud Application Administrator), not by any UAMI. No standing
+  Microsoft Graph grant is held by `fleet-meta`, `fleet-mgmt`, or
+  any per-env UAMI.
 - **VNets**: repo-owned per §3.4. Mgmt VNet (N=1) created by
   `bootstrap/fleet` via `Azure/avm-ptn-alz-sub-vending/azure`; env
   VNets (one per env-per-region) created by `bootstrap/environment`
@@ -3064,6 +3047,35 @@ is deferred until the Kargo GitHub App is minted (see §15).
   `env-bootstrap.yaml`. Fallback if NSP is not GA in a chosen region:
   switch to AMPLS for AMW/DCE private ingestion and a Grafana PE only
   (Grafana→AMW over AMPLS). This doesn't change Stage 1 contracts.
+- **Runner-pool LAW + ACR private networking deferred** — the
+  vendored `cicd-runners` module's LAW defaults flip
+  `log_analytics_workspace_internet_ingestion_enabled` and
+  `log_analytics_workspace_internet_query_enabled` to the negation
+  of `use_private_networking`, and the module authors no AMPLS or
+  NSP path for the workspace it creates. Setting
+  `use_private_networking = true` therefore yields a LAW that is
+  silently unreachable for ingestion + query and an ACA infra-VNet
+  the module assumes will resolve a privatelink ACR from a
+  caller-supplied PDZ. `bootstrap/fleet/main.runner.tf` ships with
+  `use_private_networking = false` until an NSP profile (preferred,
+  same pattern as the per-env AMW + DCE in `bootstrap/environment`)
+  or an AMPLS+PE+PDZ-quartet (fallback) is authored for the runner
+  LAW + DCE. While deferred: runner ACR is public, the Container
+  App Environment runs on the ACA-platform-managed VNet, and LAW
+  ingestion + query traverse the public endpoint with workspace-key
+  auth. The fleet-plane subnets (`snet-pe-fleet`, `snet-runners`)
+  and the central `privatelink.azurecr.io` PDZ remain authored —
+  the tfstate SA, runners KV, and fleet ACR PEs still consume them.
+  Re-enabling private networking is a mechanical callsite flip:
+  re-introduce `container_app_subnet_id`,
+  `container_registry_private_endpoint_subnet_id`,
+  `container_registry_private_dns_zone_creation_enabled = false`,
+  `container_registry_dns_zone_id`, and the
+  `runner_mgmt_region` local at
+  `terraform/bootstrap/fleet/main.runner.tf`. The same NSP work
+  closes the per-env AMW + DCE deferral above (single perimeter
+  pattern across both runner LAW and per-env Azure Monitor
+  resources).
 - **NSP inbound rule rotation** — if Grafana's subscription ever
   changes, or a break-glass IP allowlist is introduced, the
   `allow-grafana-query` rule needs updating in `bootstrap/environment`.
@@ -3081,28 +3093,30 @@ is deferred until the Kargo GitHub App is minted (see §15).
   Azure supports secret-less RP auth via `private_key_jwt` /
   `client_assertion` (including FIC-style external-JWT assertions),
   but neither Argo CD, Dex, nor Kargo implement `client_assertion` RP
-  authentication upstream today. Mitigation in Stage 0: short TTL
-  (90d), TF-driven rotation via `azuread_application_password` +
-  `time_rotating` keeper (60-day cadence, create-before-destroy so
-  the live secret stays valid through the rotation window), store
-  only in fleet KV, reflect to cluster via ESO, reload-on-change in
-  Argo/Kargo.
+  authentication upstream today. Mitigation in `bootstrap/fleet`:
+  long-lived (2-year) `azuread_application_password`, written to
+  the mgmt cluster KV on the second-pass apply (after Stage 1 mgmt
+  creates the KV), reflected to every cluster via ESO, reload-on-
+  change in Argo/Kargo. Re-rolled on demand by the operator (taint
+  the password resource or bump a `_version` keeper), not on a
+  schedule — long-lived rotation matches the operator-owned
+  lifecycle of the AAD apps themselves.
   **Removal trigger**: when upstream (Argo CD or Dex) ships
   `client_assertion` support, delete the
   `azuread_application_password` resource and rely solely on the
   mgmt-cluster `azuread_application_federated_identity_credential`
   resources that already exist for the workload→AAD direction —
-  same pattern, now covering RP auth too — and delete the fleet KV
-  entry.
+  same pattern, now covering RP auth too — and delete the mgmt
+  cluster KV entry.
 - **`fleet-bootstrap-rerun.yaml` workflow** — `bootstrap/fleet` is
   run locally today (§4 Stage -1). Moving it to a self-hosted runner
   in CI would require a fourth privileged UAMI with Entra
-  **Privileged Role Administrator** (to consent to the Microsoft
-  Graph app-role assignments granted in `main.identities.tf` on
-  subsequent runs), plus a `bootstrap/fleet`-scoped
-  GH App / OIDC FIC. Trade-off: strictly more standing privilege
-  than the current "run locally once" model. Deferred until the
-  operator UX demand justifies the extra privileged identity.
+  **Cloud Application Administrator** (to manage the Argo / Kargo
+  AAD applications via Microsoft Graph on subsequent runs), plus a
+  `bootstrap/fleet`-scoped GH App / OIDC FIC. Trade-off: strictly
+  more standing privilege than the current "run locally once" model.
+  Deferred until the operator UX demand justifies the extra
+  privileged identity.
 - **AKS agent-pool ASG API-version confirmation (§3.4)** — the
   pinned `Azure/avm-res-containerservice-managedcluster/azurerm`
   version must expose `networkProfile.applicationSecurityGroups` on
@@ -3159,8 +3173,9 @@ Fields the adopter supplies (via interactive prompts; see §16.3):
   `.prod.subscription_id`. `acr.subscription_id` and
   `state.subscription_id` are derived from
   `envs.mgmt.subscription_id` (not separately prompted): fleet-shared
-  resources (ACR, tfstate SA, fleet KV) are PE-wired into the mgmt
-  VNet's `snet-pe-fleet` and must live in the mgmt subscription.
+  resources (ACR, tfstate SA, runner-pool KV) are PE-wired into
+  the mgmt VNet's `snet-pe-fleet` and must live in the mgmt
+  subscription.
 - `dns.fleet_root` — e.g. `int.acme.example`.
 
 Fields intentionally **not** prompted (filled post-init; tagged with
@@ -3191,7 +3206,7 @@ matching the pattern runtime stages already use (via
 `terraform/config-loader/load.sh`).
 
 - `terraform/bootstrap/fleet/variables.tf` shrinks to:
-  `fleet_stage0_fic_subject`, `fleet_meta_fic_subject`,
+  `fleet_meta_fic_subject`,
   `fleet_repo_visibility`, `gh_repo_module_source` (all optional).
 - `terraform/bootstrap/environment/variables.tf` keeps `env`,
   `env_reviewers_count`, `location` (optional; defaults to
@@ -3201,11 +3216,11 @@ matching the pattern runtime stages already use (via
 - All resources reference `local.fleet.*` / `local.envs.<env>.*`
   / `local.derived.*`.
 
-Name derivation (ACR, fleet KV, state SA, env KV, cluster KV,
-resource groups) must agree between `load.sh` and bootstrap-stage
-HCL locals. The canonical spec lives in `docs/naming.md` (see §16.6)
-and is validated by a CI diff between the two implementations against
-a fixture `_fleet.yaml`.
+Name derivation (ACR, runner-pool KV, mgmt cluster KV, state SA,
+env KV, cluster KV, resource groups) must agree between `load.sh`
+and bootstrap-stage HCL locals. The canonical spec lives in
+`docs/naming.md` (see §16.6) and is validated by a CI diff between
+the two implementations against a fixture `_fleet.yaml`.
 
 ### 16.3 `init-fleet.sh` responsibilities
 
@@ -3221,20 +3236,41 @@ Interactive wizard by default; `--non-interactive` plus optional
    `init/inputs.auto.tfvars` via a small python-inline rewrite.
 3. **Prompt** for any variable in `init/inputs.auto.tfvars` still set
    to the sentinel `"__PROMPT__"`. The prompt text is derived from the
-   inline `# comment` after each variable line.
-4. **Apply** the `init/` module via
+   inline `# comment` after each variable line. If that comment begins
+   with `default: <token>` (single non-whitespace token, optionally
+   followed by ` — <prose>`), blank input substitutes `<token>` instead
+   of looping for required input — used for genuinely sensible defaults
+   that most adopters can accept (e.g. `primary_region` defaulting to
+   `eastus`). The literal token `<empty>` is a special case meaning
+   "blank input is permitted and the variable is left as the empty
+   string" — used for nullable / opt-out scalars (e.g.
+   `egress_next_hop_ip`, where empty renders as YAML null in the
+   rendered `_fleet.yaml`). Only **top-level scalar** assignments are
+   prompted; the wrapper has no HCL parser and does not descend into
+   map/object literals (e.g. the per-env entries inside `environments`).
+4. **Pre-flight refusal** for nested-map sentinels: scan the file for
+   any indented `key = "__PROMPT__"` line still in place after the
+   prompt loop, and if any are found, print the file:line references
+   with instructions to edit by hand and re-run. Interactive callers
+   exit 0 (the wizard reports unfinished work, not an error);
+   `--non-interactive` callers exit 1 (the supplied fixture/values
+   file is incomplete). Without this step, `terraform apply` would
+   fire and reject the sentinels via per-variable `validation {}`
+   blocks with multi-line stack traces — useless for first-run
+   adopters.
+5. **Apply** the `init/` module via
    `terraform -chdir=init init && terraform apply -auto-approve`.
    Terraform's variable validation blocks reject malformed GUIDs,
    slugs, DNS names, etc. — the shell contains zero format regexes.
-5. Terraform renders (via `local_file` + `templatefile`):
+6. Terraform renders (via `local_file` + `templatefile`):
    - `clusters/_fleet.yaml`
    - `.github/CODEOWNERS` (`* @<github_org>/platform-engineers`)
    - `README.md` (replaces the pre-init template README)
    - `.fleet-initialized` marker (yamlencoded; committed)
-6. **Offer to remove example clusters**
+7. **Offer to remove example clusters**
    (`clusters/mgmt/eastus/aks-mgmt-01`,
    `clusters/nonprod/eastus/aks-nonprod-01`). Default: keep.
-7. **Self-cleanup**: delete `init/`, `init-fleet.sh` itself,
+8. **Self-cleanup**: delete `init/`, `init-fleet.sh` itself,
    `.github/workflows/template-selftest.yaml`,
    `.github/workflows/status-check.yaml`, and `.github/fixtures/` so
    the adopter repo contains zero template machinery. Also strip the
@@ -3246,16 +3282,23 @@ Interactive wizard by default; `--non-interactive` plus optional
 
 ### 16.4 `init-gh-apps.sh` — GitHub App provisioning helper
 
-Two GitHub Apps (`fleet-meta`, `stage0-publisher`; rationale and
-permission split in §4 Stage -1 `bootstrap/fleet`) plus a third
-(`fleet-runners`; repo-scoped `actions:read` + `metadata:read` used
-by the self-hosted runner pool's KEDA scaler — see §4 Stage -1
-`bootstrap/fleet` → *Runner infrastructure*) must exist on the
-fleet repo before `bootstrap/fleet` runs. The GitHub Apps API has
-**no headless creation endpoint** — every App must be born through
-the App Manifest flow, which requires a one-time browser handshake to
-record the operator's consent to the requested permissions. This
-script automates everything around that single click.
+Two GitHub Apps must exist on the fleet repo before `bootstrap/fleet`
+runs:
+
+- `fleet-meta` — admin-class App used by env- and team-bootstrap
+  workflows AND by the repo-variable publish steps in
+  `bootstrap/environment` env=mgmt and Stage 1 mgmt
+  (`administration:write`, `environments:write`, `variables:write`,
+  `secrets:write`, `contents:write`).
+- `fleet-runners` — repo-scoped `actions:read` + `metadata:read`,
+  used by the self-hosted runner pool's KEDA scaler (see §4
+  Stage -1 `bootstrap/fleet` → *Runner infrastructure*).
+
+The GitHub Apps API has **no headless creation endpoint** — every
+App must be born through the App Manifest flow, which requires a
+one-time browser handshake to record the operator's consent to the
+requested permissions. This script automates everything around that
+single click.
 
 Lives at the **repo root** next to `init-fleet.sh`, not inside
 `init/`. `init-fleet.sh` deletes the entire `init/` tree on
@@ -3313,25 +3356,19 @@ Steps, per App:
    Because the file lives at the module root, `terraform apply`
    in `bootstrap/fleet` auto-loads it without an explicit
    `-var-file` flag and without "undeclared variable" warnings.
-   `bootstrap/fleet` writes the PEM into the fleet KV as the
+   `bootstrap/fleet` writes the PEM into the runner-pool KV as the
    `fleet-runners-app-pem` secret via the KV data plane (§4
    Stage -1 Runner infrastructure). `fleet_runners_app_pem_version`
    is opaque — bump it to drive a re-PUT after rotation.
 
-   No Stage-0 tfvars file is emitted today. `terraform/stages/
-   0-fleet` has no matching `variable` blocks declared, so any
-   file shape would be premature. When the deferred Stage-0
-   wiring lands (this same §16.4 work), Stage 0 will derive its
-   tfvars file from `./.gh-apps.state.json` (which already
-   persists the full GitHub App payload — IDs, client IDs, client
-   secrets, PEMs, webhook secrets, and other App metadata for all
-   three Apps). Stage 0 then writes the PEMs +
-   webhook secrets into the fleet KV created by `bootstrap/fleet`
-   (Stage 0 holds `Key Vault Secrets Officer` on the vault; the
-   role assignment is created in `bootstrap/fleet` to the
-   `fleet-stage0` UAMI), and publishes the App ids / client ids
-   as fleet-repo variables (see §4 Stage 0 outputs) so downstream
-   workflows can mint installation tokens.
+   The `fleet-meta-app-pem` is **not** consumed by Terraform; it is
+   seeded directly into the runner-pool KV by `init-gh-apps.sh` at
+   the end of its run (the script holds tenant-admin credentials
+   and data-plane reach to the KV) and consumed at workflow runtime
+   by env- and team-bootstrap workflows + the repo-variable publish
+   steps in `tf-apply.yaml`. No App ids / client ids are published
+   as repo variables by this stage; the GH App credentials live
+   entirely in the runner-pool KV alongside the runners PEM.
 
 Failure modes the script handles explicitly:
 
@@ -3348,16 +3385,17 @@ Failure modes the script handles explicitly:
   `gh api -X POST /apps/<slug>/keys` and re-run).
 
 Self-cleanup: the script `rm`s itself after a successful run in
-which all three Apps exist, are installed, and the narrow
-`bootstrap/fleet` tfvars overlay has been written. The state file
+which both Apps exist, are installed, the narrow
+`bootstrap/fleet` tfvars overlay has been written, and both PEMs
+have been seeded into the runner-pool KV. The state file
 (`./.gh-apps.state.json`) and the per-module overlay
 (`terraform/bootstrap/fleet/.gh-apps.auto.tfvars`) remain on disk
-(both gitignored)
-until Stage 0 has successfully applied — their authoritative storage
-post-Stage-0 is the fleet KV (PEMs/webhook secrets) and fleet-repo
-variables (ids/client ids). The adopter may delete both files
-manually after the first green Stage 0 apply; leaving them in place
-is harmless.
+(both gitignored) as backup; the authoritative storage is the
+runner-pool KV (PEMs) and the App registrations on GitHub
+(ids/client ids/installation ids consumed by workflows via
+`fleet-meta` installation-token minting). The adopter may delete
+both local files manually after the first green `bootstrap/fleet`
+apply; leaving them in place is harmless.
 
 ### 16.5 GitHub template repo mechanics
 
@@ -3384,17 +3422,22 @@ and in bootstrap-stage HCL locals. Initial rules:
 - **State SA**: `st<fleet.name>tfstate` (truncate + lowercase to 24
   chars; fail-fast if `fleet.name` produces an invalid name).
 - **Fleet ACR**: `acr<fleet.name>shared`.
-- **Fleet KV**: `kv-<fleet.name>-fleet` (≤ 24 chars).
+- **Runner-pool KV**: `kv-<fleet.name>-runners` (≤ 24 chars).
+- **Mgmt cluster KV** (fleet-shared): the cluster KV of the unique
+  cluster with `cluster.role == "management"`,
+  `kv-<mgmt-cluster.name>`.
 - **Env KV** (future): `kv-<fleet.name>-<env>`.
 - **Cluster KV**: `kv-<cluster.name>` (≤ 24 chars; truncation rule
   documented).
 - **State containers**: `tfstate-fleet`, `tfstate-<env>`,
   `tfstate-cluster-<cluster.name>`.
-- **Resource groups**: `rg-fleet-tfstate`, `rg-fleet-shared`,
+- **Resource groups**: `rg-fleet-tfstate`, `rg-fleet-runners`,
+  `rg-fleet-shared` (the fleet ACR's RG, per
+  `_fleet.yaml.acr.resource_group`),
   `rg-fleet-<env>-shared`, `rg-dns-<env>`, `rg-obs-<env>`,
   `rg-<cluster.name>`.
-- **UAMIs**: `uami-fleet-stage0`, `uami-fleet-meta`,
-  `uami-fleet-<env>`, `uami-kargo-mgmt`, `uami-<cluster.name>-cp`,
+- **UAMIs**: `uami-fleet-meta`, `uami-fleet-<env>`,
+  `uami-kargo-mgmt`, `uami-<cluster.name>-cp`,
   `uami-<cluster.name>-kubelet`, `uami-<cluster.name>-workload-<svc>`.
 - **DNS zones**: `<cluster.name>.<cluster.region>.<cluster.env>.<dns.fleet_root>`
   (per-cluster private zone under the fleet root).
@@ -3477,7 +3520,7 @@ the template verified purely offline.
   tuning only; subscription IDs sourced from
   `_fleet.yaml.envs.<env>.subscription_id` and stitched in
   by the config-loader).
-- Runtime stages (`0-fleet`, `1-cluster`, `2-platform`), which
+- Runtime stages (`1-cluster`, `2-platform`), which
   already read yaml.
 
 ### 16.10 Execution order (completed in Phase 1)

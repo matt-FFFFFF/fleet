@@ -1,7 +1,7 @@
 # main.state.tf
 #
 # Creates the fleet-wide Terraform state storage. All downstream stages —
-# Stage 0, bootstrap/environment, bootstrap/team, and the per-env Stage 1 /
+# bootstrap/environment, bootstrap/team, and the per-env Stage 1 /
 # Stage 2 containers seeded by bootstrap/environment — land in this account.
 #
 # Resource scope: the shared subscription (fleet.state.subscription_id).
@@ -32,15 +32,14 @@ resource "azapi_resource" "state_sa" {
       allowSharedKeyAccess         = false # OIDC + RBAC only; no shared-key listings in CI
       minimumTlsVersion            = "TLS1_2"
       supportsHttpsTrafficOnly     = true
-      publicNetworkAccess          = var.allow_public_state_during_bootstrap ? "Enabled" : "Disabled"
+      publicNetworkAccess          = "Disabled"
       defaultToOAuthAuthentication = true
       networkAcls = {
-        # Deny-by-default even while publicNetworkAccess is transiently
-        # "Enabled" for the first apply; access always flows through the
-        # private endpoint seeded below. bypass = "None" is deliberate —
-        # we do not want Azure trusted services (including Azure Monitor,
-        # Backup, Policy) reaching the SA via its public endpoint even
-        # during the first-apply escape hatch window.
+        # publicNetworkAccess is "Disabled" above; access flows exclusively
+        # through the private endpoint seeded below. bypass = "None" is
+        # deliberate — we do not want Azure trusted services (including
+        # Azure Monitor, Backup, Policy) reaching the SA via its public
+        # endpoint.
         bypass              = "None"
         defaultAction       = "Deny"
         ipRules             = []

@@ -8,7 +8,7 @@
 #
 # TODO(phase3-wire-receivers): the action-group receivers wire KV secret
 # *names* but the receiver blocks below need the actual secret values read
-# via `azapi_resource_action` (ephemeral list) once fleet KV is populated.
+# via `azapi_resource_action` (ephemeral list) once runners KV is populated.
 # For Phase 1 the values default to placeholder strings.
 
 locals {

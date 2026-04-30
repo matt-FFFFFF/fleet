@@ -31,20 +31,17 @@ locals {
 locals {
   oidc_claim_keys = ["repository_owner_id", "repository_id", "environment"]
 
-  # Owner + repo IDs are looked up via data sources (the repo is owned by
-  # bootstrap/fleet, so we cannot reference the resource directly from here).
+  # Owner + repo numeric IDs are sourced from repo-level GitHub Actions
+  # vars (`FLEET_GITHUB_OWNER_ID` / `FLEET_GITHUB_REPO_ID`), populated by
+  # `bootstrap/fleet`. The fleet-meta GitHub App that authenticates this
+  # bootstrap intentionally does not hold the `Members: read` org
+  # permission required by `data.github_organization`, so the equivalent
+  # data-source lookups must happen Stage -1 (under operator credentials)
+  # and be republished as variables.
   oidc_subject_claim_values = {
-    repository_owner_id = tostring(data.github_organization.fleet.id)
-    repository_id       = tostring(data.github_repository.fleet.repo_id)
+    repository_owner_id = var.fleet_github_owner_id
+    repository_id       = var.fleet_github_repo_id
   }
-}
-
-data "github_organization" "fleet" {
-  name = local.fleet.github_org
-}
-
-data "github_repository" "fleet" {
-  full_name = "${local.fleet.github_org}/${local.fleet.github_repo}"
 }
 
 module "env_github" {
@@ -82,10 +79,6 @@ module "env_github" {
     blob_contrib = {
       role_definition_id = "/subscriptions/${local.derived.state_subscription}/providers/Microsoft.Authorization/roleDefinitions/${local.role_blob_data_ctrb}"
       scope              = azapi_resource.state_container_env.id
-    }
-    fleet_kv_secrets_user = {
-      role_definition_id = "/subscriptions/${local.derived.acr_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_kv_secrets_user}"
-      scope              = local.fleet_kv_id
     }
     acr_uaa_bounded = {
       role_definition_id = "/subscriptions/${local.derived.acr_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_rbac_admin}"
@@ -197,10 +190,11 @@ resource "github_actions_environment_variable" "env_vars" {
 #
 # Previously: `Application.ReadWrite.OwnedBy` on every `uami-fleet-<env>`,
 # granted via `bootstrap/fleet`'s `AppRoleAssignment.ReadWrite.All` on
-# `uami-fleet-meta`. Under hub-and-spoke, the only UAMIs that mutate the
-# Argo / Kargo AAD apps are `uami-fleet-stage0` (Stage 0; tenant-admin
-# bootstrap-time grant) and `uami-fleet-mgmt` (Stage 1 mgmt — Kargo
-# password rotation; future mgmt-side Argo / Kargo FICs).
+# `uami-fleet-meta`. Under hub-and-spoke, the only UAMI that mutates the
+# Argo / Kargo AAD apps is `uami-fleet-mgmt` (Stage 1 mgmt — Kargo
+# password rotation; future mgmt-side Argo / Kargo FICs); the AAD apps
+# themselves are owned by `bootstrap/fleet` and created by the operator
+# at apply time using their own Graph perms.
 #
 # `uami-fleet-mgmt` receives its `Application.ReadWrite.OwnedBy` grant
 # manually post-bootstrap; the long-lived `AppRoleAssignment.ReadWrite.All`

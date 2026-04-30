@@ -74,7 +74,7 @@ resource "azapi_resource" "ra_extdns_pdz" {
   }
 }
 
-# --- ESO UAMI → KV Secrets User on cluster KV + fleet KV -------------------
+# --- ESO UAMI → KV Secrets User on cluster KV + runners KV ----------------
 
 resource "azapi_resource" "ra_eso_cluster_kv" {
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
@@ -90,10 +90,21 @@ resource "azapi_resource" "ra_eso_cluster_kv" {
   }
 }
 
-resource "azapi_resource" "ra_eso_fleet_kv" {
+# --- ESO UAMI → KV Secrets User on the mgmt cluster KV --------------------
+#
+# Spoke clusters' ESO reads fleet-shared secrets (e.g.
+# `argocd-oidc-client-secret`) from the **mgmt cluster KV** — the
+# Argo RP secret lives there post-refactor (see Stage 1 mgmt
+# main.aad.argocd.tf). On the mgmt cluster itself this assignment is
+# redundant: `ra_eso_cluster_kv` already grants the same role on the
+# same KV, so it's gated `count = mgmt_role_cluster ? 0 : 1`.
+
+resource "azapi_resource" "ra_eso_mgmt_cluster_kv" {
+  count = local.mgmt_role_cluster ? 0 : 1
+
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
-  name      = uuidv5("url", "kv-secrets-user|${var.fleet_keyvault_id}|${azapi_resource.uami_eso.output.properties.principalId}")
-  parent_id = var.fleet_keyvault_id
+  name      = uuidv5("url", "kv-secrets-user|${var.mgmt_cluster_kv_id}|${azapi_resource.uami_eso.output.properties.principalId}")
+  parent_id = var.mgmt_cluster_kv_id
 
   body = {
     properties = {
@@ -102,6 +113,29 @@ resource "azapi_resource" "ra_eso_fleet_kv" {
       roleDefinitionId = local.role_def_ids.kv_secrets_usr
     }
   }
+
+  lifecycle {
+    precondition {
+      condition     = var.mgmt_cluster_kv_id != null && var.mgmt_cluster_kv_id != ""
+      error_message = "TF_VAR_mgmt_cluster_kv_id must be set on spoke clusters (consumed by ESO to read fleet-shared secrets like `argocd-oidc-client-secret` from the mgmt cluster KV). Published as the MGMT_CLUSTER_KV_ID repo variable by the mgmt cluster's Stage 1."
+    }
+  }
+}
+
+# State-migration shim: this role assignment was previously
+# `ra_eso_runners_kv` (and before that `ra_eso_fleet_kv`); it was
+# also retargeted from the runner-pool KV to the mgmt cluster KV.
+# The `moved {}` chain keeps existing state addressed correctly
+# across both renames so adopters upgrading don't see a destroy +
+# recreate of the role assignment.
+moved {
+  from = azapi_resource.ra_eso_fleet_kv
+  to   = azapi_resource.ra_eso_runners_kv
+}
+
+moved {
+  from = azapi_resource.ra_eso_runners_kv
+  to   = azapi_resource.ra_eso_mgmt_cluster_kv
 }
 
 # --- Kubelet identity → AcrPull on fleet ACR -------------------------------

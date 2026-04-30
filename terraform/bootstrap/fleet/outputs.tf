@@ -19,14 +19,6 @@ output "fleet_shared_resource_group_id" {
   value = azapi_resource.rg_fleet_shared.id
 }
 
-output "fleet_stage0_uami" {
-  value = {
-    resource_id  = module.fleet_repo.environments["stage0"].identity.id
-    client_id    = module.fleet_repo.environments["stage0"].identity.client_id
-    principal_id = module.fleet_repo.environments["stage0"].identity.principal_id
-  }
-}
-
 output "fleet_meta_uami" {
   value = {
     resource_id  = module.fleet_repo.environments["meta"].identity.id
@@ -45,7 +37,7 @@ output "mgmt_vnet_resource_ids" {
 }
 
 output "mgmt_snet_pe_fleet_ids" {
-  description = "Per-region mgmt VNet snet-pe-fleet subnet resource ids (tfstate SA / fleet KV / fleet ACR PE landing subnets), keyed by region. Published as MGMT_PE_FLEET_SUBNET_IDS (jsonencoded)."
+  description = "Per-region mgmt VNet snet-pe-fleet subnet resource ids (tfstate SA / runners KV / fleet ACR PE landing subnets), keyed by region. Published as MGMT_PE_FLEET_SUBNET_IDS (jsonencoded)."
   value       = local.mgmt_snet_pe_fleet_ids
 }
 
@@ -63,6 +55,6 @@ output "derived_names" {
   value = {
     state_storage_account = local.derived.state_storage_account
     acr_name              = local.derived.acr_name
-    fleet_kv_name         = local.derived.fleet_kv_name
+    runners_kv_name       = local.derived.runners_kv_name
   }
 }

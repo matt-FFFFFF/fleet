@@ -86,6 +86,25 @@ The overlay file uses plain HCL `key = "value"` lines (see
 
 ## 3. Post-init edits
 
+Adopter-supplied edits land in `clusters/_fleet.yaml` (single source of
+truth) and the per-cluster `cluster.yaml` files. Both are validated by
+JSON Schema:
+
+- `clusters/_fleet.yaml` → `schemas/fleet.v1.schema.json`
+- `clusters/**/cluster.yaml` (and every `_defaults.yaml` overlay)
+  → `schemas/cluster.v1.schema.json`
+
+Each YAML carries a modeline (`# yaml-language-server: $schema=...`)
+that VS Code, JetBrains, and the standalone YAML language server
+(vim/nvim/helix) honour automatically — so structural mistakes
+(misspelled keys, wrong types, the F19 `use_remote_gateways:` at the
+wrong nesting level) appear as red squiggles in your editor before
+`terraform init` ever runs. The same schemas are enforced by the
+`schema-lint` job in `.github/workflows/validate.yaml` on every PR.
+
+Schemas are versioned in their filename (`fleet.v1.schema.json`); see
+`schemas/README.md` for the bump policy.
+
 Some values can't be prompted because they typically don't exist yet
 at adoption time. Fill these into `clusters/_fleet.yaml` before the
 first Terraform apply — the file documents each with a `TODO` or
@@ -119,6 +138,32 @@ those address spaces. See `docs/networking.md` for the two-pool
 layout and `docs/onboarding-cluster.md` for the single-PR new-cluster
 flow (picking `subnet_slot`).
 
+### Handling globally-unique-name collisions
+
+Three resources this repo creates have **Azure-globally-unique** names
+— the chosen `fleet.name` slug is woven into them and must be unique
+across every Azure tenant worldwide:
+
+| Resource       | Default formula             | Length cap | Override field                       |
+| -------------- | --------------------------- | ---------- | ------------------------------------ |
+| Fleet state SA | `st<fleet.name>tfstate`     | 24         | `state.storage_account_name_override` |
+| Fleet ACR      | `acr<fleet.name>shared`     | 50         | `acr.name_override`                   |
+| Runners KV     | `kv-<fleet.name>-runners`   | 24         | `runners_keyvault.name_override`      |
+
+If you hit `StorageAccountAlreadyTaken` / `RegistryNameAlreadyExists`
+/ `VaultAlreadyExists` on the first `terraform apply` (or after a
+tear-down before the soft-deleted Key Vault has purged — KV
+soft-delete retention is 7-90 days, default 90), edit
+`clusters/_fleet.yaml` and set the relevant `*_override` field to a
+globally-unique name you've verified is free, then re-run apply.
+Overrides bypass the formula completely; you are responsible for
+length and character-class compliance (see `docs/naming.md` §
+"Override semantics").
+
+The same pattern applies to per-cluster Key Vaults (`kv-<cluster.name>`,
+24-char cap, globally unique): set `platform.keyvault.name` in the
+relevant `cluster.yaml` to override.
+
 Commit the initialized repo:
 
 ```sh
@@ -129,16 +174,15 @@ git push
 
 ## 4. Provision the GitHub Apps
 
-The fleet uses three GitHub Apps with deliberately different blast
+The fleet uses two GitHub Apps with deliberately different blast
 radius (rationale in `PLAN.md` §4 Stage -1):
 
 - **`fleet-meta`** (admin-class) — used by env-bootstrap and
-  team-bootstrap workflows behind a 2-reviewer gate.
+  team-bootstrap workflows behind a 2-reviewer gate. Also publishes
+  fleet-scope repo variables from `bootstrap/{fleet,environment}` and
+  Stage 1 mgmt apply post-steps.
   Permissions: `administration:write`, `environments:write`,
   `variables:write`, `secrets:write`, `contents:write`.
-- **`stage0-publisher`** (narrow) — used by the Stage 0 workflow
-  to publish outputs as repo variables.
-  Permissions: `variables:write` only.
 - **`fleet-runners`** (narrow) — used by the KEDA scaler inside the
   fleet runner pool to poll for queued runner jobs on this repo.
   Permissions: `actions:read`, `metadata:read`. Installed on the
@@ -156,16 +200,17 @@ consent to the requested permissions. The `init-gh-apps.sh` helper
 tree on self-cleanup — automates everything around that single
 click: building the manifest from `_fleet.yaml`, opening a localhost
 listener for the redirect, exchanging the temp code for the App
-credentials, and guiding the installation flow for all three Apps
+credentials, and guiding the installation flow for both Apps
 (the operator chooses the repo selection in the GitHub install UI;
 the script records the owner-scoped installation id but does not
 verify repo-selection coverage).
 
 > **Status:** `init-gh-apps.sh` is implemented at the repo root
 > (PLAN §16.4). The command block below is the actual adopter
-> experience. Stage 0 wiring that consumes the GitHub App
-> credentials is still pending; until then, only `bootstrap/fleet`
-> reads any of the App material (the `fleet-runners` PEM).
+> experience. The Terraform-side consumer of App material is
+> `bootstrap/fleet` (the `fleet-runners` PEM); workflow-side consumers
+> (`fleet-meta`-driven env/team bootstrap) read App credentials at
+> runtime via the GitHub App installation.
 
 ### Running `init-gh-apps.sh`
 
@@ -183,8 +228,8 @@ export GH_TOKEN=<PAT with repo + admin:org>
 ```
 
 The script persists the full App payload (App IDs, `client_id`,
-`client_secret`, PEMs, webhook secrets, and other App metadata for all
-three Apps) to `./.gh-apps.state.json` (gitignored, mode 0600) and
+`client_secret`, PEMs, webhook secrets, and other App metadata for both
+Apps) to `./.gh-apps.state.json` (gitignored, mode 0600) and
 writes a narrow per-module overlay at
 `terraform/bootstrap/fleet/.gh-apps.auto.tfvars` (gitignored, mode
 0600) carrying only `fleet_runners_app_pem` +
@@ -197,15 +242,14 @@ API. Because the overlay lives at the module root, `terraform apply`
 auto-loads it without an explicit `-var-file` flag. The executor
 running the apply must have private-network reach to the KV
 (`<vault>.vault.azure.net`).
-Stage 0 is intended to seed the remaining PEMs + webhook secrets and
-publish the App IDs / client IDs as repo variables, but no Stage-0
-tfvars file is emitted today — `terraform/stages/0-fleet` has no
-matching `variable` blocks declared, so any file shape would be
-premature. PLAN §16.4 will derive its own tfvars from
-`.gh-apps.state.json` when the matching variable blocks land. Both
-files (`.gh-apps.state.json` and the `bootstrap/fleet` overlay) remain
-on disk after applies. Keep them as long as you may need to re-plan
-or re-apply `terraform/bootstrap/fleet`: the `fleet_runners_app_pem`
+The full App payload — additional PEMs, client secrets, and webhook
+secrets — stays in `./.gh-apps.state.json`; no other tfvars file is
+emitted. Workflow-level consumers (`fleet-meta`-driven env-bootstrap
+and team-bootstrap) read App credentials at runtime via the App
+installation, not from tfvars. Both files (`.gh-apps.state.json` and
+the `bootstrap/fleet` overlay) remain on disk after applies. Keep
+them as long as you may need to re-plan or re-apply
+`terraform/bootstrap/fleet`: the `fleet_runners_app_pem`
 variable is `ephemeral` + `sensitive` + `nullable = false`, and
 `bootstrap/fleet` writes the PEM into Key Vault via a write-only
 data-plane `sensitive_body` — Terraform cannot read it back from
@@ -218,15 +262,6 @@ store you have safely stashed it in). The equivalent applies to a PEM
 rotation: bump `fleet_runners_app_pem_version` (the overlay does this
 automatically on re-run of `./init-gh-apps.sh`; otherwise bump it by
 hand) to drive a re-PUT of the KV secret.
-
-### Today (manual)
-
-Create the two GitHub Apps manually via *Organization settings →
-Developer settings → GitHub Apps → New GitHub App* with the
-permissions above. Do **not** expect Stage 0 to consume GitHub App
-credentials via `TF_VAR_*` env vars yet: `terraform/stages/0-fleet`
-does not currently declare those inputs, so they would be ignored.
-That wiring is planned for `PLAN.md` §16.4.
 
 ## 5. Bootstrap Terraform
 
@@ -242,13 +277,13 @@ GitHub items must be arranged out-of-band by the adopter org.
 - `az login` session in the tenant identified by
   `_fleet.yaml.fleet.tenant_id`. Both providers run with
   `use_cli = true`; no service-principal env vars are read.
-- Tenant role: **Privileged Role Administrator** (or Global
-  Administrator) — required to consent to the Microsoft Graph
-  app-role assignment that grants `fleet-stage0`
-  `Application.ReadWrite.OwnedBy` (issued automatically by
-  `bootstrap/fleet`), AND to manually issue the matching grant on
-  `uami-fleet-mgmt` after `bootstrap/environment` env=mgmt runs
-  (see §5.3).
+- Tenant role: **Global Administrator** or **Cloud Application
+  Administrator** — required to create the Argo / Kargo AAD
+  application registrations + service principals via the `azuread`
+  provider in `bootstrap/fleet`. No standing Microsoft Graph grant
+  is issued on any UAMI; AAD-app lifecycle is operator-owned and
+  re-runs of `bootstrap/fleet` (for re-rolls or KV writes) require
+  the same role.
 - Subscription role on `_fleet.yaml.acr.subscription_id`:
   **Owner** (or Contributor + User Access Administrator).
 - Resource provider registrations on the shared subscription:
@@ -326,17 +361,11 @@ GitHub items must be arranged out-of-band by the adopter org.
   `bootstrap/environment` registers each env's Grafana PE A-record.
 - Role assignment: **`Private DNS Zone Contributor`** on all four
   central zones — for the operator on the first apply, **and** for
-  the `fleet-stage0` / `fleet-meta` UAMIs for every subsequent re-run.
-- **VNet-reachable workstation for every re-run**: jump host,
+  the `fleet-meta` and `fleet-<env>` UAMIs for every subsequent re-run.
+- **VNet-reachable workstation for every apply**: jump host,
   Azure Bastion, or VPN into the fleet VNet. The tfstate SA is
-  private-only after the first apply — Terraform cannot reach it
-  from a laptop over the public internet.
-- **First-apply-only escape hatch**: set
-  `allow_public_state_during_bootstrap = true` for the very first
-  `bootstrap/fleet` apply. This leaves the storage account's
-  public endpoint Enabled (with `defaultAction = "Deny"` still in
-  place) long enough to seed the PE and DNS zone group; flip it back
-  to `false` on the second apply. Do not leave it on.
+  private-only from the very first apply — Terraform cannot reach
+  it from a laptop over the public internet.
 
 **GitHub**
 
@@ -345,13 +374,12 @@ GitHub items must be arranged out-of-band by the adopter org.
 - `GITHUB_TOKEN` exported with classic-PAT scopes `repo:admin`
   and `admin:org` (the latter only if `github_org` is an
   organization).
-- The `fleet-meta` and `stage0-publisher` GitHub Apps from §4 are
-  **not** required for the initial `bootstrap/fleet` apply — they
-  become relevant for later workflows. Their credentials persist in
-  `./.gh-apps.state.json`; PLAN §16.4 will derive a Stage-0 tfvars
-  file from state when the matching `variable` blocks land.
-  `bootstrap/fleet` does not create, write, or manage the GitHub
-  App credentials.
+- The `fleet-meta` GitHub App from §4 is **not** required for the
+  initial `bootstrap/fleet` apply — it becomes relevant for later
+  workflows (env-bootstrap, team-bootstrap, and fleet-scope repo-var
+  publishing post-apply). Its credentials persist in
+  `./.gh-apps.state.json`. `bootstrap/fleet` does not create, write,
+  or manage the GitHub App credentials.
 - The **`fleet-runners`** GitHub App **is** required up-front: the
   vendored runner module validates that
   `github_app.fleet_runners.{app_id, installation_id}` are non-empty
@@ -374,10 +402,9 @@ GitHub items must be arranged out-of-band by the adopter org.
   the module root, `terraform apply` auto-loads it — no `-var-file`
   flag and no "undeclared variable" warnings. `bootstrap/fleet`
   writes the PEM into the fleet KV as the `fleet-runners-app-pem`
-  secret via the KV data plane. The full GitHub App payload (all
-  three Apps' IDs / client IDs / PEMs / webhook secrets) persists in
-  `./.gh-apps.state.json`; PLAN §16.4 will derive a Stage-0 tfvars
-  file from state when its matching `variable` blocks land.
+  secret via the KV data plane. The full GitHub App payload (every
+  App's IDs / client IDs / PEMs / webhook secrets) persists in
+  `./.gh-apps.state.json`; no other tfvars file is derived from it.
 - The team-template repo (`<github_org>/<team_template_repo>`,
   default `team-repo-template`) must **not** pre-exist; it is
   created fresh with `prevent_destroy = true`.
@@ -399,11 +426,8 @@ terraform init
 # `fleet_runners_app_pem` + `fleet_runners_app_pem_version` and is
 # auto-loaded — no `-var-file` flag required. See §5.1.
 
-# First apply — leave the tfstate SA's public endpoint Enabled long
-# enough to seed the private endpoint + DNS zone group.
-terraform apply -var allow_public_state_during_bootstrap=true
-
-# Every subsequent apply (from a VNet-reachable workstation):
+# Apply (run from a VNet-reachable workstation; the tfstate SA is
+# private-only from the first apply onward).
 terraform apply
 ```
 
@@ -414,57 +438,115 @@ No manual `terraform import` step is required.
 
 See `PLAN.md` §4 Stage -1 for the full bootstrap sequence.
 
-### 5.3 Post-`bootstrap/environment` (env=mgmt): manual Graph grant
+### 5.3 Two-pass `bootstrap/fleet` apply (Argo + Kargo OIDC RP secrets)
 
-`uami-fleet-mgmt` (created by `bootstrap/environment` when
-`env=mgmt`) needs Microsoft Graph `Application.ReadWrite.OwnedBy`
-so that **Stage 1 on the mgmt cluster** — running under that UAMI
-in CI — can mutate the `argocd-fleet` and `kargo-fleet` AAD apps it
-co-owns (rotating `azuread_application_password` for the Kargo
-OIDC client, writing future mgmt-side Argo/Kargo federated
-credentials, etc.). Stage 0 itself runs under `uami-fleet-stage0`
-and already holds the equivalent grant via `bootstrap/fleet`; this
-section is **only** about the mgmt-side UAMI. The grant is **not**
-issued from Terraform: doing so would require `bootstrap/fleet`
-(or `bootstrap/environment`) to hold
-`AppRoleAssignment.ReadWrite.All` long-term, which is exactly the
-blast radius we are trying to avoid (PLAN §13 Phase 2 / R1).
+`bootstrap/fleet` owns the Argo + Kargo AAD applications + service
+principals + their long-lived (2-year) RP `client_secret` values
+(used by Argo CD / Dex / Kargo for human OIDC SSO login). The
+secrets must land in the **mgmt cluster Key Vault**, which does
+not exist until Stage 1 mgmt has run. The resolution is a
+two-pass apply pattern:
 
-Instead, the operator (still holding **Privileged Role
-Administrator** from §5.1) issues the grant **once**, by hand, with
-`az`:
+1. **First pass — `bootstrap/fleet apply`**:
+   - Argo + Kargo AAD apps + SPs + 2-year passwords created.
+   - `ARGO_AAD_APP_ID`, `KARGO_AAD_APP_ID`, and
+     `KARGO_AAD_APPLICATION_OBJECT_ID` published as repo-level
+     GitHub Actions variables.
+   - Runners KV created with PE + DNS zone group; operator self-
+     grants `Key Vault Secrets Officer` on it (in-plan) so the
+     same apply can seed `fleet-runners-app-pem` and
+     `fleet-meta-app-pem` via data-plane PUT. Both PEM secrets
+     come from `TF_VAR_fleet_runners_app_pem` /
+     `TF_VAR_fleet_meta_app_pem`, populated by `init-gh-apps.sh`
+     (§4).
+   - Mgmt cluster KV writes are skipped because
+     `var.mgmt_cluster_kv_id` is null (default).
 
-```sh
-# Microsoft Graph service principal (well-known appId):
-GRAPH_SP_OBJECT_ID="$(az ad sp show \
-  --id 00000003-0000-0000-c000-000000000000 \
-  --query id -o tsv)"
+2. Run `init-gh-apps.sh --keep` if needed to seed the GH App PEMs
+   into the runners KV (skipped if already done).
 
-# uami-fleet-mgmt principalId (from bootstrap/environment env=mgmt
-# state). `env_uami` is an object output, so use `-json`:
-MGMT_UAMI_PRINCIPAL_ID="$(terraform -chdir=terraform/bootstrap/environment \
-  output -json env_uami | jq -r '.principal_id')"
+3. **`env-bootstrap.yaml env=mgmt apply`** — creates the fleet ACR
+   and publishes `ACR_*` repo vars.
 
-# Application.ReadWrite.OwnedBy app-role id (well-known on Graph):
-APP_RW_OWNED_BY_ROLE_ID="18a4783c-866b-4cc7-a460-3d5e5662c884"
+4. **`tf-apply.yaml cluster=<mgmt>`** — Stage 1 mgmt creates the
+   mgmt cluster and the mgmt cluster KV; publishes
+   `MGMT_CLUSTER_KV_ID`, `KARGO_MGMT_UAMI_*`, and `MGMT_AKS_*`
+   repo vars.
 
-az rest \
-  --method POST \
-  --uri "https://graph.microsoft.com/v1.0/servicePrincipals/${GRAPH_SP_OBJECT_ID}/appRoleAssignedTo" \
-  --headers "Content-Type=application/json" \
-  --body "$(jq -nc \
-    --arg pid "${MGMT_UAMI_PRINCIPAL_ID}" \
-    --arg rid "${APP_RW_OWNED_BY_ROLE_ID}" \
-    --arg gid "${GRAPH_SP_OBJECT_ID}" \
-    '{principalId: $pid, resourceId: $gid, appRoleId: $rid}')"
-```
+5. **Second pass — `bootstrap/fleet apply`** with
+   `TF_VAR_mgmt_cluster_kv_id=<value of MGMT_CLUSTER_KV_ID>`:
+   - Operator self-grants `Key Vault Secrets Officer` on the
+     mgmt cluster KV (in-plan).
+   - Argo + Kargo OIDC RP `client_secret` values written to the
+     mgmt cluster KV via data-plane PUT.
+   - ESO on every cluster (mgmt + spokes) reads them from this KV
+     into the `argocd` / `kargo` namespaces.
 
-The grant persists for the life of the UAMI. Re-running
-`bootstrap/environment` env=mgmt does **not** revoke it; deleting
-the UAMI does. If the grant is missing, the mgmt cluster's Stage 1
-operations that run under `uami-fleet-mgmt` can fail on Microsoft
-Graph-backed resources (for example `azuread_application_password`
-rotation on the Kargo AAD app) with `Authorization_RequestDenied`.
+After step 5 the apply graph is idempotent. Subsequent re-runs of
+`bootstrap/fleet` (e.g. to re-roll a secret by bumping
+`var.argocd_rp_secret_version` or `var.kargo_rp_secret_version`)
+require only that `var.mgmt_cluster_kv_id` remains set.
+
+The previous design (Stage 1 mgmt owning the AAD apps + a manual
+Microsoft Graph `Application.ReadWrite.OwnedBy` grant on
+`uami-fleet-mgmt`) has been retired. No standing Graph grant is
+issued on any UAMI; AAD-app lifecycle is operator-owned. Re-runs
+of `bootstrap/fleet` require the operator to hold
+**Cloud Application Administrator** or **Global Administrator**
+in the tenant — the same role used at first apply.
+
+### 5.4 CI runner placement
+
+Workflows split runner placement by what each job touches.
+
+**Self-hosted (fleet runner pool, label `self-hosted`)** — every
+job that reads or writes a private Azure data plane:
+
+- `tf-plan.yaml` — the `cluster` matrix (reads private tfstate).
+- `tf-apply.yaml` — the `cluster` matrix (writes private tfstate).
+- `env-bootstrap.yaml` — the `bootstrap` job (reads runners KV +
+  writes env tfstate).
+- `team-bootstrap.yaml` — the `bootstrap` matrix (reads runners KV +
+  writes env tfstate).
+
+The pool is created by `bootstrap/fleet` (the KEDA-scaled Container
+App Job under `rg-fleet-runners`) and is the only ingress path to
+those private endpoints from a GitHub-hosted control plane. The
+fleet tfstate SA, the runner-pool KV, and the mgmt cluster KV are
+PE-bound with `publicNetworkAccess = Disabled`, so any
+tfstate-touching or KV-touching job must run on a runner inside
+the fleet VNet regardless.
+
+**Hosted (`ubuntu-24.04`)** — every job that does not touch a
+private Azure data plane:
+
+- All of `validate.yaml` (terraform fmt, tflint, yamllint,
+  subnet-slots, naming-parity).
+- The initialisation-guard / `detect` / `discover` / `summarize`
+  jobs in `tf-plan.yaml`, `tf-apply.yaml`, `env-bootstrap.yaml`,
+  and `team-bootstrap.yaml`.
+- The two template-only workflows `template-selftest.yaml` and
+  `status-check.yaml`. (These run in the fleet template repo and
+  on fresh forks before `init-fleet.sh`; the script deletes them
+  during self-cleanup, so they never appear in adopter-repo CI.)
+
+Why hosted for these: the trust-boundary argument that motivates
+self-hosted (one image to harden, one egress path, one identity
+surface) only applies to jobs that actually use that egress path.
+Lint, formatting, marker-file checks, `git diff` matrix builders,
+and PR-comment formatters do not. Putting them on the pool would
+couple basic CI signal to a piece of infrastructure that is offline
+during pool recovery — exactly when being able to lint a fix is
+most valuable.
+
+Consequence: a broken runner pool still takes Azure-touching CI
+with it (`tf-plan` cluster matrix, `tf-apply` cluster matrix, both
+bootstrap workflows). This is acceptable because the runner pool
+is bootstrap-laptop-applied (see §5.2). Recovery is `terraform apply`
+from the operator laptop against `terraform/bootstrap/fleet`, not
+"another CI workflow that needs the pool to be healthy." Lint and
+fmt remain green through the recovery, so the fix PR can still be
+reviewed.
 
 ## Re-running `init-fleet.sh`
 

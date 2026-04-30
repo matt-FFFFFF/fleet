@@ -8,7 +8,7 @@ terraform {
     }
     azuread = {
       source  = "hashicorp/azuread"
-      version = "~> 3.8"
+      version = "~> 3.0"
     }
     # NOTE: azurerm is a narrow carveout — it is used ONLY transitively by
     # the vendored `modules/cicd-runners/` module (see PLAN §1 and
@@ -23,7 +23,7 @@ terraform {
     }
     github = {
       source  = "integrations/github"
-      version = "~> 6.11"
+      version = "~> 6.12"
     }
     # `modtm` is required by the `Azure/avm-ptn-alz-sub-vending/azure`
     # module (see main.network.tf). Telemetry is disabled at the module

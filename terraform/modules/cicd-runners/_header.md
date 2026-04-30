@@ -46,6 +46,6 @@ Full details in `VENDORING.md`. Summary:
 ## Callers inside this repo
 
 - `terraform/bootstrap/fleet/main.runner.tf` — the single shared
-  repo-scoped GitHub runner pool used by `fleet-stage0` / `fleet-meta`
-  and per-env `fleet-<env>` workflows. Uses GitHub App authentication
+  repo-scoped GitHub runner pool used by `fleet-meta` and per-env
+  `fleet-<env>` workflows. Uses GitHub App authentication
   with the private key sourced from Key Vault.

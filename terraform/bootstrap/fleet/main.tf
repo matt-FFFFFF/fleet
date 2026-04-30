@@ -4,35 +4,33 @@
 #
 #   1. rg-fleet-tfstate + state SA + tfstate-fleet container (private endpoint
 #      landing in the co-located mgmt VNet's snet-pe-fleet subnet)
-#   2. rg-fleet-shared (Stage 0 will land the ACR here)
-#   3. Fleet Key Vault + private endpoint (co-located mgmt VNet snet-pe-fleet)
-#      + DNS registration in the central privatelink.vaultcore.azure.net zone
-#      (Stage 0 seeds Argo + GH App secrets into it)
-#   4. uami-fleet-stage0 + uami-fleet-meta + uami-fleet-runners + FICs
-#   5. Azure RBAC: fleet-stage0 Contributor on rg-fleet-shared + Blob
-#      Contributor on tfstate-fleet; fleet-meta Blob Contributor on
-#      tfstate-fleet; fleet-meta Network Contributor on EACH mgmt
-#      env-region VNet (so `bootstrap/environment` can carve
-#      cluster-workload subnets on mgmt VNets and author reverse-half
-#      peerings from non-mgmt envs); fleet-runners Key Vault Secrets
-#      User on the fleet KV. Subscription-scope assignments for
-#      fleet-meta are deferred to bootstrap/environment (one per env
-#      subscription).
-#   6. Microsoft Graph app-role assignment: `fleet-stage0` gets
-#      `Application.ReadWrite.OwnedBy` (owner-scoped CRUD on the Argo +
-#      Kargo AAD apps it creates; in practice the only two apps it
-#      ever owns under PLAN §1 hub-and-spoke). `fleet-meta` receives
-#      no Graph grant. The matching grant on `uami-fleet-mgmt` (needed
-#      for Stage 1 mgmt-cluster Kargo password rotation) is issued
-#      manually by the operator after `bootstrap/environment` env=mgmt
-#      runs — see `docs/adoption.md §5.3`. See main.identities.tf for
-#      the rationale.
+#   2. rg-fleet-shared (env=mgmt's `bootstrap/environment` lands the fleet
+#      ACR here)
+#   3. rg-fleet-runners + runners Key Vault + private endpoint (co-located
+#      mgmt VNet snet-pe-fleet) + DNS registration in the central
+#      privatelink.vaultcore.azure.net zone (seeds GH App PEMs via
+#      `init-gh-apps.sh`)
+#   4. uami-fleet-meta + uami-fleet-runners + FICs
+#   5. Azure RBAC: fleet-meta Blob Contributor on tfstate-fleet;
+#      fleet-meta Network Contributor on EACH mgmt env-region VNet (so
+#      `bootstrap/environment` can carve cluster-workload subnets on
+#      mgmt VNets and author reverse-half peerings from non-mgmt envs);
+#      fleet-runners Key Vault Secrets User on the runners KV.
+#      Subscription-scope assignments for fleet-meta are deferred to
+#      bootstrap/environment (one per env subscription).
+#   6. Argo + Kargo AAD app registrations + service principals + 2-year
+#      RP `client_secret` values (operator-applied via interactive
+#      `az login`; no UAMI Graph grant needed). On the second-pass
+#      apply (with `var.mgmt_cluster_kv_id` set from the
+#      `MGMT_CLUSTER_KV_ID` repo var published by Stage 1 mgmt), the
+#      `client_secret` values are written into the mgmt cluster KV.
+#      Repo-level GH Actions vars `ARGO_AAD_APP_ID`, `KARGO_AAD_APP_ID`,
+#      `KARGO_AAD_APPLICATION_OBJECT_ID` published. See main.aad.tf.
 #   7. Fleet GitHub repo + branch protection; team-repo-template repo.
-#   8. fleet-stage0 + fleet-meta GitHub environments with env variables,
-#      including JSON-encoded MGMT_VNET_RESOURCE_IDS /
-#      MGMT_PE_FLEET_SUBNET_IDS / MGMT_RUNNERS_SUBNET_IDS maps on
-#      fleet-meta (consumed by `bootstrap/environment` and
-#      stages/1-cluster per PLAN §3.4).
+#   8. fleet-meta GitHub environment with env variables, including
+#      JSON-encoded MGMT_VNET_RESOURCE_IDS / MGMT_PE_FLEET_SUBNET_IDS /
+#      MGMT_RUNNERS_SUBNET_IDS maps (consumed by `bootstrap/environment`
+#      and stages/1-cluster per PLAN §3.4).
 #   9. Self-hosted GitHub Actions runner pool (ACA + KEDA) in the
 #      co-located mgmt VNet's snet-runners subnet, with per-pool
 #      private ACR and KV-reference for the GH App PEM.
@@ -49,13 +47,13 @@
 #      nsg-pe-fleet-<region> + nsg-runners-<region>. RG
 #      rg-net-mgmt-<region>.
 #
-# Files intentionally omitted from this stage (move to later stages):
-#   - ACR → Stage 0
+# Files intentionally omitted from this stage (owned elsewhere):
+#   - Fleet ACR → `bootstrap/environment` env=mgmt
 #   - Per-env state containers + env UAMIs → bootstrap/environment
 #   - Env VNets + cluster-workload subnets on mgmt VNets + mgmt↔env
 #     peerings + per-env node ASGs → bootstrap/environment
-#   - Fleet-meta GH App + stage0-publisher GH App minting → see main.github.tf
-#     TODO comment; these are currently manual preconditions.
+#   - Fleet-meta GH App minting → see main.github.tf TODO comment;
+#     currently a manual precondition (`init-gh-apps.sh`).
 
 # All resources live in topic-specific files:
 #   main.state.tf       state SA + container + PE
@@ -92,4 +90,5 @@ locals {
   networking_derived       = module.identity.networking_derived
   networking_central       = module.identity.networking_central
   github_app_fleet_runners = module.identity.github_app_fleet_runners
+  github_app_fleet_meta    = module.identity.github_app_fleet_meta
 }

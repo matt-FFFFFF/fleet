@@ -39,28 +39,59 @@
 ### Stage -1 — `terraform/bootstrap/`
 
 - [~] `bootstrap/fleet/` — code complete; not applied.
-  - [ ] GH Apps manifest-flow helper not written.
+  - [x] **Refactor**: rename fleet KV → runner-pool KV
+        (`kv-<fleet>-runners` in `rg-fleet-runners`); drop all secrets
+        except `fleet-runners-app-pem` and `fleet-meta-app-pem`.
+  - [x] **Refactor**: drop `stage0-publisher` GH App + `fleet-stage0`
+        environment + `uami-fleet-stage0` + Graph
+        `Application.ReadWrite.OwnedBy` grant; `azuread` provider
+        removed.
+  - [x] **Refactor (Step 4 revert)**: own Argo + Kargo AAD apps +
+        SPs + 2-year RP `client_secret` values; publish
+        `ARGO_AAD_APP_ID` / `KARGO_AAD_APP_ID` /
+        `KARGO_AAD_APPLICATION_OBJECT_ID` repo-level vars; gate
+        mgmt-cluster KV writes on `var.mgmt_cluster_kv_id` (two-pass
+        apply per docs/adoption.md §5.3). `azuread` provider
+        re-added.
+  - [~] **Deferral (PLAN §15)**: runner pool ships with
+        `use_private_networking = false` because the vendored
+        `cicd-runners` module silently disables LAW public ingestion
+        + query when private networking is on but authors no
+        AMPLS/NSP path. Re-enable contract is documented in the
+        callsite comment block + the §15 NSP recommendation. ACR public,
+        ACA platform-managed VNet, LAW public ingestion until §15
+        closes.
 - [~] `bootstrap/environment/` — code complete; not applied.
+  - [~] **Refactor**: env=mgmt absorbs fleet ACR + PE +
+        `length(mgmt_clusters) == 1` precondition; publishes
+        `ACR_*` repo-level vars; drops `fleet_kv_secrets_user`.
+        Steps 1+3 done (ACR absorbed; `fleet_kv_secrets_user` removed);
+        `length == 1` precondition + `ACR_*` repo-level publishes
+        pending.
+  - [x] env=mgmt grants `uami-fleet-mgmt` `Key Vault Secrets User`
+        on the runners KV so the `tf-apply.yaml` mgmt-publish step
+        (`az keyvault secret show fleet-meta-app-pem` →
+        `actions/create-github-app-token` → `MGMT_*` repo-var upsert)
+        can read the PEM. Required because the runners KV uses RBAC
+        authorization (no transitive access from subscription
+        Contributor).
 - [~] `bootstrap/team/` — refactored; awaits `team-bootstrap.yaml` CI flow.
-
-### Stage 0 — `terraform/stages/0-fleet`
-
-- [~] Scaffolded; not applied.
-  - [x] ACR (Premium, zone-redundant, admin disabled).
-  - [x] Fleet Key Vault consumed.
-  - [x] Argo AAD application + service principal.
-  - [x] Argo RP `client_secret` rotation (60d cadence).
-  - [x] Kargo AAD application + service principal.
-  - [x] Kargo mgmt UAMI + `AcrPull` on fleet ACR.
-  - [x] Redirect URIs derived from cluster inventory.
-  - [x] Outputs exported per PLAN §4 Stage 0 table.
-  - [x] Fleet ACR private from first apply via `snet-pe-fleet` PE.
 
 ### Stage 1 — `terraform/stages/1-cluster`
 
 - [~] Networking slice — code complete; not applied.
   - [x] Identity/RBAC follow-up (cluster KV, UAMIs, role assignments,
-        managed Prometheus, mgmt-only Kargo OIDC rotation).
+        managed Prometheus).
+  - [x] **Refactor**: mgmt cluster Stage 1 owns `uami-kargo-mgmt` +
+        AcrPull and publishes `MGMT_CLUSTER_KV_ID` / `KARGO_MGMT_UAMI_*` /
+        `MGMT_AKS_*` repo vars (via `tf-apply.yaml` post-apply step
+        gated on `matrix.cluster.role == 'management'`). Argo + Kargo
+        AAD apps + RP secrets moved to `bootstrap/fleet` (operator-
+        applied; PLAN §4 Stage -1) — Stage 1 mgmt no longer touches
+        Microsoft Graph.
+  - [~] **Refactor**: spoke `ra_eso_fleet_kv` →
+        `ra_eso_mgmt_cluster_kv` (consumes `mgmt_cluster_kv_id`).
+        Done (Step 4c).
 - [x] Pod CIDR / service CIDR fleet-wide constants in `modules/aks-cluster`.
 - [x] `validate.yaml` subnet_slot PR-check.
 - [x] `tf-apply.yaml` workflow.
@@ -106,12 +137,13 @@
 
 ### §10 deferred
 
+- [x] JSON-schema validation of `clusters/_fleet.yaml` and per-file
+  cluster.yaml/_defaults.yaml (`schemas/{fleet,cluster}.v1.schema.json`,
+  `schema-lint` job in `validate.yaml`).
 - [ ] JSON-schema validation of merged `cluster.yaml` + team YAMLs.
 - [ ] `lint-teams.sh` team-config linter.
 - [ ] `helm lint` over `platform-gitops/components/*`.
 - [ ] `kargo lint` over `platform-gitops/kargo/**`.
-- [ ] `stage0-publisher` GitHub App + `init-gh-apps.sh` helper —
-      unblocks `publish-stage0` job (currently `if: false`).
 - [ ] `terraform/stages/2-kubernetes/` module — unblocks Stage 2 plan/apply.
 - [ ] Nightly drift-detection workflow.
 
@@ -134,7 +166,6 @@
   - [~] `_fleet.yaml` + `_defaults.yaml`.
   - [~] `bootstrap/fleet` — not applied.
   - [~] `bootstrap/environment` — not applied.
-  - [~] `stages/0-fleet` — not applied.
   - [~] `stages/1-cluster` — not applied.
   - [x] `config-loader/load.sh` naming-derivation parity CI diff.
   - [x] CI workflows.
@@ -160,7 +191,8 @@
 - [x] §16.2 Bootstrap TF reads yaml.
 - [x] §16.3 `init-fleet.sh` wrapper over `init/` TF module.
 - [x] §16.4 `init-gh-apps.sh` — manifest flow.
-  - [ ] Stage 0 wiring of GH App credentials (TODO).
+  - [x] `fleet-meta` GH App provisioning + KV PEM seeding.
+  - [x] `fleet-runners` GH App provisioning + KV PEM seeding.
 - [x] §16.5 GitHub template mechanics; `import` block for fleet repo.
 - [x] §16.6 `docs/naming.md`.
   - [x] CI diff between `load.sh` and bootstrap HCL locals.
@@ -180,41 +212,6 @@
 - [x] `terraform/modules/github-repo/` vendored fork.
 - [x] `terraform/modules/cicd-runners/` vendored fork.
 - [x] `terraform/modules/fleet-identity/` pure-function derivation module.
-- [x] `allow_public_state_during_bootstrap` first-apply-only variable.
 - [x] Terraform floor `~> 1.14` across all first-party modules + CI.
 - [x] `main`-branch protection via vendored `modules/ruleset`.
 
-## Rework program (PLAN §3.1 / §3.3 / §3.4 / §4 realignment)
-
-1. [x] Schema base — `modules/fleet-identity/`.
-2. [x] Renderer — `init/`.
-3. [x] Config loader — `terraform/config-loader/load.sh`.
-4. [x] `bootstrap/fleet` network.
-5. [x] `bootstrap/environment` network.
-5b. [x] Schema simplification: fold `networking.hubs` into per-env-region
-        `hub_network_resource_id`; drop `mgmt_environment_for_vnet_peering`.
-6. [x] Stage 1 rework.
-7. [x] Stage 0 ACR PE.
-8. [x] Docs.
-9. [x] Identity/RBAC Stage 1 follow-up.
-10. [ ] Live apply of `bootstrap/fleet` + `stages/0-fleet`.
-11. [x] CI workflows.
-12. [x] Naming-diff CI between `load.sh` and `modules/fleet-identity/`.
-13. [x] Drop `Entra AppAdmin` from `fleet-meta`.
-14. [x] Replace `Application Administrator` on `fleet-stage0` with
-        `Application.ReadWrite.OwnedBy`.
-15. [x] Stop forced replacement of `stage0_app_admin` directory role
-        assignment — superseded by item 14.
-16. [x] Document `-var-file` requirement — superseded by item 17.
-17. [x] Narrow `bootstrap/fleet` GH-App tfvars overlay.
-18. [x] Spoke networking hub-and-spoke gaps.
-19. [x] Realign implementation to hub-and-spoke Argo (PLAN a3699f5):
-        Stage 0 mgmt-only redirect URIs; Stage 1 spoke UAMI + 3 FICs +
-        Cluster Admin RBAC + outputs; mgmt-only Kargo AKS-reader RA;
-        rename `stages/2-bootstrap` → `stages/2-kubernetes`.
-20. [x] Reduce stage0/meta blast radius (R1): drop
-        `AppRoleAssignment.ReadWrite.All` from `fleet-meta`; drop
-        per-env `Application.ReadWrite.OwnedBy` from `bootstrap/environment`;
-        document one-off manual `az` grant on `uami-fleet-mgmt`
-        (`docs/adoption.md` §5.3); Stage 0 owner lookup uses single
-        `uami-fleet-mgmt` SP.

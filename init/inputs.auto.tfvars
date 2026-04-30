@@ -31,7 +31,14 @@ codeowners_owner   = ""           # CODEOWNERS owner: empty → @<github_org>; e
 
 # ---- Azure ------------------------------------------------------------------
 
-primary_region = "eastus"
+primary_region = "__PROMPT__" # default: eastus — Azure region (lowercase, alnum) shared by every fleet-shared resource (ACR, runners KV, tfstate SA) and used as the only region key per env in `networking.envs.<env>.regions.<r>`. Must match your hub VNet's region. Press enter to accept the default.
+
+# Hub firewall / NVA private IP for `primary_region`; broadcast into every env's
+# single-region entry (`networking.envs.<env>.regions.<primary_region>.egress_next_hop_ip`).
+# Stage 1 cluster apply fails fast if this is null in any region whose clusters have
+# hub-routed egress (the AKS UDR has no `0.0.0.0/0` route otherwise). Per-env or
+# per-region overrides go in clusters/_fleet.yaml post-init.
+egress_next_hop_ip = "__PROMPT__" # default: <empty> — central firewall private IP for primary_region (e.g. 10.0.0.4); blank to opt out (renders as YAML null; adopter-managed routing).
 
 # ---- DNS --------------------------------------------------------------------
 
@@ -53,8 +60,11 @@ networking_pdz_grafana   = "__PROMPT__" # BYO privatelink.grafana.azure.com zone
 # Per-env identity + networking, keyed by env name. Edit this map directly:
 # add entries (e.g. `dev`, `stage`, `qa`) as needed, remove any you don't
 # want. The init-fleet.sh prompt flow does not walk nested map values —
-# fill in GUIDs and hub resource IDs here before running init, or after a
-# first selftest run.
+# fill in GUIDs and hub resource IDs here before running init. If any
+# `__PROMPT__` sentinels remain inside this map at run time, init-fleet.sh
+# refuses to apply, prints the offending file:line references, and asks
+# you to edit them first; it does not invoke `terraform apply` against
+# unfilled sentinels.
 #
 # Each entry:
 #   subscription_id           Azure subscription GUID for this env.

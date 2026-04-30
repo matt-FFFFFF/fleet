@@ -381,7 +381,7 @@ sequenceDiagram
     BF->>MGMT: sub-vending: create mgmt VNet + hub peering<br/>(per mgmt region; hub gated on hub_network_resource_id)
     BF->>MGMT: carve snet-pe-fleet + snet-runners<br/>(fleet-plane subnets)
     BF->>MGMT: grant Network Contributor<br/>to uami-fleet-meta
-    BF->>BF: publish MGMT_VNET_RESOURCE_IDS / MGMT_PE_FLEET_SUBNET_IDS /<br/>MGMT_RUNNERS_SUBNET_IDS (JSON maps, fleet-meta + stage0)
+    BF->>BF: publish MGMT_VNET_RESOURCE_IDS / MGMT_PE_FLEET_SUBNET_IDS /<br/>MGMT_RUNNERS_SUBNET_IDS (JSON maps, fleet-meta env)
 
     Note over BE,ENV: later, per env (env ≠ mgmt)
     BE->>ENV: sub-vending: create env VNet + intra-env mesh<br/>+ per-region hub peering (if hub_network_resource_id set)
@@ -466,13 +466,12 @@ scoped to that NSG so the cross-stage write succeeds.
 
 Published by the stage that owns each ID; consumed by downstream
 stages via `fromJSON(vars.<NAME>)` (for the JSON-map variables) or
-direct substitution (per-(env,region) scalars). No Stage 0
-passthrough.
+direct substitution (per-(env,region) scalars).
 
 | Variable                                  | Published by            | GH Environment(s) | Consumed by                                                      |
 | ----------------------------------------- | ----------------------- | ----------------- | ---------------------------------------------------------------- |
 | `MGMT_VNET_RESOURCE_IDS` (JSON map)       | `bootstrap/fleet`       | `fleet-meta`      | `bootstrap/environment` (env=mgmt: target for subnet carve; env≠mgmt: reverse-peering target); Stage 1 (per-cluster DNS zone VNet link, indexed by `peer_mgmt_region`) |
-| `MGMT_PE_FLEET_SUBNET_IDS` (JSON map)     | `bootstrap/fleet`       | `fleet-meta`, `fleet-stage0` | Stage 0 (fleet ACR private endpoint); observability/diagnostics |
+| `MGMT_PE_FLEET_SUBNET_IDS` (JSON map)     | `bootstrap/fleet`       | `fleet-meta`      | `bootstrap/environment` env=mgmt (fleet ACR private endpoint); observability/diagnostics |
 | `MGMT_RUNNERS_SUBNET_IDS` (JSON map)      | `bootstrap/fleet`       | `fleet-meta`      | Diagnostics (subnet is consumed internally by `bootstrap/fleet`) |
 | `<ENV>_<REGION>_VNET_RESOURCE_ID`         | `bootstrap/environment` | `<env>-bootstrap` | Stage 1 (per-cluster subnets parent; DNS zone env-side link)     |
 | `<ENV>_<REGION>_NODE_ASG_RESOURCE_ID`     | `bootstrap/environment` | `<env>-bootstrap` | Stage 1 (AKS node-pool ASG attachment, or NSG rule author)       |

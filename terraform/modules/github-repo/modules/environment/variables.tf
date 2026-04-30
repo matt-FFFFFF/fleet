@@ -68,22 +68,26 @@ DESCRIPTION
   nullable = false
 }
 
-variable "secrets" {
-  description = <<DESCRIPTION
-Map of environment secrets to create. Values are NOT managed by Terraform.
-The map key is an arbitrary identifier to avoid known-after-apply issues.
-
-- `name` - The name of the secret.
-
-Secrets are created with a placeholder and `lifecycle { ignore_changes }` on
-`plaintext_value`. Set actual values via GitHub UI, CLI, or API after creation.
-DESCRIPTION
-  type = map(object({
-    name = string
-  }))
-  default  = {}
-  nullable = false
-}
+# DISABLED — see the matching note in main.tf.
+# Re-enable alongside the `github_actions_environment_secret` resource
+# (and switch the doc + the resource to `encrypted_value`).
+#
+# variable "secrets" {
+#   description = <<DESCRIPTION
+# Map of environment secrets to create. Values are NOT managed by Terraform.
+# The map key is an arbitrary identifier to avoid known-after-apply issues.
+#
+# - `name` - The name of the secret.
+#
+# Secrets are created with a placeholder and `lifecycle { ignore_changes }` on
+# `plaintext_value`. Set actual values via GitHub UI, CLI, or API after creation.
+# DESCRIPTION
+#   type = map(object({
+#     name = string
+#   }))
+#   default  = {}
+#   nullable = false
+# }
 
 variable "deployment_policy" {
   description = <<DESCRIPTION

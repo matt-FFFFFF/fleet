@@ -21,7 +21,12 @@ Additional optional inputs wired straight through to the underlying
 - `allow_merge_commit` / `allow_squash_merge` / `allow_rebase_merge` — merge-
   strategy toggles (defaults all `true`).
 - `delete_branch_on_merge` (default `false`).
-- `vulnerability_alerts` (default `false`).
+- `vulnerability_alerts` (default `false`) — surfaced via the dedicated
+  `github_repository_vulnerability_alerts` resource (count-gated). The
+  upstream form (`vulnerability_alerts = ...` field on `github_repository`)
+  is deprecated by `integrations/github` and slated for removal next
+  major; the local divergence pre-migrates so we don't trip a hard
+  failure when we bump the provider pin.
 
 Also adds a hard-coded `lifecycle { ignore_changes = [...] }` on
 `github_repository.this` covering creation-only fields (`auto_init`,
@@ -40,8 +45,17 @@ vendored copy.
 - `identity.fic_name` — optional override for the federated identity
   credential resource name. When null or empty, falls back to the upstream
   default (`var.environment`). Required so the existing fleet FIC names
-  (`gh-fleet-stage0`, `gh-fleet-meta`, `gh-fleet-<env>`) survive the
-  vendoring refactor without a state rename.
+  (`gh-fleet-meta`, `gh-fleet-<env>`) survive the vendoring refactor
+  without a state rename.
+- `secrets` map + `github_actions_environment_secret` resource +
+  `secrets` output — **commented out** pending provider migration off
+  `plaintext_value`. The upstream "create with `REPLACE_ME` placeholder
+  + `ignore_changes`, populate out-of-band" pattern is incompatible
+  with the deprecated-attribute replacement (`encrypted_value`, which
+  expects a libsodium-encrypted blob keyed by the env's public key).
+  No caller in this repo passed `secrets`, so the divergence is
+  mechanically inert; the bodies are preserved as comments to keep the
+  re-enablement path obvious.
 
 ### Provider pins
 
@@ -55,8 +69,8 @@ Rewritten to the repo-wide convention (pessimistic-minor, per AGENTS.md §6):
 ## Callers inside this repo
 
 - `terraform/bootstrap/fleet/main.github.tf` — fleet monorepo +
-  team-template repo + `fleet-stage0` / `fleet-meta` environments (UAMIs,
-  FICs, role assignments, main-branch ruleset).
+  team-template repo + `fleet-meta` environment (UAMIs, FICs,
+  role assignments, main-branch ruleset).
 - `terraform/bootstrap/environment/main.github.tf` — per-env `fleet-<env>`
   environment (UAMI, FIC, env-scoped role assignments). Calls
   `modules/environment/` directly since the fleet repo is already owned by

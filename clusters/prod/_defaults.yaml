@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=/schemas/cluster.v1.schema.json
 # Env-scope defaults for prod clusters.
 #
 # subscription_id is sourced from clusters/_fleet.yaml

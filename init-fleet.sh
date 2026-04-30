@@ -147,11 +147,36 @@ if [[ -n "$pending" ]]; then
     # interiors are intentionally excluded from the prompt flow).
     hint="$(grep -E "^${key}[[:space:]]*=" "$tfvars" \
             | awk -F'#' 'NF>1 { sub(/^[[:space:]]+/, "", $2); print $2; exit }' || true)"
+    # If the hint begins with `default: <token>`, blank input is accepted
+    # and substitutes the default. Convention: `default: <token> — <prose>`
+    # (em-dash separator). Tokens are matched as bash-shell-safe single
+    # words (no whitespace); for multi-word defaults extend the regex.
+    # The literal token `<empty>` is a special case meaning "blank input
+    # is permitted and the variable is left as the empty string" — used
+    # for nullable / opt-out scalars (e.g. egress_next_hop_ip, where
+    # empty renders as YAML null in the rendered _fleet.yaml).
+    default=""
+    allow_empty=0
+    if [[ "$hint" =~ ^default:\ ([^[:space:]]+)([[:space:]].*)?$ ]]; then
+      default="${BASH_REMATCH[1]}"
+      if [[ "$default" == "<empty>" ]]; then
+        allow_empty=1
+        default=""
+      fi
+    fi
     while true; do
       if [[ -n "$hint" ]]; then
         read -r -p "  ${key} (${hint}): " val </dev/tty
       else
         read -r -p "  ${key}: " val </dev/tty
+      fi
+      if [[ -z "$val" && -n "$default" ]]; then
+        val="$default"
+        break
+      fi
+      if [[ -z "$val" && $allow_empty -eq 1 ]]; then
+        val=""
+        break
       fi
       [[ -n "$val" ]] && break
       warn "  ✗ required"
@@ -180,6 +205,40 @@ fi
 # Final sentinel sweep — should be empty now.
 if [[ -n "$(remaining_prompts || true)" ]]; then
   die "internal error: __PROMPT__ sentinels remain after collection"
+fi
+
+# ---- nested-map sentinel pre-flight -----------------------------------------
+#
+# remaining_prompts() above only walks top-level scalars (column-0
+# assignments). Map-interior lines like
+#   environments = {
+#     mgmt = { subscription_id = "__PROMPT__" }
+#   }
+# are intentionally not prompted (the wrapper has no HCL parser; see
+# docs/findings.md F12). If we proceeded to `terraform apply` with those
+# sentinels still in place, Terraform's per-variable validation blocks
+# would reject them with a multi-line stack trace — useless for a first-
+# run adopter. Instead, scan for any indented `"__PROMPT__"` and exit
+# with a human-readable list of file:line references and instructions.
+# Adopter edits the file by hand, then re-runs init-fleet.sh.
+#
+# Non-interactive (CI / --values-file) callers hit this as a hard error:
+# their fixture is supposed to carry every value, so a remaining sentinel
+# means the fixture is incomplete.
+nested_pending="$(grep -nE '^[[:space:]]+[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]*=[[:space:]]*"__PROMPT__"' "$tfvars" || true)"
+if [[ -n "$nested_pending" ]]; then
+  echo "" >&2
+  echo "init-fleet: nested-map values still set to __PROMPT__ in $tfvars:" >&2
+  while IFS= read -r line; do
+    printf '  %s:%s\n' "$tfvars" "$line" >&2
+  done <<<"$nested_pending"
+  echo "" >&2
+  echo "Edit the file above to fill in these values, then re-run init-fleet.sh." >&2
+  echo "(The wrapper does not yet prompt for nested map values; see docs/findings.md F12.)" >&2
+  if [[ $NON_INTERACTIVE -eq 1 ]]; then
+    exit 1
+  fi
+  exit 0
 fi
 
 # ---- terraform apply --------------------------------------------------------

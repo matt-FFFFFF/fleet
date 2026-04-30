@@ -13,9 +13,9 @@ variable "fleet_doc" {
       acr.resource_group       (string, required)
       acr.subscription_id      (string, required)
       acr.location             (string, required)
-      keyvault.name_override   (string, optional)
-      keyvault.resource_group  (string, optional; defaults to acr.resource_group)
-      keyvault.location        (string, optional; defaults to envs.mgmt.location)
+      runners_keyvault.name_override   (string, optional)
+      runners_keyvault.resource_group  (string, optional; defaults to "rg-fleet-runners")
+      runners_keyvault.location        (string, optional; defaults to envs.mgmt.location)
       state.storage_account_name_override (string, optional)
       state.resource_group     (string, required)
       state.subscription_id    (string, required)
@@ -32,4 +32,32 @@ variable "fleet_doc" {
       github_app.fleet_runners.{app_id,installation_id,private_key_kv_secret} (optional)
   EOT
   type        = any
+
+  # Reject unknown keys at the per-region level. Catches the common
+  # nesting mistake where adopters write `use_remote_gateways: true`
+  # at the region top level instead of under `hub_peering:` (silent
+  # fallback to false otherwise — see the historical F19 finding).
+  # The set below mirrors the keys this module's `main.tf` reads via
+  # `try(region_block.<key>, ...)`. New per-region fields must be
+  # added here at the same time as the read site.
+  validation {
+    condition = alltrue(flatten([
+      for env_name, env_block in try(var.fleet_doc.networking.envs, {}) : [
+        for region_name, region_block in try(env_block.regions, {}) : [
+          for k in try(keys(region_block), []) :
+          contains([
+            "address_space",
+            "location",
+            "hub_network_resource_id",
+            "egress_next_hop_ip",
+            "create_reverse_peering",
+            "hub_peering",
+            "dns_servers",
+            "subnet_route_table_ids",
+          ], k)
+        ]
+      ]
+    ]))
+    error_message = "clusters/_fleet.yaml: networking.envs.<env>.regions.<region> contains an unknown key. Allowed: address_space, location, hub_network_resource_id, egress_next_hop_ip, create_reverse_peering, hub_peering, dns_servers, subnet_route_table_ids. Common mistake: writing `use_remote_gateways: true` at the region top level instead of under `hub_peering: { use_remote_gateways: true }`."
+  }
 }

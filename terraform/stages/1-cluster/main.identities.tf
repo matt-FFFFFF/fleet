@@ -6,7 +6,7 @@
 #   uami-external-dns-<cluster>       — reconciles records in the cluster's
 #                                       own private DNS zone
 #   uami-eso-<cluster>                — External Secrets Operator pull source
-#                                       (cluster KV + fleet KV)
+#                                       (cluster KV + runners KV)
 #   uami-team-<team>-<cluster>        — one per team opted into this cluster
 #                                       (cluster.yaml `teams:` list)
 #   uami-argocd-spoke-<cluster>       — spoke clusters only (gated on
@@ -30,10 +30,10 @@
 # the managed cluster, not a workload identity. The **kubelet identity**
 # stays AKS-managed (surfaced by the AVM module) and is only referenced
 # by main.rbac.tf for the AcrPull assignment. The **Kargo mgmt UAMI**
-# is a fleet-wide singleton authored by Stage 0; its principalId
-# arrives here as `var.kargo_mgmt_uami_principal_id` for the RBAC
-# Reader assignment on the mgmt cluster's AKS resource (mgmt-only post
-# hub-and-spoke).
+# is a fleet-wide singleton created by the mgmt cluster's own Stage 1
+# apply (see `main.identities.kargo.tf`); its principalId arrives here
+# as `var.kargo_mgmt_uami_principal_id` for the RBAC Reader assignment
+# on the mgmt cluster's AKS resource (mgmt-only post hub-and-spoke).
 
 locals {
   # Teams opted into this cluster. `cluster.yaml.teams` is a list of
@@ -160,7 +160,7 @@ resource "azapi_resource" "fc_argocd_spoke" {
   lifecycle {
     precondition {
       condition     = var.mgmt_aks_oidc_issuer_url != null && length(var.mgmt_aks_oidc_issuer_url) > 0
-      error_message = "mgmt_aks_oidc_issuer_url is required on spoke clusters (cluster.role != \"management\"). Publish it as the MGMT_AKS_OIDC_ISSUER_URL repo variable from the mgmt cluster's Stage 1 outputs (see PLAN §4 Stage 1 outputs) and wire it into TF_VAR_mgmt_aks_oidc_issuer_url in tf-apply.yaml. While stage0-publisher GH App is gated `if: false`, the operator populates this var manually after the first mgmt apply."
+      error_message = "mgmt_aks_oidc_issuer_url is required on spoke clusters (cluster.role != \"management\"). Publish it as the MGMT_AKS_OIDC_ISSUER_URL repo variable from the mgmt cluster's Stage 1 outputs (see PLAN §4 Stage 1 outputs) and wire it into TF_VAR_mgmt_aks_oidc_issuer_url in tf-apply.yaml. The mgmt cluster's Stage 1 apply publishes this var via tf-apply.yaml's post-apply step; on first bootstrap, run the mgmt leg before any spoke leg."
     }
   }
 }

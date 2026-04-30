@@ -51,6 +51,43 @@ variable "fleet_meta_principal_id" {
   type        = string
 }
 
+variable "fleet_github_owner_id" {
+  description = <<-EOT
+    Numeric GitHub org/user owner id (from data.github_organization.id /
+    data.github_user.id, resolved by bootstrap/fleet under operator
+    credentials). Wired in via `TF_VAR_fleet_github_owner_id:
+    $${{ vars.FLEET_GITHUB_OWNER_ID }}`. Used to construct the
+    repository_owner_id OIDC subject claim for the fleet-<env> UAMI's
+    federated credential.
+
+    The value cannot be looked up here via `data.github_organization`
+    because the fleet-meta GitHub App that authenticates this bootstrap
+    has no `Members: read` org permission.
+  EOT
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.fleet_github_owner_id))
+    error_message = "fleet_github_owner_id must be a numeric GitHub owner id."
+  }
+}
+
+variable "fleet_github_repo_id" {
+  description = <<-EOT
+    Numeric GitHub repository id (from data.github_repository.repo_id,
+    resolved by bootstrap/fleet). Wired in via
+    `TF_VAR_fleet_github_repo_id: $${{ vars.FLEET_GITHUB_REPO_ID }}`.
+    Used to construct the repository_id OIDC subject claim for the
+    fleet-<env> UAMI's federated credential.
+  EOT
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.fleet_github_repo_id))
+    error_message = "fleet_github_repo_id must be a numeric GitHub repository id."
+  }
+}
+
 # Mgmt VNet resource ids, published by `bootstrap/fleet`'s
 # `main.github.tf` onto the `fleet-meta` GitHub Environment as the
 # JSON-encoded `MGMT_VNET_RESOURCE_IDS` variable (shape
@@ -91,5 +128,38 @@ variable "mgmt_vnet_resource_ids" {
   validation {
     condition     = length(var.mgmt_vnet_resource_ids) > 0
     error_message = "mgmt_vnet_resource_ids must not be empty; at least one mgmt region must be declared in networking.envs.mgmt.regions (and its id exported by bootstrap/fleet)."
+  }
+}
+
+# Mgmt VNet `snet-pe-fleet` subnet ids per mgmt region. Published by
+# `bootstrap/fleet` onto the `fleet-meta` GH environment as the JSON-
+# encoded `MGMT_PE_FLEET_SUBNET_IDS` repo/env variable; wired in via
+# `TF_VAR_mgmt_pe_fleet_subnet_ids: ${{ vars.MGMT_PE_FLEET_SUBNET_IDS }}`
+# in `.github/workflows/env-bootstrap.yaml`.
+#
+# Required only on env=mgmt runs (where this stage creates the fleet ACR
+# and its PE in the co-located mgmt VNet). Non-mgmt env runs (nonprod,
+# prod) may pass `'{}'`; the variable is unused there. Consequently the
+# non-empty check is enforced via the `fleet_acr_pe` precondition (which
+# dereferences `var.mgmt_pe_fleet_subnet_ids[local.acr_mgmt_region]`)
+# rather than as a variable validation, so non-mgmt runs are not blocked.
+variable "mgmt_pe_fleet_subnet_ids" {
+  description = <<-EOT
+    Map of `region => <snet-pe-fleet resource id>` for every mgmt env-region.
+    Populated in CI from `vars.MGMT_PE_FLEET_SUBNET_IDS` (published by
+    `bootstrap/fleet`). On env=mgmt runs the fleet ACR PE lands in
+    `snet-pe-fleet` of the mgmt region co-located with `acr.location`
+    (same-region-else-first); on non-mgmt runs the variable is unused and
+    can be `{}`. PLAN §3.4.
+  EOT
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition = alltrue([
+      for k, v in var.mgmt_pe_fleet_subnet_ids :
+      can(regex("^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/snet-pe-fleet$", v))
+    ])
+    error_message = "Every entry in mgmt_pe_fleet_subnet_ids must be a full ARM subnet resource id ending in `/subnets/snet-pe-fleet`."
   }
 }

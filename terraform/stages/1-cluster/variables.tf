@@ -128,24 +128,39 @@ variable "route_table_resource_id" {
   nullable    = false
 }
 
-# --- Fleet-scope passthroughs (published by Stage 0) -----------------------
+# --- Fleet-scope passthroughs (published as repo variables) ----------------
 #
-# These piggyback on the Stage 0 → repo-variable publishing path (PLAN §4
-# Stage 0 Outputs). `tf-apply.yaml` wires each to a `TF_VAR_*` of the
-# same snake-case name for every Stage 1 leg. No remote state, no
+# These arrive as repo-level GitHub Actions variables published by
+# `bootstrap/environment` (env=mgmt) and the mgmt cluster's Stage 1
+# apply. `tf-apply.yaml` wires each to a `TF_VAR_*` of the same
+# snake-case name for every Stage 1 leg. No remote state, no
 # plan-time data sources — everything arrives as a string.
 
-variable "fleet_keyvault_id" {
+variable "mgmt_cluster_kv_id" {
   description = <<-EOT
-    Full ARM id of the fleet-shared Key Vault (`kv-<fleet.name>-fleet`),
-    owned by `bootstrap/fleet`. Stage 1 assigns `Key Vault Secrets User`
-    on this KV to the cluster's ESO UAMI so fleet-wide secrets (GH App
-    PEMs, etc.) flow through External Secrets Operator. Published as
-    the `FLEET_KEYVAULT_ID` fleet-scope repo variable (Stage 0 output
-    `fleet_keyvault_id`).
+    Full ARM id of the **management cluster's** Key Vault
+    (`kv-<mgmt.cluster.name>` in `<mgmt.cluster.resource_group>`),
+    owned by the mgmt cluster's Stage 1 (this stage; published as
+    repo variable `MGMT_CLUSTER_KV_ID` after a successful mgmt
+    apply).
+
+    Consumed by **spoke** clusters' Stage 1 to grant the cluster's
+    ESO UAMI `Key Vault Secrets User` on the mgmt cluster KV — that
+    KV holds the Argo OIDC RP secret (`argocd-oidc-client-secret`)
+    and any future fleet-shared mgmt-only secrets that ESO needs to
+    fan into spoke cluster namespaces (PLAN §1 hub-and-spoke; PLAN
+    §8 secrets).
+
+    On the **mgmt cluster's own** Stage 1 plan this variable may be
+    null/empty (or set to the same value as `module.cluster_kv.resource_id`
+    — both are accepted). The `ra_eso_mgmt_cluster_kv` role assignment
+    is gated `count = mgmt_role_cluster ? 0 : 1` since
+    `ra_eso_cluster_kv` already covers the same KV on the mgmt
+    cluster.
   EOT
   type        = string
-  nullable    = false
+  nullable    = true
+  default     = null
 }
 
 variable "acr_resource_id" {
@@ -154,8 +169,8 @@ variable "acr_resource_id" {
     by `bootstrap/fleet`. Stage 1 assigns `AcrPull` on this ACR to the
     cluster's AKS-managed kubelet identity (read from the AVM module's
     `kubelet_identity.object_id` output). Published as the
-    `ACR_RESOURCE_ID` fleet-scope repo variable (Stage 0 output
-    `acr_resource_id`).
+    `ACR_RESOURCE_ID` fleet-scope repo variable, published by
+    `bootstrap/environment` (env=mgmt).
   EOT
   type        = string
   nullable    = false
@@ -164,7 +179,8 @@ variable "acr_resource_id" {
 variable "kargo_mgmt_uami_principal_id" {
   description = <<-EOT
     Principal id of the fleet-wide singleton Kargo UAMI
-    (`uami-kargo-mgmt`), owned by Stage 0. Stage 1 assigns `Azure
+    (`uami-kargo-mgmt`), created by the mgmt cluster's own Stage 1
+    apply (see `main.identities.kargo.tf`). Stage 1 assigns `Azure
     Kubernetes Service RBAC Reader` on the **mgmt** cluster's AKS
     resource to this principalId so Kargo (mgmt-resident) can read
     Argo `Application` CRs — under PLAN §1 hub-and-spoke, all such
@@ -174,20 +190,6 @@ variable "kargo_mgmt_uami_principal_id" {
   EOT
   type        = string
   nullable    = false
-}
-
-variable "kargo_aad_application_object_id" {
-  description = <<-EOT
-    Directory object id of the Kargo AAD application, owned by Stage 0.
-    Consumed ONLY by the **management cluster's** Stage 1 plan as the
-    `application_id` of the `azuread_application_password` resource
-    that mints the `kargo-oidc-client-secret` written into the cluster
-    KV (PLAN §4 Stage 1 lines 1769-1782). Workload clusters accept a
-    null value here — the secret-rotation resources are gated on
-    `local.mgmt_cluster`.
-  EOT
-  type        = string
-  nullable    = true
 }
 
 variable "mgmt_aks_oidc_issuer_url" {
@@ -205,9 +207,9 @@ variable "mgmt_aks_oidc_issuer_url" {
     Required on spokes (cluster.role != "management"); accepted as
     null on mgmt itself (no spoke FICs are authored there).
 
-    While the `stage0-publisher` GH App that publishes this var is
-    gated `if: false`, the operator must populate it manually after
-    the first successful mgmt-cluster Stage 1 apply. See
+    Published by the mgmt cluster's Stage 1 apply (via tf-apply.yaml's
+    post-apply repo-var publish step). On the very first mgmt apply
+    the spoke leg cannot run until this var has been written; see
     `docs/adoption.md` for the bootstrap order.
   EOT
   type        = string

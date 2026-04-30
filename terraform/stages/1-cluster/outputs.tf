@@ -4,8 +4,8 @@
 # All values are consumed by Stage 2 (running in the same CI job) as
 # tfvars via the `tf-apply.yaml` workflow — no remote state reads.
 #
-# Passthroughs from Stage 0 / bootstrap/environment (fleet KV, env AMW,
-# env DCE, env AG) save Stage 2 from redoing the lookup.
+# Passthroughs from bootstrap/environment (env AMW, env DCE, env AG)
+# save Stage 2 from redoing the lookup.
 
 # --- AKS -------------------------------------------------------------------
 
@@ -102,9 +102,37 @@ output "cluster_keyvault_uri" {
   value       = module.cluster_kv.vault_uri
 }
 
-output "fleet_keyvault_id" {
-  description = "Fleet Key Vault ARM id — passthrough from `var.fleet_keyvault_id` (published by Stage 0) so Stage 2 doesn't reach back to Stage 0 state."
-  value       = var.fleet_keyvault_id
+# --- Mgmt-only repo-var outputs --------------------------------------------
+#
+# Published by tf-apply.yaml (publish-stage1-mgmt job) as repo-level
+# GitHub variables consumed by spoke Stage 1 / Stage 2 plans:
+#
+#   MGMT_CLUSTER_KV_ID                — spoke ESO `ra_eso_mgmt_cluster_kv` scope;
+#                                       also re-consumed by `bootstrap/fleet`
+#                                       second-pass apply for the Argo + Kargo
+#                                       OIDC RP `client_secret` writes.
+#   KARGO_MGMT_UAMI_PRINCIPAL_ID      — spoke Stage 1 AKS RBAC Reader principal
+#   KARGO_MGMT_UAMI_CLIENT_ID         — mgmt Stage 2 Kargo SA workload-identity annotation
+#
+# All null on spoke clusters. AAD-app identifiers
+# (`ARGO_AAD_APP_ID`, `KARGO_AAD_APP_ID`,
+# `KARGO_AAD_APPLICATION_OBJECT_ID`) are NOT published from this
+# stage; they are repo vars published by `bootstrap/fleet` (which
+# now owns the AAD apps — PLAN §4 Stage -1).
+
+output "mgmt_cluster_keyvault_id" {
+  description = "Mgmt cluster Key Vault ARM id. Published as MGMT_CLUSTER_KV_ID repo var; consumed by spoke Stage 1 (`ra_eso_mgmt_cluster_kv`) so spoke ESO can read fleet-shared secrets (`argocd-oidc-client-secret`, …) from the mgmt cluster KV, and by `bootstrap/fleet`'s second-pass apply to write those secrets. Null on spokes."
+  value       = local.mgmt_role_cluster ? module.cluster_kv.resource_id : null
+}
+
+output "kargo_mgmt_uami_principal_id" {
+  description = "Kargo UAMI principalId. Published as KARGO_MGMT_UAMI_PRINCIPAL_ID repo var; consumed by every workload cluster's Stage 1 as the principal for AKS RBAC Reader. Null on spokes."
+  value       = local.mgmt_role_cluster ? azapi_resource.uami_kargo_mgmt[0].output.properties.principalId : null
+}
+
+output "kargo_mgmt_uami_client_id" {
+  description = "Kargo UAMI clientId. Published as KARGO_MGMT_UAMI_CLIENT_ID repo var; consumed by mgmt Stage 2 as the workload-identity client-id annotation on the kargo-controller SA. Null on spokes."
+  value       = local.mgmt_role_cluster ? azapi_resource.uami_kargo_mgmt[0].output.properties.clientId : null
 }
 
 # --- DNS outputs (consumed by platform-gitops ApplicationSet params) --------

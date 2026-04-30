@@ -22,14 +22,22 @@ locals {
 
   env_sub_id = local.environment.subscription_id
 
-  # Fleet KV + ACR resource IDs — computed; KV/ACR themselves are created by
-  # Stage 0, same naming derivation as docs/naming.md.
-  fleet_kv_id = join("/", [
+  # Runners KV + ACR resource IDs.
+  #
+  # KV: created by `bootstrap/fleet`; referenced here by synthesized ARM id
+  # using the same naming derivation as docs/naming.md.
+  #
+  # ACR: created by THIS stage on env=mgmt runs (see
+  # main.acr.tf). On env=mgmt resolve to the live resource id so the
+  # `acr_uaa_bounded` role assignment in main.github.tf depends on its
+  # creation; on non-mgmt envs synthesize the same id (the ACR is created
+  # by a prior env=mgmt run and its name derivation is fleet-wide).
+  runners_kv_id = join("/", [
     "/subscriptions", local.derived.acr_subscription_id,
-    "resourceGroups", local.derived.acr_resource_group,
-    "providers/Microsoft.KeyVault/vaults", local.derived.fleet_kv_name,
+    "resourceGroups", local.derived.runners_kv_resource_group,
+    "providers/Microsoft.KeyVault/vaults", local.derived.runners_kv_name,
   ])
-  fleet_acr_id = join("/", [
+  fleet_acr_id = var.env == "mgmt" ? azapi_resource.fleet_acr[0].id : join("/", [
     "/subscriptions", local.derived.acr_subscription_id,
     "resourceGroups", local.derived.acr_resource_group,
     "providers/Microsoft.ContainerRegistry/registries", local.derived.acr_name,
@@ -68,7 +76,8 @@ resource "azapi_resource" "rg_env_obs" {
 # Contributor + User Access Administrator at subscription scope to run
 # team-bootstrap / env-bootstrap against this env. No Graph permissions
 # are required: under PLAN §1 hub-and-spoke, per-env UAMIs do not
-# mutate AAD apps (only `uami-fleet-stage0` and `uami-fleet-mgmt` do).
+# mutate AAD apps (only `uami-fleet-mgmt` does, for runtime rotation
+# of the Argo / Kargo AAD apps that `bootstrap/fleet` owns).
 
 resource "azapi_resource" "ra_meta_sub_contrib" {
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
@@ -93,6 +102,44 @@ resource "azapi_resource" "ra_meta_sub_uaa" {
     properties = {
       roleDefinitionId = "/subscriptions/${local.env_sub_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_rbac_admin}"
       principalId      = var.fleet_meta_principal_id
+      principalType    = "ServicePrincipal"
+    }
+  }
+}
+
+# --- uami-fleet-mgmt → Key Vault Secrets User on the runners KV (mgmt-only) -
+#
+# The mgmt cluster's tf-apply.yaml run authenticates as `uami-fleet-mgmt`
+# (the env-scope UAMI created by `module.env_github` below). On the
+# `matrix.cluster.role == 'management'` leg, the workflow runs an
+# `az keyvault secret show` against the runners KV to fetch the
+# `fleet-meta` GitHub App PEM, mints an installation token, and uses it
+# to publish `MGMT_*` repo variables (Stage 1 mgmt outputs → repo vars
+# consumed by spoke clusters' Stage 1/2 plans).
+#
+# The runners KV uses RBAC authorization (`enableRbacAuthorization=true`
+# in `bootstrap/fleet/main.kv.tf`), so subscription-scope Contributor
+# does **not** transitively grant data-plane secret read access; an
+# explicit `Key Vault Secrets User` assignment scoped to the KV is
+# required. Co-located here (rather than in `bootstrap/fleet`) because
+# `uami-fleet-mgmt` itself is created in this stage — keeping the
+# grant in the same apply graph avoids a cross-stage data dependency.
+#
+# Gated on `var.env == "mgmt"` because only the mgmt env's UAMI runs
+# the publish step; non-mgmt envs' tf-apply.yaml legs never read from
+# the runners KV.
+
+resource "azapi_resource" "ra_env_uami_runners_kv_secrets_user" {
+  count = var.env == "mgmt" ? 1 : 0
+
+  type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
+  name      = uuidv5("url", "fleet-mgmt-runners-kv-secrets-user-${local.runners_kv_id}")
+  parent_id = local.runners_kv_id
+
+  body = {
+    properties = {
+      roleDefinitionId = "/subscriptions/${local.derived.acr_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_kv_secrets_user}"
+      principalId      = module.env_github.identity.principal_id
       principalType    = "ServicePrincipal"
     }
   }

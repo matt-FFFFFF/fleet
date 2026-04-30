@@ -1,0 +1,4 @@
+# Should fail: kubernetes.version must look like "1.30", not "1.30.5".
+kubernetes:
+  version: "1.30.5"
+  sku_tier: Standard

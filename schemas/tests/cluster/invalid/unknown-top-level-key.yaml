@@ -1,0 +1,7 @@
+# Should fail: top-level unknown key. additionalProperties:false at the document root.
+cluster:
+  role: workload
+  resource_group: rg-aks-nonprod-eastus-01
+networking:
+  subnet_slot: 0
+not_a_real_key: oops

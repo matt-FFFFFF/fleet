@@ -11,8 +11,8 @@
 #
 # Role assignments (ESO, external-dns, team UAMIs) are intentionally
 # authored by the caller (Stage 1 `main.rbac.tf`), not here — the
-# module is scope-agnostic so it can be reused from Stage 0 if a
-# second fleet-local KV is ever introduced.
+# module is scope-agnostic so it can be reused from other stages if
+# a second fleet-local KV is ever introduced.
 
 resource "azapi_resource" "kv" {
   type      = "Microsoft.KeyVault/vaults@2023-07-01"

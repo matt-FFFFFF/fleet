@@ -4,7 +4,7 @@
 #
 # Adopter-facing Terraform / bootstrap workflows (`tf-plan`, `tf-apply`,
 # `env-bootstrap`, `team-bootstrap`) consume fleet-scope repo variables
-# (`FLEET_KEYVAULT_ID`, `ACR_RESOURCE_ID`, `MGMT_VNET_RESOURCE_IDS`, …)
+# (`RUNNERS_KV_NAME`, `ACR_RESOURCE_ID`, `MGMT_VNET_RESOURCE_IDS`, …)
 # and a rendered `clusters/_fleet.yaml`. Both are produced by
 # `init-fleet.sh` + `init-gh-apps.sh` at adoption time, and neither exists
 # in the template repo or in an uninitialised adopter clone.

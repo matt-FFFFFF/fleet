@@ -75,3 +75,8 @@ output "github_app_fleet_runners" {
   description = "fleet-runners GH App coordinates (app_id, installation_id, private_key_kv_secret)."
   value       = local.github_app_fleet_runners
 }
+
+output "github_app_fleet_meta" {
+  description = "fleet-meta GH App coordinates (app_id, installation_id, private_key_kv_secret)."
+  value       = local.github_app_fleet_meta
+}
