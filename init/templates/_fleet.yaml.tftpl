@@ -160,9 +160,11 @@ networking:                                            # Repo-owned VNets + BYO 
       regions:
         ${primary_region}:
           address_space: ["${cfg.address_space}"]
-          # Private IP of the hub firewall / NVA; fill in before first
-          # cluster apply in this region. See docs/adoption.md.
-          egress_next_hop_ip: null
+          # Private IP of the hub firewall / NVA. Broadcast from
+          # init-fleet.sh's single egress_next_hop_ip prompt to every
+          # env's primary_region entry (PLAN §3.4; F13 Option B).
+          # Per-env / per-region overrides go here post-init.
+          egress_next_hop_ip: ${egress_next_hop_ip == "" ? "null" : egress_next_hop_ip}
           # TODO: full ARM resource id of the ${env} hub VNet in ${primary_region}, or null to opt out of hub peering.
           hub_network_resource_id: ${cfg.hub_network_resource_id == null ? "null" : format("\"%s\"", cfg.hub_network_resource_id)}
           # hub_peering:

@@ -151,9 +151,18 @@ if [[ -n "$pending" ]]; then
     # and substitutes the default. Convention: `default: <token> — <prose>`
     # (em-dash separator). Tokens are matched as bash-shell-safe single
     # words (no whitespace); for multi-word defaults extend the regex.
+    # The literal token `<empty>` is a special case meaning "blank input
+    # is permitted and the variable is left as the empty string" — used
+    # for nullable / opt-out scalars (e.g. egress_next_hop_ip, where
+    # empty renders as YAML null in the rendered _fleet.yaml).
     default=""
+    allow_empty=0
     if [[ "$hint" =~ ^default:\ ([^[:space:]]+)([[:space:]].*)?$ ]]; then
       default="${BASH_REMATCH[1]}"
+      if [[ "$default" == "<empty>" ]]; then
+        allow_empty=1
+        default=""
+      fi
     fi
     while true; do
       if [[ -n "$hint" ]]; then
@@ -163,6 +172,10 @@ if [[ -n "$pending" ]]; then
       fi
       if [[ -z "$val" && -n "$default" ]]; then
         val="$default"
+        break
+      fi
+      if [[ -z "$val" && $allow_empty -eq 1 ]]; then
+        val=""
         break
       fi
       [[ -n "$val" ]] && break

@@ -100,6 +100,31 @@ variable "primary_region" {
   }
 }
 
+variable "egress_next_hop_ip" {
+  description = <<-EOT
+    Hub firewall / NVA private IP that AKS api-server and node traffic
+    route 0.0.0.0/0 at, in `primary_region`. Broadcast into every env's
+    single-region entry (`networking.envs.<env>.regions.<primary_region>.
+    egress_next_hop_ip`) so cluster apply does not fail-fast on a
+    missing UDR (PLAN §3.4; docs/findings.md F13). Empty string opts
+    out (adopter-managed routing) and renders as YAML null; per-env
+    NVAs or additional regions are configured by editing _fleet.yaml
+    post-init.
+  EOT
+  type        = string
+  default     = ""
+  validation {
+    # IPv4 dotted-quad in 0-255 per octet, or empty string (opt-out).
+    # init-fleet.sh's `default: <token>` convention substitutes the empty
+    # string when the adopter accepts the default with blank input.
+    condition = (
+      var.egress_next_hop_ip == ""
+      || can(regex("^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$", var.egress_next_hop_ip))
+    )
+    error_message = "egress_next_hop_ip must be an IPv4 address (dotted-quad, e.g. 10.0.0.4) or empty (opt-out)."
+  }
+}
+
 
 variable "dns_fleet_root" {
   description = "DNS root zone under which per-cluster private zones are created (e.g. int.acme.example)."

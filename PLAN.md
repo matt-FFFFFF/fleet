@@ -624,8 +624,13 @@ next-hop IP that both AKS api-server and node traffic route
 `0.0.0.0/0` at is carried as `egress_next_hop_ip` on each env-region
 entry in `_fleet.yaml`
 (`networking.envs.<env>.regions.<region>.egress_next_hop_ip`);
-adopters fill this in with their hub firewall / NVA private IP before
-creating a cluster in that region. `bootstrap/environment` always
+`init-fleet.sh` prompts once for the hub firewall / NVA private IP
+in `primary_region` and broadcasts the value into every env's
+single-region entry, since most adopters run one central NVA per
+region (Option B in `docs/findings.md` F13). Adopters with per-env
+NVAs, or who add additional regions post-init, edit `_fleet.yaml`
+directly. Blank input on the prompt maps to `null` (opt-out for
+adopter-managed routing). `bootstrap/environment` always
 authors the `rt-aks-<env>-<region>` route table shell on every
 env-region VNet (mgmt included); the `0.0.0.0/0` route entry is only
 created when `egress_next_hop_ip` is non-null. The route table is
@@ -3194,9 +3199,13 @@ Interactive wizard by default; `--non-interactive` plus optional
    followed by ` — <prose>`), blank input substitutes `<token>` instead
    of looping for required input — used for genuinely sensible defaults
    that most adopters can accept (e.g. `primary_region` defaulting to
-   `eastus`). Only **top-level scalar** assignments are prompted; the
-   wrapper has no HCL parser and does not descend into map/object
-   literals (e.g. the per-env entries inside `environments`).
+   `eastus`). The literal token `<empty>` is a special case meaning
+   "blank input is permitted and the variable is left as the empty
+   string" — used for nullable / opt-out scalars (e.g.
+   `egress_next_hop_ip`, where empty renders as YAML null in the
+   rendered `_fleet.yaml`). Only **top-level scalar** assignments are
+   prompted; the wrapper has no HCL parser and does not descend into
+   map/object literals (e.g. the per-env entries inside `environments`).
 4. **Pre-flight refusal** for nested-map sentinels: scan the file for
    any indented `key = "__PROMPT__"` line still in place after the
    prompt loop, and if any are found, print the file:line references

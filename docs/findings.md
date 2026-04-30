@@ -5,52 +5,6 @@ Open design/implementation concerns that don't fit `PLAN.md` (intent) or
 work queued in the Rework program in `STATUS.md`. Close a finding by
 deleting its section when the matching rework item is completed.
 
-## F13 — `init-fleet.sh` should prompt for `egress_next_hop_ip`
-
-**Observation.** Every region in `networking.envs.<env>.regions.<r>`
-ships with `egress_next_hop_ip: null`. The rendered comment says
-*"fill in before first cluster apply in this region"*. In practice
-almost every adopter runs hub-and-spoke with a central firewall /
-NVA, so this is a near-universal value, not a nice-to-have.
-
-`bootstrap/fleet` accepts `null` (the `0.0.0.0/0` route on
-`rt-fleet-<region>` is simply not created), but **Stage 1 fails fast
-at cluster apply** in any region whose clusters have hub-routed
-egress. The adopter therefore hits the same edit-and-re-apply cycle
-on first cluster create that they hit on first init.
-
-**Risk.** Discoverability. The TODO comment is in the rendered yaml,
-not in the prompt flow, so the adopter only finds it when Stage 1
-errors.
-
-**Options.**
-- **Option A — prompt per env-region.** The init flow already knows
-  the env list and the `primary_region`; prompt for one
-  `egress_next_hop_ip` per env-region. Accept blank → null (opt-out
-  for adopters with adopter-managed routing).
-- **Option B — single-value shortcut.** Prompt once for "central
-  firewall private IP for `<primary_region>`" and apply the same
-  value to all 3 envs in that region. Covers the 90% case (one
-  central NVA serving all envs in one region); adopters with
-  per-env NVAs edit the yaml afterwards. Simpler UX.
-- **Option C — group with hub VNet prompt.** When prompting for
-  `hub_network_resource_id`, also prompt for the matching
-  `egress_next_hop_ip`. Naturally pairs the two values since they
-  describe the same hub.
-
-**Recommendation.** C — pair the two prompts. Both are
-hub-properties; one prompt block per env-region keeps the UX
-linear. Empty input on either field still maps to `null` (opt-out).
-
-Implementation note: `hub_network_resource_id` lives inside the
-`environments` map, and the wrapper does not yet descend into nested
-map values (the prompt loop walks top-level scalars only; nested
-`__PROMPT__` sentinels trigger a pre-flight refusal that asks the
-adopter to edit by hand). Any of the options above that prompts
-inside the map requires teaching the wrapper to walk nested literals
-first — Option A/C from F13's perspective is therefore a meaningful
-chunk of work, not just a few lines of bash.
-
 ## F16 — Globally-unique resource names should carry a random suffix
 
 **Observation.** Several resources in the fleet derive names from
