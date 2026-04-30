@@ -1,0 +1,115 @@
+# .github/actions/tf-backend-config/action.yaml
+#
+# Renders a `backend.hcl` (tfvars-format) file for the azurerm backend
+# from environment-scoped GH `vars.*`, then runs `terraform init
+# -backend-config=backend.hcl` in the stage's working directory.
+#
+# The `azurerm` backend requires `resource_group_name`,
+# `storage_account_name`, `container_name`, and `key`. Passing them as
+# repeated `-backend-config=key=value` flags is verbose and easy to get
+# wrong; consolidating into a single HCL file keeps each stage's init
+# call to one line and centralises the convention here.
+#
+# State-storage variables are published to env-scope by:
+#   - bootstrap/fleet         → fleet-stage0  (TFSTATE_RESOURCE_GROUP,
+#                                              TFSTATE_STORAGE_ACCOUNT,
+#                                              TFSTATE_CONTAINER=tfstate-fleet)
+#   - bootstrap/environment   → fleet-<env>   (same names, but
+#                                              TFSTATE_CONTAINER=tfstate-<env>;
+#                                              RG/SA are fleet-wide and
+#                                              re-published per-env so
+#                                              every job's environment
+#                                              context resolves them).
+#
+# `subscription_id` here is the STATE subscription. In single-subscription
+# adopters this is the same as `AZURE_SUBSCRIPTION_ID`. Multi-subscription
+# adopters that want a separate state subscription should override
+# `subscription_id` via the `subscription-id` input.
+#
+# Usage (stage0):
+#
+#   - uses: ./.github/actions/tf-backend-config
+#     with:
+#       working-directory: terraform/stages/0-fleet
+#       state-key:         stage0/fleet.tfstate
+#     env:
+#       TFSTATE_RESOURCE_GROUP:  ${{ vars.TFSTATE_RESOURCE_GROUP }}
+#       TFSTATE_STORAGE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+#       TFSTATE_CONTAINER:       ${{ vars.TFSTATE_CONTAINER }}
+#       AZURE_SUBSCRIPTION_ID:   ${{ vars.AZURE_SUBSCRIPTION_ID }}
+#
+# Usage (stage1, per-cluster matrix leg):
+#
+#   - uses: ./.github/actions/tf-backend-config
+#     with:
+#       working-directory: terraform/stages/1-cluster
+#       state-key:         ${{ matrix.cluster.region }}/${{ matrix.cluster.name }}/stage1.tfstate
+#     env:
+#       TFSTATE_RESOURCE_GROUP:  ${{ vars.TFSTATE_RESOURCE_GROUP }}
+#       TFSTATE_STORAGE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+#       TFSTATE_CONTAINER:       ${{ vars.TFSTATE_CONTAINER }}
+#       AZURE_SUBSCRIPTION_ID:   ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+name: Terraform azurerm backend init
+description: |
+  Generate `backend.hcl` and run `terraform init -backend-config=backend.hcl`
+  for the azurerm backend, using state-storage values from env-scoped vars.
+
+inputs:
+  working-directory:
+    description: Stage directory containing the root module (e.g. `terraform/stages/0-fleet`).
+    required: true
+  state-key:
+    description: |
+      Backend `key` (state-file path inside the container). Conventional
+      values:
+        - stage0: `stage0/fleet.tfstate`
+        - stage1: `<region>/<cluster_name>/stage1.tfstate`
+        - stage2: `<region>/<cluster_name>/stage2.tfstate`
+    required: true
+  subscription-id:
+    description: |
+      Override for the STATE subscription. Defaults to
+      `$AZURE_SUBSCRIPTION_ID` (the OIDC-login subscription), which is
+      correct for single-subscription adopters and for the template
+      default where `_fleet.yaml.state.subscription_id` matches.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Render backend.hcl
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        STATE_KEY:    ${{ inputs.state-key }}
+        SUBSCRIPTION: ${{ inputs.subscription-id }}
+      run: |
+        set -euo pipefail
+
+        : "${TFSTATE_RESOURCE_GROUP:?TFSTATE_RESOURCE_GROUP must be set in env: from vars.TFSTATE_RESOURCE_GROUP}"
+        : "${TFSTATE_STORAGE_ACCOUNT:?TFSTATE_STORAGE_ACCOUNT must be set in env: from vars.TFSTATE_STORAGE_ACCOUNT}"
+        : "${TFSTATE_CONTAINER:?TFSTATE_CONTAINER must be set in env: from vars.TFSTATE_CONTAINER}"
+        : "${AZURE_SUBSCRIPTION_ID:?AZURE_SUBSCRIPTION_ID must be set in env: from vars.AZURE_SUBSCRIPTION_ID}"
+
+        sub="${SUBSCRIPTION:-$AZURE_SUBSCRIPTION_ID}"
+
+        cat > backend.hcl <<EOF
+        resource_group_name  = "${TFSTATE_RESOURCE_GROUP}"
+        storage_account_name = "${TFSTATE_STORAGE_ACCOUNT}"
+        container_name       = "${TFSTATE_CONTAINER}"
+        subscription_id      = "${sub}"
+        key                  = "${STATE_KEY}"
+        use_oidc             = true
+        use_azuread_auth     = true
+        EOF
+
+        echo "::group::backend.hcl"
+        cat backend.hcl
+        echo "::endgroup::"
+
+    - name: terraform init
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform init -backend-config=backend.hcl

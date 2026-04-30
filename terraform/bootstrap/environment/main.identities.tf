@@ -22,7 +22,7 @@ locals {
 
   env_sub_id = local.environment.subscription_id
 
-  # Fleet KV + ACR resource IDs.
+  # Runners KV + ACR resource IDs.
   #
   # KV: created by `bootstrap/fleet`; referenced here by synthesized ARM id
   # using the same naming derivation as docs/naming.md.
@@ -32,10 +32,10 @@ locals {
   # `acr_uaa_bounded` role assignment in main.github.tf depends on its
   # creation; on non-mgmt envs synthesize the same id (the ACR is created
   # by a prior env=mgmt run and its name derivation is fleet-wide).
-  fleet_kv_id = join("/", [
+  runners_kv_id = join("/", [
     "/subscriptions", local.derived.acr_subscription_id,
     "resourceGroups", local.derived.acr_resource_group,
-    "providers/Microsoft.KeyVault/vaults", local.derived.fleet_kv_name,
+    "providers/Microsoft.KeyVault/vaults", local.derived.runners_kv_name,
   ])
   fleet_acr_id = var.env == "mgmt" ? azapi_resource.fleet_acr[0].id : join("/", [
     "/subscriptions", local.derived.acr_subscription_id,

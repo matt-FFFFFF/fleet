@@ -18,7 +18,7 @@
 # `bootstrap/fleet` publishes the fleet-scope repo + fleet-meta
 # variables this stack needs: `MGMT_VNET_RESOURCE_IDS` (JSON-encoded
 # `{region: vnet-resource-id}` map) on the `fleet-meta` GitHub
-# Environment; `FLEET_KEYVAULT_ID`, `ACR_RESOURCE_ID`,
+# Environment; `RUNNERS_KV_ID`, `ACR_RESOURCE_ID`,
 # `KARGO_MGMT_UAMI_PRINCIPAL_ID`, `KARGO_AAD_APPLICATION_OBJECT_ID` as
 # fleet-scope repo variables. `bootstrap/environment` publishes the
 # per-env variables (`FLEET_ENV_UAMI_PRINCIPAL_ID`,

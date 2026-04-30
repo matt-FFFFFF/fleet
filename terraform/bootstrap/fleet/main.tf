@@ -92,4 +92,5 @@ locals {
   networking_derived       = module.identity.networking_derived
   networking_central       = module.identity.networking_central
   github_app_fleet_runners = module.identity.github_app_fleet_runners
+  github_app_fleet_meta    = module.identity.github_app_fleet_meta
 }

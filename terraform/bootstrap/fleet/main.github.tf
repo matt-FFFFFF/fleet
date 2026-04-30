@@ -163,8 +163,18 @@ module "fleet_repo" {
         }
         required_status_checks = {
           strict_required_status_checks_policy = true
+          # Each `validate.yaml` job emits its own check (the `name:` of
+          # the job, not the workflow file name). GitHub does not
+          # auto-aggregate them under a workflow-level status, so the
+          # ruleset must list every required check explicitly. Adding
+          # a new job to `validate.yaml` requires adding its `name:` here
+          # and re-applying `bootstrap/fleet`.
           required_check = [
-            { context = "validate" },
+            { context = "terraform fmt" },
+            { context = "tflint" },
+            { context = "yamllint" },
+            { context = "subnet slots" },
+            { context = "naming parity" },
           ]
         }
       }
@@ -255,6 +265,33 @@ locals {
     TFSTATE_STORAGE_ACCOUNT = local.derived.state_storage_account
     TFSTATE_RESOURCE_GROUP  = local.derived.state_resource_group
     FLEET_NAME              = local.fleet.name
+    # principalId of `uami-fleet-meta`, consumed by `bootstrap/environment`
+    # as `var.fleet_meta_principal_id` (no default; required). Wired into
+    # the `env-bootstrap.yaml` workflow via
+    # `TF_VAR_fleet_meta_principal_id: ${{ vars.FLEET_META_PRINCIPAL_ID }}`.
+    FLEET_META_PRINCIPAL_ID = module.fleet_repo.environments["meta"].identity.principal_id
+
+    # GH App coordinates for `env-bootstrap.yaml` / `team-bootstrap.yaml`:
+    # the workflows fetch `fleet-meta-app-pem` from the runners KV and pass
+    # it (with `FLEET_META_APP_CLIENT_ID`) to
+    # `actions/create-github-app-token` to mint a short-lived
+    # installation token. The action's `app-id` input is deprecated in
+    # favour of `client-id`, so we publish the client ID. The KV secret
+    # name comes from `_fleet.yaml.github_app.fleet_meta.private_key_kv_secret`
+    # (default `fleet-meta-app-pem`); exposing it as a repo var keeps
+    # the workflow free of hard-coded secret names.
+    FLEET_META_APP_CLIENT_ID     = local.github_app_fleet_meta.client_id
+    FLEET_META_APP_PEM_KV_SECRET = local.github_app_fleet_meta.private_key_kv_secret
+    RUNNERS_KV_NAME              = local.derived.runners_kv_name
+
+    # GitHub owner + repo numeric IDs, looked up by `bootstrap/fleet` via
+    # `module.fleet_repo`'s `data.github_organization` / `data.github_user`
+    # data sources (which Stage -1's locally-run operator credentials can
+    # resolve). Republished here so `bootstrap/environment` (which runs
+    # in CI as the fleet-meta App and lacks `Members: read` org access)
+    # can build OIDC subject claim values without re-querying the org.
+    FLEET_GITHUB_OWNER_ID = module.fleet_repo.actions_oidc_subject_claim_values.repository_owner_id
+    FLEET_GITHUB_REPO_ID  = module.fleet_repo.actions_oidc_subject_claim_values.repository_id
     # PLAN §3.4: per-region mgmt networking ids published as JSON-encoded
     # `{ region => resource_id }` maps. Downstream workflows parse with
     # `fromJSON(vars.MGMT_*)` and index by the cluster's region (or, for

@@ -25,20 +25,24 @@
 #
 # After all three Apps exist, the script:
 #   - Writes terraform/bootstrap/fleet/.gh-apps.auto.tfvars (gitignored,
-#     mode 0600) containing only `fleet_runners_app_pem` +
-#     `fleet_runners_app_pem_version` — the two variables
-#     `bootstrap/fleet/variables.tf` declares. `*.auto.tfvars` auto-loads
-#     only from the module root being applied, so dropping the file here
-#     lets `terraform -chdir=terraform/bootstrap/fleet apply` pick the
-#     PEM up without an explicit `-var-file` flag and without
-#     "undeclared variable" warnings. `fleet_runners_app_pem_version` is
-#     an opaque rotation token — preserved across re-runs when the PEM
-#     is unchanged, auto-bumped when the PEM in state differs from the
-#     PEM in the existing narrow tfvars (keeps
-#     `bootstrap/fleet`'s `azapi_data_plane_resource` re-PUT behaviour
-#     aligned with actual key rotations).
+#     mode 0600) containing the four PEM-related variables
+#     `bootstrap/fleet/variables.tf` declares: `fleet_runners_app_pem`,
+#     `fleet_runners_app_pem_version`, `fleet_meta_app_pem`,
+#     `fleet_meta_app_pem_version`. `*.auto.tfvars` auto-loads only
+#     from the module root being applied, so dropping the file here lets
+#     `terraform -chdir=terraform/bootstrap/fleet apply` pick the PEMs
+#     up without an explicit `-var-file` flag and without "undeclared
+#     variable" warnings. The `*_version` rotation tokens are opaque —
+#     preserved across re-runs when the matching PEM is unchanged,
+#     auto-bumped when the PEM in state differs from the PEM in the
+#     existing tfvars (keeps `bootstrap/fleet`'s
+#     `azapi_data_plane_resource` re-PUT behaviour aligned with actual
+#     key rotations).
 #   - Patches clusters/_fleet.yaml with `github_app.fleet_runners.{app_id,
-#     installation_id}` so `bootstrap/fleet` apply just works.
+#     installation_id}` AND `github_app.fleet_meta.{app_id,
+#     installation_id}` so `bootstrap/fleet` apply just works. The
+#     `fleet_meta` sub-block is inserted if absent (adopters initialized
+#     before the template carried it).
 #   - Self-deletes (only on a fully successful run).
 #
 # The full GitHub App payload (IDs, client IDs, client secrets, PEMs,
@@ -55,10 +59,11 @@
 # run (see --keep below). Adopters who expect to re-run it later — e.g.
 # to rotate the `fleet-runners` App's private key via
 # `gh api -X POST /apps/<slug>/keys` and regenerate the narrow tfvars
-# overlay — must either pass `--keep` on the initial run, or restore
-# the script from git history (`git show <template-commit>:init-gh-apps.sh`)
-# before re-running. The rotation-detection logic in the tfvars writer
-# assumes the script is available; it cannot run without it.
+#     overlay — must either pass `--keep` on the initial run, or restore
+#     the script from git history (`git show <template-commit>:init-gh-apps.sh`)
+#     before re-running. The rotation-detection logic in the tfvars writer
+#     assumes the script is available; it cannot run without it. The same
+#     applies to rotating `fleet-meta`'s key.
 #
 # Usage:
 #   ./init-gh-apps.sh              # interactive: opens browser, waits for clicks
@@ -119,7 +124,8 @@ fleet_yaml="$repo_root/clusters/_fleet.yaml"
 state_file="$repo_root/.gh-apps.state.json"
 # Narrow per-module overlay for `bootstrap/fleet`. Carries only the
 # variables that module declares (fleet_runners_app_pem +
-# fleet_runners_app_pem_version) so `terraform apply` auto-loads it
+# fleet_runners_app_pem_version + fleet_meta_app_pem +
+# fleet_meta_app_pem_version) so `terraform apply` auto-loads it
 # without `-var-file` and without "undeclared variable" warnings.
 # Stage 0's full-payload tfvars file is not emitted today; PLAN §16.4
 # will derive it from state when the matching variable blocks land.
@@ -268,7 +274,11 @@ PY
 
 apps_meta_perms='{"administration":"write","environments":"write","actions_variables":"write","secrets":"write","contents":"write"}'
 apps_stage0_perms='{"actions_variables":"write"}'
-apps_runners_perms='{"actions":"read","metadata":"read"}'
+# fleet-runners needs `administration:write` to mint repo-scoped runner
+# registration tokens (POST /repos/{owner}/{repo}/actions/runners/registration-token).
+# `actions:read` is for the KEDA scaler to enumerate queued workflow
+# runs; `metadata:read` is the implicit minimum for any installed App.
+apps_runners_perms='{"administration":"write","actions":"read","metadata":"read"}'
 
 # fleet-meta and stage0-publisher write to the repo only; fleet-runners reads.
 # All three are repo-scoped (no organization permissions requested).
@@ -604,63 +614,76 @@ python3 - "$state_file" "$tfvars_file" <<'PY'
 import json, os, re, sys
 state_path, out_path = sys.argv[1], sys.argv[2]
 s = json.load(open(state_path))
-pem = s["fleet-runners"]["pem"].rstrip("\n")
 
-# Read prior narrow tfvars (if any) to decide whether to bump the
-# opaque rotation token. Parsing is surgical — we look for the two
-# fields by name via regex. Treat a missing/malformed
-# `fleet_runners_app_pem_version` as "0" for bump purposes so that
-# a subsequent PEM rotation still increments the token to "1"
-# (rather than resetting to first-emit semantics, which would leave
-# `sensitive_body_version` unchanged and skip the KV re-PUT). If
-# `fleet_runners_app_pem` itself is absent we genuinely have no
-# prior state and fall back to first-emit ("0").
-prior_pem = None
-prior_version = None
-try:
-    with open(out_path) as f:
-        prior_text = f.read()
-    m = re.search(r'fleet_runners_app_pem\s*=\s*<<EOT\n(.*?)\nEOT',
-                  prior_text, re.DOTALL)
-    if m:
-        prior_pem = m.group(1).rstrip("\n")
-    m = re.search(r'fleet_runners_app_pem_version\s*=\s*"([^"]*)"',
-                  prior_text)
-    if m:
-        prior_version = m.group(1)
-except FileNotFoundError:
-    pass
+# PEMs for both Apps that bootstrap/fleet seeds into the KV.
+runners_pem = s["fleet-runners"]["pem"].rstrip("\n")
+meta_pem    = s["fleet-meta"]["pem"].rstrip("\n")
 
-if prior_pem is None:
-    # No prior file, or file present but PEM block missing/malformed.
-    version = "0"
-elif prior_pem == pem:
-    # PEM unchanged — preserve the prior token (or "0" if it was
-    # missing) so idempotent re-runs don't perturb KV state.
-    version = prior_version if prior_version is not None else "0"
-else:
-    # PEM rotated. Bump the token so `sensitive_body_version` in
-    # `bootstrap/fleet` changes and the KV secret is re-PUT. Treat
-    # a missing/non-numeric prior version as "0" and emit "1".
-    base = prior_version if prior_version is not None else "0"
+# Read prior narrow tfvars (if any) to decide whether to bump each
+# opaque rotation token. Parsing is surgical — we look for the named
+# fields via regex. Treat a missing/malformed `*_version` as "0" for
+# bump purposes so that a subsequent PEM rotation still increments
+# the token to "1" (rather than resetting to first-emit semantics,
+# which would leave `sensitive_body_version` unchanged and skip the
+# KV re-PUT). If the matching `*_pem` block is absent we genuinely
+# have no prior state and fall back to first-emit ("0").
+def read_prior(path):
     try:
-        version = str(int(base) + 1)
+        with open(path) as f:
+            text = f.read()
+    except FileNotFoundError:
+        return {}
+    out = {}
+    for key in ("fleet_runners_app_pem", "fleet_meta_app_pem"):
+        m = re.search(rf'{key}\s*=\s*<<EOT\n(.*?)\nEOT', text, re.DOTALL)
+        if m:
+            out[key] = m.group(1).rstrip("\n")
+    for key in ("fleet_runners_app_pem_version", "fleet_meta_app_pem_version"):
+        m = re.search(rf'{key}\s*=\s*"([^"]*)"', text)
+        if m:
+            out[key] = m.group(1)
+    return out
+
+prior = read_prior(out_path)
+
+def next_version(pem_key, ver_key, current_pem):
+    prior_pem = prior.get(pem_key)
+    prior_ver = prior.get(ver_key)
+    if prior_pem is None:
+        return "0"
+    if prior_pem == current_pem:
+        return prior_ver if prior_ver is not None else "0"
+    base = prior_ver if prior_ver is not None else "0"
+    try:
+        return str(int(base) + 1)
     except ValueError:
-        version = "1"
+        return "1"
+
+runners_version = next_version(
+    "fleet_runners_app_pem", "fleet_runners_app_pem_version", runners_pem,
+)
+meta_version = next_version(
+    "fleet_meta_app_pem", "fleet_meta_app_pem_version", meta_pem,
+)
 
 lines = [
     "# Generated by ./init-gh-apps.sh — do not edit by hand.",
     "# Auto-loaded by `terraform -chdir=terraform/bootstrap/fleet apply`.",
     "# Gitignored (see .gitignore).",
     "#",
-    "# fleet_runners_app_pem_version is bumped automatically by the",
-    "# script when the PEM in .gh-apps.state.json changes; bump it",
-    "# manually if you need to force a re-PUT of the KV secret.",
+    "# *_app_pem_version is bumped automatically by the script when the",
+    "# corresponding PEM in .gh-apps.state.json changes; bump manually if",
+    "# you need to force a re-PUT of the KV secret.",
     "",
     "fleet_runners_app_pem         = <<EOT",
-    pem,
+    runners_pem,
     "EOT",
-    f'fleet_runners_app_pem_version = "{version}"',
+    f'fleet_runners_app_pem_version = "{runners_version}"',
+    "",
+    "fleet_meta_app_pem            = <<EOT",
+    meta_pem,
+    "EOT",
+    f'fleet_meta_app_pem_version    = "{meta_version}"',
     "",
 ]
 
@@ -678,37 +701,156 @@ PY
 # Surgical line-level edit (no YAML reformat); the keys are stable because
 # init/templates/_fleet.yaml.tftpl emits them with two-space indent.
 
-info "Patching $fleet_yaml with fleet-runners IDs"
+info "Patching $fleet_yaml with fleet-runners + fleet-meta IDs"
 python3 - "$fleet_yaml" "$state_file" <<'PY'
 import json, pathlib, re, sys
 yaml_path, state_path = sys.argv[1], sys.argv[2]
 state = json.load(open(state_path))
-runners = state["fleet-runners"]
-app_id = str(runners["id"])
-inst_id = str(runners["installation_id"])
 
 p = pathlib.Path(yaml_path)
 text = p.read_text()
 
-def replace(text, key, value):
-    # Match the key line with either a quoted string value (`key: "..."`)
-    # or an unquoted scalar (`key: null`, `key: 123`). The template ships
-    # `null`; once patched, subsequent runs would see a quoted numeric
-    # string — both forms round-trip.
+def find_block(text, parent, child):
+    """Return (start, end) of the `parent: / <indent>child:` sub-block,
+    or (None, None) if `parent.child` is absent.
+
+    `start` is the column-0 offset of the line containing
+    `<indent>child:`; `end` is the offset of the first line at depth
+    `<= len(indent)` after that (i.e. where the sub-block ends).
+
+    The `child:` header line may carry a trailing comment
+    (`child: # explanation`) — `init/templates/_fleet.yaml.tftpl` emits
+    them on the runners/meta sub-block headers — so the match accepts
+    optional `[ \t]*(#.*)?` after the colon. The strict `\s*$` form
+    would silently miss those headers and force the insert path even
+    when the block already exists.
+    """
+    pat = re.compile(rf'^{re.escape(parent)}:[ \t]*(?:#.*)?$', re.MULTILINE)
+    m = pat.search(text)
+    if not m:
+        return None, None
+    after = m.end()
+    child_pat = re.compile(
+        rf'^(\s+){re.escape(child)}:[ \t]*(?:#.*)?$', re.MULTILINE,
+    )
+    cm = child_pat.search(text, after)
+    if not cm:
+        return None, None
+    indent = cm.group(1)
+    block_start = cm.start()
+    end_pat = re.compile(rf'^(?: {{0,{len(indent) - 1}}})\S', re.MULTILINE)
+    em = end_pat.search(text, cm.end())
+    block_end = em.start() if em else len(text)
+    return block_start, block_end
+
+def replace_in_range(text, start, end, key, value):
+    """Replace `key:` line within text[start:end]. Errors if absent."""
+    region = text[start:end]
     pat = re.compile(
         rf'^(\s+){re.escape(key)}:\s*(?:"[^"]*"|[^\s#]+)(\s*(?:#.*)?)$',
         re.MULTILINE,
     )
-    new, n = pat.subn(rf'\g<1>{key}: "{value}"\g<2>', text, count=1)
+    new_region, n = pat.subn(rf'\g<1>{key}: "{value}"\g<2>', region, count=1)
     if n == 0:
         raise SystemExit(
-            f"init-gh-apps: could not find required key '{key}' in {yaml_path}; "
-            "template may have drifted — fix the file or re-run init-fleet.sh before continuing"
+            f"init-gh-apps: could not find '{key}' in github_app sub-block "
+            f"of {yaml_path} (range {start}..{end}); template may have drifted"
         )
-    return new
+    return text[:start] + new_region + text[end:]
 
-text = replace(text, "app_id", app_id)
-text = replace(text, "installation_id", inst_id)
+def insert_block(text, parent, lines):
+    """Append `lines` (already indented) inside the `parent:` block,
+    at the end of its existing children."""
+    pat = re.compile(rf'^{re.escape(parent)}:[ \t]*(?:#.*)?$', re.MULTILINE)
+    m = pat.search(text)
+    if not m:
+        raise SystemExit(
+            f"init-gh-apps: top-level key '{parent}:' missing from "
+            f"{yaml_path}; cannot patch"
+        )
+    # Find first child indent.
+    child_pat = re.compile(r'^(\s+)\S', re.MULTILINE)
+    cm = child_pat.search(text, m.end())
+    if not cm:
+        raise SystemExit(
+            f"init-gh-apps: '{parent}:' has no children in {yaml_path}; "
+            "expected at least `fleet_runners:`"
+        )
+    # Find end of the parent block (first line at depth 0 after m.end()).
+    end_pat = re.compile(r'^\S', re.MULTILINE)
+    em = end_pat.search(text, cm.end())
+    insert_at = em.start() if em else len(text)
+    # Ensure trailing newline before insertion point.
+    block = "\n".join(lines) + "\n"
+    return text[:insert_at] + block + text[insert_at:]
+
+def patch_app(text, state_key, yaml_app_key, extra_keys=()):
+    app = state[state_key]
+    app_id = str(app["id"])
+    inst_id = str(app["installation_id"])
+    extras = {k: str(app[k]) for k in extra_keys if app.get(k) is not None}
+    start, end = find_block(text, "github_app", yaml_app_key)
+    if start is None:
+        # Block missing — adopter initialized before this template was
+        # extended. Insert a fresh sub-block at the end of `github_app:`.
+        # Indent must match the existing `fleet_runners:` block.
+        existing_start, _ = find_block(text, "github_app", "fleet_runners")
+        if existing_start is None:
+            raise SystemExit(
+                f"init-gh-apps: github_app.fleet_runners missing from "
+                f"{yaml_path}; cannot infer indent"
+            )
+        line_start = text.rfind("\n", 0, existing_start) + 1
+        indent = text[line_start:existing_start]
+        lines = [
+            f"{indent}{yaml_app_key}:",
+            f'{indent}  app_id: "{app_id}"',
+        ]
+        for k, v in extras.items():
+            lines.append(f'{indent}  {k}: "{v}"')
+        lines.extend([
+            f'{indent}  installation_id: "{inst_id}"',
+            f'{indent}  private_key_kv_secret: {yaml_app_key.replace("_", "-")}-app-pem',
+        ])
+        return insert_block(text, "github_app", lines)
+    text = replace_in_range(text, start, end, "app_id", app_id)
+    for k, v in extras.items():
+        # Re-locate end after each replace (length may have changed)
+        # AND fall back to insertion when the key is missing entirely
+        # — adopter initialized before the template carried this field
+        # but already has the parent block (so `find_block` returned
+        # non-None and we skipped the insert path above).
+        s2, e2 = find_block(text, "github_app", yaml_app_key)
+        region = text[s2:e2]
+        kpat = re.compile(
+            rf'^(\s+){re.escape(k)}:\s*(?:"[^"]*"|[^\s#]+)(\s*(?:#.*)?)$',
+            re.MULTILINE,
+        )
+        if kpat.search(region):
+            text = replace_in_range(text, s2, e2, k, v)
+        else:
+            # Insert `<indent>  k: "v"` immediately after the `<key>:`
+            # header line within the sub-block. Indent picked from the
+            # first existing child key.
+            child_pat = re.compile(r'^(\s+)\S', re.MULTILINE)
+            cm2 = child_pat.search(region)
+            child_indent = cm2.group(1) if cm2 else "    "
+            insertion = f'{child_indent}{k}: "{v}"\n'
+            # Insert just after the `yaml_app_key:` header line.
+            header_pat = re.compile(rf'^(\s+){re.escape(yaml_app_key)}:\s*$\n', re.MULTILINE)
+            hm = header_pat.search(text, s2, e2)
+            if not hm:
+                raise SystemExit(
+                    f"init-gh-apps: could not locate '{yaml_app_key}:' header "
+                    f"to insert '{k}'"
+                )
+            text = text[:hm.end()] + insertion + text[hm.end():]
+    s2, e2 = find_block(text, "github_app", yaml_app_key)
+    return replace_in_range(text, s2, e2, "installation_id", inst_id)
+
+text = patch_app(text, "fleet-runners", "fleet_runners")
+text = patch_app(text, "fleet-meta",    "fleet_meta", extra_keys=("client_id",))
+
 p.write_text(text)
 PY
 
@@ -726,16 +868,16 @@ echo "    2. Run terraform -chdir=terraform/bootstrap/fleet apply."
 echo ""
 echo "  Keep $state_file and $tfvars_file as long as you may need"
 echo "  to re-plan or re-apply terraform/bootstrap/fleet — the"
-echo "  fleet_runners_app_pem variable is ephemeral/sensitive and"
-echo "  cannot be read back from Terraform state or from the KV"
-echo "  secret (bootstrap/fleet writes it via the KV data plane as a"
-echo "  write-only sensitive_body, so any future plan needs the PEM"
+echo "  fleet_{runners,meta}_app_pem variables are ephemeral/sensitive"
+echo "  and cannot be read back from Terraform state or from the KV"
+echo "  secret (bootstrap/fleet writes them via the KV data plane as"
+echo "  write-only sensitive_body, so any future plan needs the PEMs"
 echo "  supplied again). If you delete the tfvars file, you must"
-echo "  supply the PEM on each subsequent apply — e.g."
+echo "  supply both PEMs on each subsequent apply — e.g."
 echo "      export TF_VAR_fleet_runners_app_pem=\"\$(jq -r .\\\"fleet-runners\\\".pem $state_file)\""
-echo "      export TF_VAR_fleet_runners_app_pem_version=0"
-echo "  from a kept copy of $state_file, or fetch the PEM from"
-echo "  wherever you safely stashed it (a password manager, etc.)."
+echo "      export TF_VAR_fleet_meta_app_pem=\"\$(jq -r .\\\"fleet-meta\\\".pem $state_file)\""
+echo "  from a kept copy of $state_file, or fetch the PEMs from"
+echo "  wherever you safely stashed them (a password manager, etc.)."
 echo ""
 if [[ $KEEP -eq 0 ]]; then
   echo "  This script will self-delete on exit. If you need to re-run it"

@@ -30,29 +30,8 @@ name: validate
 
 on:
   pull_request:
-    paths:
-      - 'clusters/**'
-      - 'terraform/**'
-      - 'init/**'
-      - '.tflint.hcl'
-      - '.yamllint'
-      - '.github/scripts/validate-subnet-slots.sh'
-      - '.github/scripts/check-naming-parity.sh'
-      - '.github/scripts/naming-parity/**'
-      - '.github/workflows/validate.yaml'
-      - '.github/fixtures/adopter-test.tfvars'
-      - '.terraform-version'
   push:
     branches: [main]
-    paths:
-      - 'clusters/**'
-      - 'terraform/**'
-      - '.tflint.hcl'
-      - '.yamllint'
-      - '.github/scripts/validate-subnet-slots.sh'
-      - '.github/scripts/check-naming-parity.sh'
-      - '.github/scripts/naming-parity/**'
-      - '.terraform-version'
 
 jobs:
   fmt:
@@ -72,7 +51,15 @@ jobs:
           terraform_wrapper: false
 
       - name: terraform fmt -check -recursive
-        run: terraform fmt -check -recursive -diff terraform/ init/
+        # `init/` only exists in template-mode; `init-fleet.sh` deletes
+        # the directory in adopter repos, so gate it the same way the
+        # tflint/validate steps below do.
+        run: |
+          dirs=(terraform/)
+          if [[ -d init ]]; then
+            dirs+=(init/)
+          fi
+          terraform fmt -check -recursive -diff "${dirs[@]}"
 
   tflint:
     name: tflint

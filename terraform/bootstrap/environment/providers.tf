@@ -6,6 +6,14 @@ terraform {
       source  = "Azure/azapi"
       version = "~> 2.9"
     }
+    # Required transitively by `Azure/avm-res-network-virtualnetwork/azurerm`
+    # peering submodule (see main.peering.tf). Hub-spoke peering uses
+    # azurerm resources internally even though everything we author is
+    # azapi.
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 4.69"
+    }
     github = {
       source  = "integrations/github"
       version = "~> 6.11"
@@ -43,6 +51,16 @@ provider "azapi" {
   tenant_id       = local.fleet.tenant_id
   subscription_id = local.environment.subscription_id
   use_oidc        = true # authenticating as uami-fleet-meta via GitHub OIDC
+}
+
+# Required transitively by the sub-vending peering module. Authenticated
+# the same way as azapi (UAMI via GitHub OIDC); the empty `features {}`
+# block is required by the provider schema.
+provider "azurerm" {
+  features {}
+  tenant_id       = local.fleet.tenant_id
+  subscription_id = local.environment.subscription_id
+  use_oidc        = true
 }
 
 provider "github" {

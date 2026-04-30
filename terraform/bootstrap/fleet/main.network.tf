@@ -11,7 +11,7 @@
 #     when non-null (null opts out of hub peering; adopter handles
 #     routing externally).
 #   - Fleet-plane subnets (HIGH end of the /20, second /21 by PLAN §3.4):
-#       * `snet-pe-fleet` — /26 for tfstate SA, fleet KV, fleet ACR PEs.
+#       * `snet-pe-fleet` — /26 for tfstate SA, runners KV, fleet ACR PEs.
 #         NSG `nsg-pe-fleet-<region>`.
 #       * `snet-runners` — /23 delegated to Microsoft.App/environments
 #         for the ACA runner pool. NSG `nsg-runners-<region>`.
@@ -22,9 +22,9 @@
 # stage creates, authenticated via the `Network Contributor` grant
 # placed on the `fleet-meta` UAMI at each mgmt env-region VNet below.
 #
-# Downstream PEs (tfstate SA, fleet KV, fleet ACR) register into the
+# Downstream PEs (tfstate SA, runners KV, fleet ACR) register into the
 # snet-pe-fleet of a single chosen mgmt region per resource — see the
-# `state_mgmt_region`, `fleet_kv_mgmt_region`, and `runner_mgmt_region`
+# `state_mgmt_region`, `runners_kv_mgmt_region`, and `runner_mgmt_region`
 # selectors in main.state.tf / main.kv.tf / main.runner.tf.
 
 # --- Preflight -------------------------------------------------------------

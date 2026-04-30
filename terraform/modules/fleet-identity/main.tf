@@ -43,13 +43,13 @@ locals {
     acr_subscription_id = var.fleet_doc.acr.subscription_id
     acr_location        = var.fleet_doc.acr.location
 
-    # ----- fleet Key Vault ------------------------------------------------
-    fleet_kv_name = coalesce(
-      try(var.fleet_doc.keyvault.name_override, ""),
-      substr("kv-${local.fleet.name}-fleet", 0, 24),
+    # ----- runner-pool Key Vault ------------------------------------------
+    runners_kv_name = coalesce(
+      try(var.fleet_doc.runners_keyvault.name_override, ""),
+      substr("kv-${local.fleet.name}-runners", 0, 24),
     )
-    fleet_kv_resource_group = try(var.fleet_doc.keyvault.resource_group, var.fleet_doc.acr.resource_group)
-    fleet_kv_location       = try(var.fleet_doc.keyvault.location, local.mgmt_location)
+    runners_kv_resource_group = try(var.fleet_doc.runners_keyvault.resource_group, var.fleet_doc.acr.resource_group)
+    runners_kv_location       = try(var.fleet_doc.runners_keyvault.location, local.mgmt_location)
   }
 
   # Central adopter-owned networking inputs — the four central
@@ -285,5 +285,16 @@ locals {
     app_id                = try(var.fleet_doc.github_app.fleet_runners.app_id, "")
     installation_id       = try(var.fleet_doc.github_app.fleet_runners.installation_id, "")
     private_key_kv_secret = try(var.fleet_doc.github_app.fleet_runners.private_key_kv_secret, "fleet-runners-app-pem")
+  }
+
+  # fleet-meta GitHub App. Admin-class App used by env-bootstrap and
+  # team-bootstrap workflows to authenticate the Terraform `github`
+  # provider (creates the per-env Actions environment, writes the
+  # per-env repo variables, etc.). See docs/adoption.md §4.
+  github_app_fleet_meta = {
+    app_id                = try(var.fleet_doc.github_app.fleet_meta.app_id, "")
+    client_id             = try(var.fleet_doc.github_app.fleet_meta.client_id, "")
+    installation_id       = try(var.fleet_doc.github_app.fleet_meta.installation_id, "")
+    private_key_kv_secret = try(var.fleet_doc.github_app.fleet_meta.private_key_kv_secret, "fleet-meta-app-pem")
   }
 }

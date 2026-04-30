@@ -6,7 +6,7 @@
 #   uami-external-dns-<cluster>       — reconciles records in the cluster's
 #                                       own private DNS zone
 #   uami-eso-<cluster>                — External Secrets Operator pull source
-#                                       (cluster KV + fleet KV)
+#                                       (cluster KV + runners KV)
 #   uami-team-<team>-<cluster>        — one per team opted into this cluster
 #                                       (cluster.yaml `teams:` list)
 #   uami-argocd-spoke-<cluster>       — spoke clusters only (gated on

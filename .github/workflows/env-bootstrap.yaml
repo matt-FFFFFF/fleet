@@ -37,7 +37,24 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write
+
+# Force GitHub Actions' canonical bash invocation
+# (`bash --noprofile --norc -eo pipefail {0}`) on every `run:` step.
+# Self-hosted runner images often default to `bash -e {0}` *without*
+# pipefail, masking pipeline failures and turning failed bootstrap
+# applies green. The explicit default keeps hosted and self-hosted
+# behaviour identical.
+defaults:
+  run:
+    shell: bash
+
+# Note: `id-token: write` is granted at job-level on the `bootstrap`
+# job (the only one that calls `azure/login`). Granting it
+# workflow-wide would force the `guard` job — which has no
+# `environment:` — to satisfy `include_claim_keys=environment`,
+# which `bootstrap/fleet` configures repo-wide. GitHub refuses to
+# start such jobs with the error "the claim 'environment' cannot
+# be `null` or empty".
 
 jobs:
   guard:
@@ -57,6 +74,9 @@ jobs:
     if: needs.guard.outputs.initialized == 'true'
     runs-on: [self-hosted]
     environment: fleet-meta
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -77,23 +97,88 @@ jobs:
           tenant-id:       ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: terraform init
-        working-directory: terraform/bootstrap/environment
+      # Fetch the `fleet-meta` GitHub App PEM from the runners KV. The KV
+      # is private-only (`publicNetworkAccess = Disabled`); the runner
+      # reaches it via the per-pool ACA Job's mgmt-VNet attachment + the
+      # adopter-owned `privatelink.vaultcore.azure.net` PDZ. The PEM is
+      # exported to the job environment via the multi-line $GITHUB_ENV
+      # heredoc protocol (the only way to pass a multi-line secret into
+      # a downstream `with:` input), then registered with `::add-mask::`
+      # so it never appears in logs even if echoed by mistake.
+      - name: Fetch fleet-meta App PEM from KV
         env:
-          ENV: ${{ inputs.env }}
+          KV_NAME: ${{ vars.RUNNERS_KV_NAME }}
+          SECRET:  ${{ vars.FLEET_META_APP_PEM_KV_SECRET }}
         run: |
-          terraform init \
-            -backend-config="use_oidc=true" \
-            -backend-config="use_azuread_auth=true" \
-            -backend-config="key=bootstrap/environment/${ENV}.tfstate"
+          set -euo pipefail
+          : "${KV_NAME:?RUNNERS_KV_NAME repo var unset — re-apply bootstrap/fleet}"
+          : "${SECRET:?FLEET_META_APP_PEM_KV_SECRET repo var unset — re-apply bootstrap/fleet}"
+          pem=$(az keyvault secret show \
+            --vault-name "$KV_NAME" \
+            --name "$SECRET" \
+            --query value -o tsv)
+          # Mask each line — `::add-mask::` only handles single lines, so
+          # mask line-by-line. Without this a multi-line PEM would slip
+          # through the runner's secret scrubber even when the secret as
+          # a whole is registered as masked elsewhere.
+          while IFS= read -r line; do
+            [[ -n "$line" ]] && echo "::add-mask::$line"
+          done <<< "$pem"
+          # Multi-line $GITHUB_ENV heredoc (delimiter must be unique +
+          # not appear in the value — random nonce keeps it robust).
+          delim="EOF_$(openssl rand -hex 8)"
+          {
+            echo "FLEET_META_APP_PEM<<$delim"
+            echo "$pem"
+            echo "$delim"
+          } >> "$GITHUB_ENV"
+
+      # Mint a short-lived (~1h) installation token from the fleet-meta
+      # App. The token is consumed by the Terraform `github` provider in
+      # `bootstrap/environment` (data sources + per-env environment
+      # creation + variable writes). Restricted to the fleet repo via
+      # `owner` + `repositories`; the App's installation may include
+      # other repos (e.g. team-template) but those don't need access
+      # from this workflow. The action revokes the token automatically
+      # in its `post:` step on job completion.
+      - name: Mint fleet-meta App installation token
+        id: meta_token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id:    ${{ vars.FLEET_META_APP_CLIENT_ID }}
+          private-key:  ${{ env.FLEET_META_APP_PEM }}
+          owner:        ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: terraform init
+        uses: ./.github/actions/tf-backend-config
+        with:
+          working-directory: terraform/bootstrap/environment
+          state-key: bootstrap/environment/${{ inputs.env }}.tfstate
+        env:
+          TFSTATE_RESOURCE_GROUP:  ${{ vars.TFSTATE_RESOURCE_GROUP }}
+          TFSTATE_STORAGE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+          TFSTATE_CONTAINER:       ${{ vars.TFSTATE_CONTAINER }}
+          AZURE_SUBSCRIPTION_ID:   ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: terraform ${{ inputs.action }}
         working-directory: terraform/bootstrap/environment
         env:
           ARM_USE_OIDC: "true"
+          # Terraform `github` provider auth — installation token from
+          # the fleet-meta App, scoped to the fleet repo, ~1h TTL.
+          GITHUB_TOKEN: ${{ steps.meta_token.outputs.token }}
           ENV: ${{ inputs.env }}
           ACTION: ${{ inputs.action }}
-          TF_VAR_mgmt_vnet_resource_ids_json: ${{ vars.MGMT_VNET_RESOURCE_IDS }}
+          # Bare-JSON values from env-scoped repo vars deserialise into
+          # Terraform's typed inputs (`map(string)` / `string`) without
+          # extra quoting because valid JSON is valid HCL on the
+          # tfvars channel. See variable comments in
+          # `terraform/bootstrap/environment/variables.tf`.
+          TF_VAR_mgmt_vnet_resource_ids: ${{ vars.MGMT_VNET_RESOURCE_IDS }}
+          TF_VAR_fleet_meta_principal_id: ${{ vars.FLEET_META_PRINCIPAL_ID }}
+          TF_VAR_fleet_github_owner_id: ${{ vars.FLEET_GITHUB_OWNER_ID }}
+          TF_VAR_fleet_github_repo_id: ${{ vars.FLEET_GITHUB_REPO_ID }}
         run: |
           set -euo pipefail
           case "$ACTION" in

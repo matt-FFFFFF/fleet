@@ -34,8 +34,8 @@ acr:
   location: ${primary_region}
   sku: Premium
 
-keyvault:                                              # FLEET KV (one; bootstrap/fleet)
-  # Default name derived: kv-<fleet.name>-fleet. Override via `name_override`.
+runners_keyvault:                                      # RUNNERS KV (one; bootstrap/fleet)
+  # Default name derived: kv-<fleet.name>-runners. Override via `name_override`.
   name_override: ""
   resource_group: rg-fleet-shared
   location: ${primary_region}
@@ -63,7 +63,7 @@ state:
 networking:                                            # Repo-owned VNets + BYO hub refs & central PDZs (PLAN §3.4)
   # Central private DNS zones for PE A-record registration. All BYO —
   # never created by this repo, only referenced by resource id. Every
-  # PE (tfstate SA, fleet KV, fleet ACR, env Grafana) registers into
+  # PE (tfstate SA, runners KV, fleet ACR, env Grafana) registers into
   # the matching central zone.
   private_dns_zones:
     # TODO: full resource id of privatelink.blob.core.windows.net
@@ -76,7 +76,7 @@ networking:                                            # Repo-owned VNets + BYO 
     grafana: ${networking_pdz_grafana}
   # Env-tier VNets. One VNet per env-per-region for every env,
   # including `mgmt`. `bootstrap/fleet` owns its own resource subnets
-  # inside the mgmt VNet (CI-plane PEs for tfstate SA, fleet KV, fleet
+  # inside the mgmt VNet (CI-plane PEs for tfstate SA, runners KV, fleet
   # ACR, plus the ACA-delegated runner-pool Container App Environment);
   # `bootstrap/environment` owns the cluster-workload subnets (api
   # pool, nodes pool, env-PE) on every env VNet uniformly, including
@@ -138,7 +138,12 @@ github_app:
   fleet_runners:                                       # KEDA polling App (actions:read + metadata:read)
     app_id: null                                       # TODO post-init (numeric GitHub App ID; init-gh-apps.sh patches)
     installation_id: null                              # TODO post-init (init-gh-apps.sh patches)
-    private_key_kv_secret: fleet-runners-app-pem       # Secret name in the fleet KV (init-gh-apps.sh seeds it post-bootstrap)
+    private_key_kv_secret: fleet-runners-app-pem       # Secret name in the runners KV (init-gh-apps.sh seeds it post-bootstrap)
+  fleet_meta:                                          # Admin App used by env-bootstrap / team-bootstrap (administration:write etc.)
+    app_id: null                                       # TODO post-init (init-gh-apps.sh patches)
+    client_id: null                                    # TODO post-init (init-gh-apps.sh patches; consumed by actions/create-github-app-token)
+    installation_id: null                              # TODO post-init (init-gh-apps.sh patches)
+    private_key_kv_secret: fleet-meta-app-pem          # Secret name in the runners KV (init-gh-apps.sh seeds it post-bootstrap)
 
 aad:
   argocd:

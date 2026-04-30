@@ -16,7 +16,7 @@
 #        - KV-reference for the GitHub App PEM (vendor extension — see
 #          terraform/modules/cicd-runners/VENDORING.md §4)
 #
-# The fleet KV and the `Key Vault Secrets User` role assignment that
+# The runners KV and the `Key Vault Secrets User` role assignment that
 # binds this UAMI to it are both owned by this stage (see main.kv.tf).
 # ACA's KV reference resolution happens at runtime via the attached UAMI,
 # not at PUT time, but we still sequence the runner module after the
@@ -42,11 +42,11 @@ locals {
     local.derived.acr_location
   ) : keys(local.mgmt_vnet_ids)[0]
 
-  # Versionless KV secret URI — points at the fleet KV created in
+  # Versionless KV secret URI — points at the runners KV created in
   # main.kv.tf. The Container App Job resolves the secret at runtime via
   # the attached UAMI; the PEM itself is seeded post-bootstrap by
   # init-gh-apps.sh.
-  fleet_runners_app_key_kv_secret_id = "${azapi_resource.fleet_kv.output.properties.vaultUri}secrets/${local.github_app_fleet_runners.private_key_kv_secret}"
+  fleet_runners_app_key_kv_secret_id = "${azapi_resource.runners_kv.output.properties.vaultUri}secrets/${local.github_app_fleet_runners.private_key_kv_secret}"
 }
 
 # --- Runner UAMI -------------------------------------------------------------
@@ -95,7 +95,7 @@ module "runner" {
   depends_on = [
     terraform_data.runner_preconditions,
     azapi_resource.ra_runner_kv_secrets_user,
-    azapi_resource.fleet_kv_pe_dns_zone_group,
+    azapi_resource.runners_kv_pe_dns_zone_group,
     azapi_data_plane_resource.fleet_runners_pem_secret,
   ]
 

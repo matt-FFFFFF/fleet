@@ -9,7 +9,7 @@ name: tf-apply
 #   - Stage 0 leg runs first and serially. On success, a
 #     `stage0-publisher` GitHub-App step pushes Stage 0 outputs to
 #     fleet-scope repo variables (`ACR_LOGIN_SERVER`, `ACR_RESOURCE_ID`,
-#     `FLEET_KEYVAULT_ID`, `FLEET_KEYVAULT_NAME`,
+#     `RUNNERS_KV_ID`, `RUNNERS_KV_NAME`,
 #     `ARGOCD_AAD_APPLICATION_ID`, `KARGO_AAD_APPLICATION_ID`). Per-env
 #     observability outputs are published by `env-bootstrap.yaml` into
 #     each env's GH environment, not here.
@@ -17,7 +17,9 @@ name: tf-apply
 #     a SINGLE matrix leg that runs Stage 1 apply → pipes Stage 1
 #     outputs into `stage2.auto.tfvars.json` → mints an AAD access token
 #     into `TF_VAR_aks_access_token` → Stage 2 apply. Sequential within
-#     the job; `prod/*` serialised at matrix level (`max-parallel: 1`).
+#     the job. Blast-radius control is left to the PR boundary: one PR
+#     per env (or per cluster) keeps the affected-clusters set narrow,
+#     so we do not cap `max-parallel` at workflow level.
 #
 # Stage 2 is scaffolded below as a commented-out block; enable in
 # lockstep with the `terraform/stages/2-kubernetes/` module landing.
@@ -38,7 +40,25 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write
+
+# Force GitHub Actions' canonical bash invocation
+# (`bash --noprofile --norc -eo pipefail {0}`) on every `run:` step.
+# Self-hosted runner images often default to `bash -e {0}` *without*
+# pipefail, which silently swallows errors in pipelines such as
+# `terraform plan ... | tee plan.txt` (tee exits 0, the step turns
+# green, and a failed plan/apply masquerades as success). The
+# explicit default keeps hosted and self-hosted behaviour identical.
+defaults:
+  run:
+    shell: bash
+
+# Note: `id-token: write` is granted at job-level on the jobs that
+# call `azure/login` (stage0, publish-stage0, cluster). Granting it
+# workflow-wide would force every job — including the utility
+# `detect` job without an `environment:` — to satisfy
+# `include_claim_keys=environment`, which `bootstrap/fleet`
+# configures repo-wide. GitHub refuses to start such jobs with the
+# error "the claim 'environment' cannot be `null` or empty".
 
 jobs:
   detect:
@@ -95,11 +115,14 @@ jobs:
     if: needs.detect.outputs.initialized == 'true' && needs.detect.outputs.stage0 == 'true'
     runs-on: [self-hosted]
     environment: fleet-stage0
+    permissions:
+      contents: read
+      id-token: write
     outputs:
       acr_login_server:              ${{ steps.outputs.outputs.acr_login_server }}
       acr_resource_id:               ${{ steps.outputs.outputs.acr_resource_id }}
-      fleet_keyvault_id:             ${{ steps.outputs.outputs.fleet_keyvault_id }}
-      fleet_keyvault_name:           ${{ steps.outputs.outputs.fleet_keyvault_name }}
+      runners_kv_id:                 ${{ steps.outputs.outputs.runners_kv_id }}
+      runners_kv_name:               ${{ steps.outputs.outputs.runners_kv_name }}
       argocd_aad_application_id:     ${{ steps.outputs.outputs.argocd_aad_application_id }}
       kargo_aad_application_id:      ${{ steps.outputs.outputs.kargo_aad_application_id }}
       kargo_mgmt_uami_principal_id:  ${{ steps.outputs.outputs.kargo_mgmt_uami_principal_id }}
@@ -124,15 +147,23 @@ jobs:
           tenant-id:       ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: terraform init + apply
+      - name: terraform init
+        uses: ./.github/actions/tf-backend-config
+        with:
+          working-directory: terraform/stages/0-fleet
+          state-key: stage0/fleet.tfstate
+        env:
+          TFSTATE_RESOURCE_GROUP:  ${{ vars.TFSTATE_RESOURCE_GROUP }}
+          TFSTATE_STORAGE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+          TFSTATE_CONTAINER:       ${{ vars.TFSTATE_CONTAINER }}
+          AZURE_SUBSCRIPTION_ID:   ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: terraform apply
         working-directory: terraform/stages/0-fleet
         env:
           ARM_USE_OIDC: "true"
-        run: |
-          terraform init \
-            -backend-config="use_oidc=true" \
-            -backend-config="use_azuread_auth=true"
-          terraform apply -auto-approve
+          TF_VAR_mgmt_pe_fleet_subnet_ids: ${{ vars.MGMT_PE_FLEET_SUBNET_IDS }}
+        run: terraform apply -auto-approve
 
       - name: Capture outputs
         id: outputs
@@ -140,7 +171,7 @@ jobs:
         run: |
           j="$(terraform output -json)"
           for k in \
-            acr_login_server acr_resource_id fleet_keyvault_id fleet_keyvault_name \
+            acr_login_server acr_resource_id runners_kv_id runners_kv_name \
             argocd_aad_application_id argocd_aad_application_object_id \
             kargo_aad_application_id kargo_aad_application_object_id \
             kargo_mgmt_uami_principal_id kargo_mgmt_uami_resource_id kargo_mgmt_uami_client_id
@@ -153,15 +184,15 @@ jobs:
   # Publish Stage 0 outputs to fleet-scope repo variables via the
   # `stage0-publisher` GitHub App. Runs only if Stage 0 applied.
   #
-  # The App PEM + credentials live in the fleet KV; this step reads them
+  # The App PEM + credentials live in the runners KV; this step reads them
   # via the already-authenticated Azure OIDC session on the self-hosted
   # runner (the `fleet-stage0` UAMI has `Key Vault Secrets User` on
-  # fleet KV by bootstrap/fleet).
+  # runners KV by bootstrap/fleet).
   #
   # SCAFFOLD: the `stage0-publisher` App is created by the (deferred)
   # `init-gh-apps.sh` helper (PLAN §16.4). Until that lands, this step
   # is a TODO; flip `if: false` → `if: needs.stage0.result == 'success'`
-  # when the App exists and `FLEET_KV_NAME` + `STAGE0_PUBLISHER_APP_ID`
+  # when the App exists and `RUNNERS_KV_NAME` + `STAGE0_PUBLISHER_APP_ID`
   # are wired into the fleet-stage0 GH environment.
   # -------------------------------------------------------------------------
   publish-stage0:
@@ -170,6 +201,9 @@ jobs:
     if: false   # TODO: enable once init-gh-apps.sh + stage0-publisher exists
     runs-on: [self-hosted]
     environment: fleet-stage0
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -180,11 +214,11 @@ jobs:
           tenant-id:       ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Fetch stage0-publisher App PEM from fleet KV
+      - name: Fetch stage0-publisher App PEM from runners KV
         id: pem
         run: |
           pem="$(az keyvault secret show \
-            --vault-name "${{ vars.FLEET_KV_NAME }}" \
+            --vault-name "${{ vars.RUNNERS_KV_NAME }}" \
             --name stage0-publisher-app-pem \
             --query value -o tsv)"
           echo "::add-mask::$pem"
@@ -221,8 +255,8 @@ jobs:
           }
           upsert ACR_LOGIN_SERVER                 "${{ needs.stage0.outputs.acr_login_server }}"
           upsert ACR_RESOURCE_ID                  "${{ needs.stage0.outputs.acr_resource_id }}"
-          upsert FLEET_KEYVAULT_ID                "${{ needs.stage0.outputs.fleet_keyvault_id }}"
-          upsert FLEET_KEYVAULT_NAME              "${{ needs.stage0.outputs.fleet_keyvault_name }}"
+          upsert RUNNERS_KV_ID                    "${{ needs.stage0.outputs.runners_kv_id }}"
+          upsert RUNNERS_KV_NAME                  "${{ needs.stage0.outputs.runners_kv_name }}"
           upsert ARGOCD_AAD_APPLICATION_ID        "${{ needs.stage0.outputs.argocd_aad_application_id }}"
           upsert KARGO_AAD_APPLICATION_ID         "${{ needs.stage0.outputs.kargo_aad_application_id }}"
           upsert KARGO_MGMT_UAMI_PRINCIPAL_ID     "${{ needs.stage0.outputs.kargo_mgmt_uami_principal_id }}"
@@ -242,11 +276,11 @@ jobs:
       fromJSON(needs.detect.outputs.clusters)[0] != null
     runs-on: [self-hosted]
     environment: fleet-${{ matrix.cluster.env }}
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
-      # prod applies serialised to cap blast-radius (PLAN §12 risk row
-      # "Bumping kubernetes.version across many prod clusters").
-      max-parallel: ${{ matrix.cluster.env == 'prod' && 1 || 8 }}
       matrix:
         cluster: ${{ fromJSON(needs.detect.outputs.clusters) }}
     steps:
@@ -278,14 +312,23 @@ jobs:
             > "$RUNNER_TEMP/stage1.tfvars.json"
           echo "file=$RUNNER_TEMP/stage1.tfvars.json" >> "$GITHUB_OUTPUT"
 
-      - name: Stage 1 — init + apply
+      - name: Stage 1 — init
+        uses: ./.github/actions/tf-backend-config
+        with:
+          working-directory: terraform/stages/1-cluster
+          state-key: ${{ matrix.cluster.region }}/${{ matrix.cluster.name }}/stage1.tfstate
+        env:
+          TFSTATE_RESOURCE_GROUP:  ${{ vars.TFSTATE_RESOURCE_GROUP }}
+          TFSTATE_STORAGE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+          TFSTATE_CONTAINER:       ${{ vars.TFSTATE_CONTAINER }}
+          AZURE_SUBSCRIPTION_ID:   ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Stage 1 — apply
         working-directory: terraform/stages/1-cluster
         env:
           ARM_USE_OIDC: "true"
           TFVARS: ${{ steps.tfvars.outputs.file }}
-          REGION: ${{ matrix.cluster.region }}
-          NAME:   ${{ matrix.cluster.name }}
-          TF_VAR_fleet_keyvault_id:                 ${{ vars.FLEET_KEYVAULT_ID }}
+          TF_VAR_runners_kv_id:                     ${{ vars.RUNNERS_KV_ID }}
           TF_VAR_acr_resource_id:                   ${{ vars.ACR_RESOURCE_ID }}
           TF_VAR_kargo_mgmt_uami_principal_id:      ${{ vars.KARGO_MGMT_UAMI_PRINCIPAL_ID }}
           TF_VAR_kargo_aad_application_object_id:   ${{ vars.KARGO_AAD_APPLICATION_OBJECT_ID }}
@@ -298,12 +341,7 @@ jobs:
           TF_VAR_node_asg_resource_id:              ${{ vars[format('{0}_{1}_NODE_ASG_RESOURCE_ID', matrix.cluster.env, matrix.cluster.region)] }}
           TF_VAR_route_table_resource_id:           ${{ vars[format('{0}_{1}_ROUTE_TABLE_RESOURCE_ID', matrix.cluster.env, matrix.cluster.region)] }}
           TF_VAR_mgmt_vnet_resource_ids_json:       ${{ vars.MGMT_VNET_RESOURCE_IDS }}
-        run: |
-          terraform init \
-            -backend-config="use_oidc=true" \
-            -backend-config="use_azuread_auth=true" \
-            -backend-config="key=${REGION}/${NAME}/stage1.tfstate"
-          terraform apply -auto-approve -var-file="$TFVARS"
+        run: terraform apply -auto-approve -var-file="$TFVARS"
 
       # ---------------------------------------------------------------------
       # Mgmt-only: publish a small set of Stage 1 outputs to fleet-scope
@@ -378,15 +416,19 @@ jobs:
       #     # into `$GITHUB_ENV` and `::add-mask::`s it.
       #   run: .github/scripts/mint-aks-token.sh
       #
-      # - name: Stage 2 — init + apply
+      # - name: Stage 2 — init
+      #   uses: ./.github/actions/tf-backend-config
+      #   with:
+      #     working-directory: terraform/stages/2-kubernetes
+      #     state-key: ${{ matrix.cluster.region }}/${{ matrix.cluster.name }}/stage2.tfstate
+      #   env:
+      #     TFSTATE_RESOURCE_GROUP:  ${{ vars.TFSTATE_RESOURCE_GROUP }}
+      #     TFSTATE_STORAGE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+      #     TFSTATE_CONTAINER:       ${{ vars.TFSTATE_CONTAINER }}
+      #     AZURE_SUBSCRIPTION_ID:   ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      #
+      # - name: Stage 2 — apply
       #   working-directory: terraform/stages/2-kubernetes
       #   env:
       #     ARM_USE_OIDC: "true"
-      #     REGION: ${{ matrix.cluster.region }}
-      #     NAME:   ${{ matrix.cluster.name }}
-      #   run: |
-      #     terraform init \
-      #       -backend-config="use_oidc=true" \
-      #       -backend-config="use_azuread_auth=true" \
-      #       -backend-config="key=${REGION}/${NAME}/stage2.tfstate"
-      #     terraform apply -auto-approve
+      #   run: terraform apply -auto-approve

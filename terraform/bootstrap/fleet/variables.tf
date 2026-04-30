@@ -57,3 +57,39 @@ variable "fleet_runners_app_pem_version" {
   default     = "0"
   nullable    = false
 }
+
+variable "fleet_meta_app_pem" {
+  description = <<-EOT
+    PEM private key for the `fleet-meta` GitHub App.
+
+    Auto-loaded from `.gh-apps.auto.tfvars` (written by `init-gh-apps.sh`,
+    gitignored, mode 0600). Seeded into the fleet Key Vault as the
+    `fleet-meta-app-pem` secret via the Key Vault data-plane API,
+    using a write-only `sensitive_body` so the PEM never enters
+    Terraform state and is discarded from memory after apply (ephemeral).
+
+    Read at runtime by the `env-bootstrap.yaml` and `team-bootstrap.yaml`
+    workflows: `azure/login` (uami-fleet-meta) → `az keyvault secret show`
+    → `actions/create-github-app-token` → `GITHUB_TOKEN` for the
+    Terraform `github` provider in `bootstrap/environment` and
+    `bootstrap/team`.
+
+    Rotate by re-running `init-gh-apps.sh` (or setting a new PEM
+    in-place) and bumping the `fleet_meta_app_pem_version` variable.
+  EOT
+  type        = string
+  sensitive   = true
+  ephemeral   = true
+  nullable    = false
+}
+
+variable "fleet_meta_app_pem_version" {
+  description = <<-EOT
+    Version tag for `fleet_meta_app_pem`. Bump this string whenever
+    the PEM rotates so Terraform re-PUTs the secret to the Key Vault
+    data plane. Opaque — any change triggers a new version.
+  EOT
+  type        = string
+  default     = "0"
+  nullable    = false
+}

@@ -62,9 +62,15 @@ path_to_json() {
 }
 
 # --- All cluster.yaml paths in the tree (excluding _template) ---------------
+#
+# `awk` is preferred over `grep -v` here: an adopter on day one has zero
+# clusters under `clusters/<env>/<region>/<name>/`, so the pipeline emits
+# no lines, which causes `grep -v` to exit 1 and (under `set -o pipefail`)
+# kill the script before it can emit the empty-set JSON. `awk` returns 0
+# regardless of how many lines matched.
 all_cluster_paths() {
   find clusters -mindepth 4 -maxdepth 4 -name cluster.yaml -print 2>/dev/null \
-    | grep -v '^clusters/_template/' \
+    | awk '!/^clusters\/_template\//' \
     | sort
 }
 
@@ -124,7 +130,7 @@ else
       for c in "${explicit_clusters[@]+"${explicit_clusters[@]}"}"; do
         [[ -f "clusters/$c/cluster.yaml" ]] && echo "clusters/$c/cluster.yaml"
       done
-    } | sort -u | grep -v '^clusters/_template/' || true
+    } | sort -u | awk '!/^clusters\/_template\//'
   )"
 fi
 

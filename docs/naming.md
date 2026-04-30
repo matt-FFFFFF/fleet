@@ -30,7 +30,7 @@ fields:
   optional private IP of the hub firewall / NVA. Null ⇒ the
   per-env-region route table shell is empty (no `0.0.0.0/0` entry).
 - `dns.fleet_root` — parent DNS zone (e.g. `int.acme.example`).
-- Optional overrides: `acr.name_override`, `keyvault.name_override`,
+- Optional overrides: `acr.name_override`, `runners_keyvault.name_override`,
   `state.storage_account_name_override`.
 - Pod IPs use a shared fleet-wide `/16` (`100.64.0.0/16` in CGNAT)
   hard-coded in `modules/aks-cluster`; no per-region pod-CIDR slot is
@@ -53,7 +53,7 @@ from the cluster.yaml itself (required, immutable — see PLAN §3.4).
 | Env state container       | `tfstate-<env>`                                                       |                      |
 | Cluster state container   | `tfstate-cluster-<cluster.name>`                                      |                      |
 | Fleet ACR                 | override else `acr<fleet.name>shared`                                 | ≤ 50 chars, a-z0-9   |
-| Fleet KV                  | override else `kv-<fleet.name>-fleet`                                 | ≤ 24 chars           |
+| Runners KV               | override else `kv-<fleet.name>-runners`                               | ≤ 24 chars           |
 | Cluster KV                | override (per-cluster `platform.keyvault.name`) else `kv-<cluster.name>` | ≤ 24 chars, trunc |
 | Fleet shared RG           | `rg-fleet-shared`                                                     |                      |
 | Env shared RG             | `rg-fleet-<env>-shared`                                               |                      |
@@ -95,7 +95,7 @@ from the cluster.yaml itself (required, immutable — see PLAN §3.4).
 | Mgmt-only PE-fleet NSG    | `nsg-pe-fleet-<region>` (only on env=mgmt)                            |                      |
 | Mgmt-only runners NSG     | `nsg-runners-<region>` (only on env=mgmt)                             |                      |
 | snet-pe-env CIDR          | first `/26` of first `/24` of `networking.envs.<env>.regions.<region>.address_space`; i.e. `cidrsubnet(cidrsubnet(A, 24-N, 0), 2, 0)` | uniform across envs incl. mgmt |
-| snet-pe-fleet CIDR        | `/26` at index 8 of the upper `/(N+1)` of A; i.e. `cidrsubnet(cidrsubnet(A, 1, 1), 25-N, 8)` | mgmt env-region only (fleet-plane zone); hosts tfstate SA, fleet KV, fleet ACR PEs |
+| snet-pe-fleet CIDR        | `/26` at index 8 of the upper `/(N+1)` of A; i.e. `cidrsubnet(cidrsubnet(A, 1, 1), 25-N, 8)` | mgmt env-region only (fleet-plane zone); hosts tfstate SA, runners KV, fleet ACR PEs |
 | snet-runners CIDR         | first `/23` of the upper `/(N+1)` of A; i.e. `cidrsubnet(cidrsubnet(A, 1, 1), 22-N, 0)` | mgmt env-region only; ACA-delegated |
 | Cluster API subnet CIDR   | i-th `/28` of the env VNet's **API pool** (second `/24` of address_space); i.e. `cidrsubnet(cidrsubnet(A, 24-N, 1), 28-24, i)` | i = `cluster.yaml.networking.subnet_slot`; 0 ≤ i < 16; delegated to `Microsoft.ContainerService/managedClusters` (AKS requires exactly `/28`) |
 | Cluster nodes subnet CIDR | i-th `/25` of the env VNet's **nodes pool** (third `/24` of address_space onward); i.e. `cidrsubnet(cidrsubnet(A, 24-N, 2 + (i/2)), 25-24, i%2)` | i = `cluster.yaml.networking.subnet_slot`; 0 ≤ i < capacity; sized for Azure CNI Overlay + Cilium (pod IPs come from `pod_cidr`, not this subnet) |

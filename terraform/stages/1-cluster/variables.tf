@@ -135,14 +135,14 @@ variable "route_table_resource_id" {
 # same snake-case name for every Stage 1 leg. No remote state, no
 # plan-time data sources — everything arrives as a string.
 
-variable "fleet_keyvault_id" {
+variable "runners_kv_id" {
   description = <<-EOT
-    Full ARM id of the fleet-shared Key Vault (`kv-<fleet.name>-fleet`),
+    Full ARM id of the runner-pool Key Vault (`kv-<fleet.name>-runners`),
     owned by `bootstrap/fleet`. Stage 1 assigns `Key Vault Secrets User`
     on this KV to the cluster's ESO UAMI so fleet-wide secrets (GH App
     PEMs, etc.) flow through External Secrets Operator. Published as
-    the `FLEET_KEYVAULT_ID` fleet-scope repo variable (Stage 0 output
-    `fleet_keyvault_id`).
+    the `RUNNERS_KV_ID` fleet-scope repo variable (Stage 0 output
+    `runners_kv_id`).
   EOT
   type        = string
   nullable    = false

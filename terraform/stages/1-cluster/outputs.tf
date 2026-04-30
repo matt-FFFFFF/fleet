@@ -4,7 +4,7 @@
 # All values are consumed by Stage 2 (running in the same CI job) as
 # tfvars via the `tf-apply.yaml` workflow — no remote state reads.
 #
-# Passthroughs from Stage 0 / bootstrap/environment (fleet KV, env AMW,
+# Passthroughs from Stage 0 / bootstrap/environment (runners KV, env AMW,
 # env DCE, env AG) save Stage 2 from redoing the lookup.
 
 # --- AKS -------------------------------------------------------------------
@@ -102,9 +102,9 @@ output "cluster_keyvault_uri" {
   value       = module.cluster_kv.vault_uri
 }
 
-output "fleet_keyvault_id" {
-  description = "Fleet Key Vault ARM id — passthrough from `var.fleet_keyvault_id` (published by Stage 0) so Stage 2 doesn't reach back to Stage 0 state."
-  value       = var.fleet_keyvault_id
+output "runners_kv_id" {
+  description = "Runner-pool Key Vault ARM id — passthrough from `var.runners_kv_id` (published by Stage 0) so Stage 2 doesn't reach back to Stage 0 state."
+  value       = var.runners_kv_id
 }
 
 # --- DNS outputs (consumed by platform-gitops ApplicationSet params) --------

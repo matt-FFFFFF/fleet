@@ -74,7 +74,7 @@ resource "azapi_resource" "ra_extdns_pdz" {
   }
 }
 
-# --- ESO UAMI → KV Secrets User on cluster KV + fleet KV -------------------
+# --- ESO UAMI → KV Secrets User on cluster KV + runners KV ----------------
 
 resource "azapi_resource" "ra_eso_cluster_kv" {
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
@@ -90,10 +90,10 @@ resource "azapi_resource" "ra_eso_cluster_kv" {
   }
 }
 
-resource "azapi_resource" "ra_eso_fleet_kv" {
+resource "azapi_resource" "ra_eso_runners_kv" {
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
-  name      = uuidv5("url", "kv-secrets-user|${var.fleet_keyvault_id}|${azapi_resource.uami_eso.output.properties.principalId}")
-  parent_id = var.fleet_keyvault_id
+  name      = uuidv5("url", "kv-secrets-user|${var.runners_kv_id}|${azapi_resource.uami_eso.output.properties.principalId}")
+  parent_id = var.runners_kv_id
 
   body = {
     properties = {
@@ -102,6 +102,15 @@ resource "azapi_resource" "ra_eso_fleet_kv" {
       roleDefinitionId = local.role_def_ids.kv_secrets_usr
     }
   }
+}
+
+# State-migration shim: this role assignment was previously
+# `ra_eso_fleet_kv` keyed off `var.fleet_keyvault_id`. Step 2 of
+# REFACTOR.md renamed both. `moved {}` keeps existing state addressed
+# correctly so the rename is a no-op in plan/apply.
+moved {
+  from = azapi_resource.ra_eso_fleet_kv
+  to   = azapi_resource.ra_eso_runners_kv
 }
 
 # --- Kubelet identity → AcrPull on fleet ACR -------------------------------

@@ -16,7 +16,7 @@
 #                       + KV secret writes)
 #   main.identities.tf: per-cluster UAMIs (external-dns, ESO, team-<team>)
 #   main.rbac.tf      : role assignments on every scope this stage touches
-#                       (cluster KV, fleet KV, fleet ACR, this AKS resource,
+#                       (cluster KV, runners KV, fleet ACR, this AKS resource,
 #                       the per-cluster private DNS zone, the env AMW)
 #   main.monitoring.tf: managed Prometheus DCR/DCRA + recording rule groups
 #                       (gated on `platform.observability.managed_prometheus.enabled`)
@@ -32,7 +32,7 @@
 # sources at plan time (PLAN §10). Cross-stage values
 # (`MGMT_VNET_RESOURCE_IDS` JSON map on `fleet-meta`,
 # `<ENV>_<REGION>_{VNET,NODE_ASG,ROUTE_TABLE}_RESOURCE_ID` on the
-# per-env GH Environment, fleet-scope ids like `FLEET_KEYVAULT_ID` /
+# per-env GH Environment, fleet-scope ids like `RUNNERS_KV_ID` /
 # `ACR_RESOURCE_ID` / `KARGO_*` from Stage 0) flow in as repo/env
 # variables (TF_VAR_*) — Stage 0 does **not** proxy the env-scope
 # values (see PLAN §4 Stage -1 "Implementation status 2026-04-19" for

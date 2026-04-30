@@ -25,7 +25,7 @@ run "defaults_derive_names_per_naming_contract" {
         subscription_id = "22222222-2222-2222-2222-222222222222"
         location        = "eastus"
       }
-      keyvault = { name_override = "" }
+      runners_keyvault = { name_override = "" }
       state = {
         storage_account_name_override = ""
         resource_group                = "rg-fleet-tfstate"
@@ -52,8 +52,8 @@ run "defaults_derive_names_per_naming_contract" {
   }
 
   assert {
-    condition     = output.derived.fleet_kv_name == "kv-acme-fleet"
-    error_message = "Fleet KV default derivation must be `kv-<fleet.name>-fleet`."
+    condition     = output.derived.runners_kv_name == "kv-acme-runners"
+    error_message = "Runners KV default derivation must be `kv-<fleet.name>-runners`."
   }
 
   assert {
@@ -62,13 +62,13 @@ run "defaults_derive_names_per_naming_contract" {
   }
 
   assert {
-    condition     = output.derived.fleet_kv_resource_group == "rg-fleet-shared"
-    error_message = "Fleet KV must default its RG to acr.resource_group when keyvault.resource_group is absent."
+    condition     = output.derived.runners_kv_resource_group == "rg-fleet-shared"
+    error_message = "Runners KV must default its RG to acr.resource_group when runners_keyvault.resource_group is absent."
   }
 
   assert {
-    condition     = output.derived.fleet_kv_location == "eastus"
-    error_message = "Fleet KV must default its location to envs.mgmt.location when keyvault.location is absent."
+    condition     = output.derived.runners_kv_location == "eastus"
+    error_message = "Runners KV must default its location to envs.mgmt.location when runners_keyvault.location is absent."
   }
 
   # All networking_central.* default to null when no networking block.
@@ -110,7 +110,7 @@ run "overrides_bypass_formulas" {
         subscription_id = "22222222-2222-2222-2222-222222222222"
         location        = "westeurope"
       }
-      keyvault = {
+      runners_keyvault = {
         name_override  = "kv-custom-name"
         resource_group = "rg-custom-kv"
         location       = "westus2"
@@ -138,18 +138,18 @@ run "overrides_bypass_formulas" {
   }
 
   assert {
-    condition     = output.derived.fleet_kv_name == "kv-custom-name"
-    error_message = "keyvault.name_override must bypass the default formula."
+    condition     = output.derived.runners_kv_name == "kv-custom-name"
+    error_message = "runners_keyvault.name_override must bypass the default formula."
   }
 
   assert {
-    condition     = output.derived.fleet_kv_resource_group == "rg-custom-kv"
-    error_message = "keyvault.resource_group must be honored when set."
+    condition     = output.derived.runners_kv_resource_group == "rg-custom-kv"
+    error_message = "runners_keyvault.resource_group must be honored when set."
   }
 
   assert {
-    condition     = output.derived.fleet_kv_location == "westus2"
-    error_message = "keyvault.location must be honored when set."
+    condition     = output.derived.runners_kv_location == "westus2"
+    error_message = "runners_keyvault.location must be honored when set."
   }
 }
 
@@ -172,7 +172,7 @@ run "truncation_enforces_24_char_ceiling" {
         subscription_id = "22222222-2222-2222-2222-222222222222"
         location        = "eastus"
       }
-      keyvault = { name_override = "" }
+      runners_keyvault = { name_override = "" }
       state = {
         storage_account_name_override = ""
         resource_group                = "rg-fleet-tfstate"
@@ -189,8 +189,8 @@ run "truncation_enforces_24_char_ceiling" {
   }
 
   assert {
-    condition     = length(output.derived.fleet_kv_name) <= 24
-    error_message = "Fleet KV name must be ≤ 24 chars after truncation."
+    condition     = length(output.derived.runners_kv_name) <= 24
+    error_message = "Runners KV name must be ≤ 24 chars after truncation."
   }
 
   assert {
@@ -199,8 +199,8 @@ run "truncation_enforces_24_char_ceiling" {
   }
 
   assert {
-    condition     = startswith(output.derived.fleet_kv_name, "kv-verylongfleet")
-    error_message = "Fleet KV truncation must keep the prefix `kv-<name>…`."
+    condition     = startswith(output.derived.runners_kv_name, "kv-verylongfleet")
+    error_message = "Runners KV truncation must keep the prefix `kv-<name>…`."
   }
 }
 
@@ -221,7 +221,7 @@ run "networking_central_passthrough_when_populated" {
         subscription_id = "22222222-2222-2222-2222-222222222222"
         location        = "eastus"
       }
-      keyvault = { name_override = "" }
+      runners_keyvault = { name_override = "" }
       state = {
         storage_account_name_override = ""
         resource_group                = "rg-fleet-tfstate"
@@ -335,7 +335,7 @@ run "networking_derived_populates_topology_at_slash20" {
         subscription_id = "22222222-2222-2222-2222-222222222222"
         location        = "eastus"
       }
-      keyvault = { name_override = "" }
+      runners_keyvault = { name_override = "" }
       state = {
         storage_account_name_override = ""
         resource_group                = "rg-fleet-tfstate"
@@ -527,7 +527,7 @@ run "networking_derived_honors_create_reverse_peering_false" {
         subscription_id = "22222222-2222-2222-2222-222222222222"
         location        = "eastus"
       }
-      keyvault = { name_override = "" }
+      runners_keyvault = { name_override = "" }
       state = {
         storage_account_name_override = ""
         resource_group                = "rg-fleet-tfstate"
@@ -592,7 +592,7 @@ run "networking_derived_flattens_multi_env_multi_region" {
         subscription_id = "22222222-2222-2222-2222-222222222222"
         location        = "eastus"
       }
-      keyvault = { name_override = "" }
+      runners_keyvault = { name_override = "" }
       state = {
         storage_account_name_override = ""
         resource_group                = "rg-fleet-tfstate"
@@ -678,7 +678,7 @@ run "networking_derived_capacity_two_pool" {
         subscription_id = "22222222-2222-2222-2222-222222222222"
         location        = "eastus"
       }
-      keyvault = { name_override = "" }
+      runners_keyvault = { name_override = "" }
       state = {
         storage_account_name_override = ""
         resource_group                = "rg-fleet-tfstate"
@@ -755,7 +755,7 @@ run "networking_derived_surfaces_f6_hub_spoke_knobs" {
         subscription_id = "22222222-2222-2222-2222-222222222222"
         location        = "eastus"
       }
-      keyvault = { name_override = "" }
+      runners_keyvault = { name_override = "" }
       state = {
         storage_account_name_override = ""
         resource_group                = "rg-fleet-tfstate"

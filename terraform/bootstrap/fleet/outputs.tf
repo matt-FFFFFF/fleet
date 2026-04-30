@@ -45,7 +45,7 @@ output "mgmt_vnet_resource_ids" {
 }
 
 output "mgmt_snet_pe_fleet_ids" {
-  description = "Per-region mgmt VNet snet-pe-fleet subnet resource ids (tfstate SA / fleet KV / fleet ACR PE landing subnets), keyed by region. Published as MGMT_PE_FLEET_SUBNET_IDS (jsonencoded)."
+  description = "Per-region mgmt VNet snet-pe-fleet subnet resource ids (tfstate SA / runners KV / fleet ACR PE landing subnets), keyed by region. Published as MGMT_PE_FLEET_SUBNET_IDS (jsonencoded)."
   value       = local.mgmt_snet_pe_fleet_ids
 }
 
@@ -63,6 +63,6 @@ output "derived_names" {
   value = {
     state_storage_account = local.derived.state_storage_account
     acr_name              = local.derived.acr_name
-    fleet_kv_name         = local.derived.fleet_kv_name
+    runners_kv_name       = local.derived.runners_kv_name
   }
 }
