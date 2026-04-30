@@ -8,68 +8,121 @@ deleting its section when the matching rework item is completed.
 ## F16 — Globally-unique resource names should carry a random suffix
 
 **Observation.** Several resources in the fleet derive names from
-`fleet.name` alone, where Azure (or GitHub) requires the name to be
-globally unique across all tenants. The current derivations bake the
-adopter's chosen `fleet.name` slug straight into the name with no
-disambiguator:
+`fleet.name` (or `cluster.name`) alone, where Azure requires the
+resource name to be globally unique across all tenants. Per the Azure
+[resource-name-rules](https://learn.microsoft.com/azure/azure-resource-manager/management/resource-name-rules)
+table, the resource types this repo creates whose **scope = global**
+are:
 
-- `st<fleet.name>tfstate` — Storage Account (24 char limit, global).
-- `acr<fleet.name>shared` — Container Registry (50 char limit, global).
-- `kv-<fleet.name>-fleet` — Key Vault (24 char limit, soft-delete
-  retention means deleted-vault-not-yet-purged also blocks the
-  name for 7-90 days).
-- DNS-published private zones under `<fleet_root>` are scoped, but
-  any public-facing endpoint (Grafana NSP if the public profile is
-  ever enabled, etc.) will hit the same problem.
+- `Microsoft.Storage/storageAccounts` (3-24 chars, lowercase alnum)
+- `Microsoft.KeyVault/vaults` (3-24 chars, alnum + hyphens)
+- `Microsoft.ContainerRegistry/registries` (5-50 chars, alnum)
+
+Other resources this repo creates (LAW, AMW, AMG, DCE, NSP, UAMI,
+RG, NSG, RT, VNet, snets, AKS, action groups, private endpoints) are
+RG-/subscription-/region-scoped per the same table. Their names can
+duplicate freely across adopters because Azure scopes uniqueness
+below the global tier (e.g. AMG endpoints get an Azure-assigned hash
+suffix in the FQDN). Adopter-supplied private DNS zones are BYO and
+out of scope.
+
+The globally-unique resources this repo creates today, with their
+current derivations:
+
+| Resource              | Current formula                  | Scope of the slug |
+| --------------------- | -------------------------------- | ----------------- |
+| Fleet state SA        | `st<fleet.name>tfstate`          | fleet             |
+| Fleet ACR             | `acr<fleet.name>shared`          | fleet             |
+| Runners KV            | `kv-<fleet.name>-runners`        | fleet             |
+| Runner-pool ACR       | `acrfleetrunners` (literal!)     | template-wide ⚠   |
+| Cluster KV            | `kv-<cluster.name>`              | cluster           |
+| Future env KV (§16.6) | `kv-<fleet.name>-<env>` (NYI)    | fleet+env         |
+
+The runner-pool ACR is the worst case — the current call site
+(`terraform/bootstrap/fleet/main.runner.tf`) does not pass
+`container_registry_name` to the vendored `cicd-runners` module, so
+the module falls back to `acr${var.postfix}` where `postfix =
+"fleet-runners"`, yielding the literal string `acrfleetrunners` for
+**every adopter**. The first one to apply wins; everyone else gets
+`RegistryNameAlreadyExists`.
 
 If two adopters pick the same `fleet.name` — or the same adopter
 re-bootstraps after a tear-down before soft-deleted resources purge
-— the second `terraform apply` fails with `StorageAccountAlreadyTaken`
-/ `RegistryNameAlreadyExists` / `VaultAlreadyExists` errors.
-
-**Risk.** The adopter must either:
-1. Pick a uniquely-prefixed `fleet.name` (defeats the purpose of a
-   short slug used everywhere in resource naming), or
-2. Set the `*_override` escape hatches in `_fleet.yaml` for every
-   collision (acr.name_override, keyvault.name_override,
-   state.storage_account_name_override) and pick globally-unique
-   strings by hand, or
-3. Wait out the soft-delete window on a re-bootstrap.
+(KV soft-delete retention is 7-90 days, default 90) — the second
+`terraform apply` fails with `StorageAccountAlreadyTaken` /
+`RegistryNameAlreadyExists` / `VaultAlreadyExists` errors.
 
 The naming-derivation contract (`docs/naming.md` +
-`config-loader/load.sh` + bootstrap HCL `local.derived`) is
-explicitly the source of truth for these names, so this is a
-contract change, not a one-off resource fix.
+`config-loader/load.sh` + bootstrap HCL `local.derived`) is the
+source of truth for these names, so each axis is a contract change
+that needs all three sites updated together.
 
-**Options.**
-- **Option A — random 4-char suffix at init time.** `init/` already
-  renders `_fleet.yaml` from a template; have it generate a 4-char
-  random suffix once and bake it into the relevant `*_override`
-  fields (`st<fleet.name><sfx>tfstate`,
-  `acr<fleet.name><sfx>shared`, `kv-<fleet.name>-<sfx>`). The
-  override path already exists; this just populates it
-  automatically. Stable across re-runs because it lives in the
-  rendered yaml and is committed.
-- **Option B — derive from `fleet.tenant_id`.** Hash
-  `<fleet.name>-<tenant_id>` to a 4-6 char suffix. Deterministic
-  per tenant — re-bootstraps in the same tenant pick the same
-  name, so the soft-delete-blocking case still hits. Worse than A.
-- **Option C — surface the collision earlier.** Add a `terraform`
-  precondition on each globally-unique resource that checks the
-  name against the relevant ARM "name availability" API
-  (`Microsoft.Storage/checkNameAvailability` etc.) at plan time.
-  Doesn't fix the collision; just turns a slow apply-time failure
-  into a fast plan-time failure. Useful as a complement to A, not
-  a replacement.
+### Sub-items (close one at a time)
 
-**Recommendation.** A — `init/` writes a 4-char random suffix into
-the three `*_override` fields the first time it runs. Adopters who
-want to pick their own names can edit the rendered yaml before
-committing (the overrides are already adopter-editable). The 4-char
-suffix fits the 24-char Storage Account / Key Vault budgets:
-`st<8-char-fleet><4-char-sfx>tfstate` = 8 + 12 + 7 = 27 if the
-fleet name is 8 chars; we'd need to tighten the `fleet_name`
-length validator from 12 to 8 chars to make it always fit, or
-drop the `tfstate` / `shared` suffixes from those names. Both are
-contract changes and need a coordinated `naming.md` +
-`load.sh` + `local.derived` update across the bootstrap stages.
+- **F16.1 — Fleet-scope suffix.** Introduce a `fleet.name_suffix`
+  field in `_fleet.yaml`, generated by `init/` via a
+  `random_string` resource (3 lowercase alnum chars; 36³ = 46,656
+  collision space). Apply to fleet state SA, fleet ACR, runners KV,
+  and the runner-pool ACR (override at the call site).
+
+  New formulas (3-char suffix keeps full 12-char `fleet.name` budget):
+
+  | Resource         | New formula                        | Length math (12-char fleet) |
+  | ---------------- | ---------------------------------- | --------------------------- |
+  | Fleet state SA   | `st<fleet><sfx>tfstate`            | 2+12+3+7 = **24** ✓ (cap 24) |
+  | Fleet ACR        | `acr<fleet><sfx>shared`            | 3+12+3+6 = **24** ✓ (cap 50) |
+  | Runners KV       | `kv-<fleet>-<sfx>`                 | 3+12+1+3 = **19** ✓ (cap 24) |
+  | Runner-pool ACR  | `acr<fleet><sfx>runners`           | 3+12+3+7 = **25** ✗ (cap 50, fits) |
+
+  Note runners KV drops the literal `-runners` token to fit; the
+  KV's role is conveyed by the `runners_keyvault:` block in
+  `_fleet.yaml`, not the resource name. Touches: `init/` (render +
+  template + variable), `docs/naming.md` (formula table), `terraform/
+  config-loader/load.sh` (ACR derivation; SA/KV are HCL-only today),
+  `terraform/modules/fleet-identity/main.tf` (`local.derived`),
+  `terraform/modules/fleet-identity/tests/` (every fixture),
+  `terraform/bootstrap/fleet/main.runner.tf` (set
+  `container_registry_name`), `PLAN.md` §16.6, and the `_fleet.yaml`
+  selftest fixtures under `.github/fixtures/`.
+
+- **F16.2 — Cluster-scope suffix.** `kv-<cluster.name>` (cluster KV)
+  is the only globally-unique resource keyed off `cluster.name`. Two
+  adopters with a cluster called `aks-prod-01` collide globally.
+  Options:
+
+  - Reuse the fleet suffix → `kv-<cluster.name>-<fleet_sfx>`.
+    Single suffix, fewer schema fields. Two adopters who happen to
+    share both `cluster.name` AND `fleet_sfx` still collide
+    (1/46656 per matching cluster name).
+  - Per-cluster suffix in `cluster.yaml` → `kv-<cluster.name>-<cluster_sfx>`.
+    Stronger, but cluster.yaml is hand-edited (no `init-cluster.sh`
+    today) so generation needs new tooling.
+
+  Either option needs a new `cluster.name` length validator
+  (currently unbounded; KV cap = 24 means `cluster.name` ≤ 17 with
+  3-char suffix and `kv-` prefix). Defer until the fleet-scope
+  axis is in. Cluster KV existing collision risk is **lower** than
+  fleet-scope ones because cluster names are richer slugs
+  (typically `aks-<env>-<NN>`) — fleet collisions are the
+  acute case.
+
+- **F16.3 — Future env KV.** PLAN §16.6 lists `kv-<fleet.name>-<env>`
+  as a future addition. With a 3-char fleet suffix this becomes
+  `kv-<fleet>-<sfx>-<env>` = 3+12+1+3+1+12 = 32 → overflows 24.
+  Options when env KV lands: tighten `<env>` budget (`mgmt`,
+  `nonprod`, `prod`, `stage`, `dev` all ≤ 7 chars), or drop the
+  `<fleet>` portion since `<sfx>` already provides global
+  uniqueness. Defer to the env-KV implementation PR.
+
+- **F16.4 — Plan-time `checkNameAvailability` precondition (optional).**
+  Adds an ARM API call at plan time for each globally-unique
+  resource so a collision fails the plan instead of the apply.
+  Independent of F16.1-3; useful complement, not a replacement.
+  Lowest priority; defer until adopter feedback indicates apply-time
+  failures are still painful after F16.1-2 land.
+
+**Recommendation.** Implement F16.1 first as a self-contained commit
+(closes the acute, template-wide `acrfleetrunners` collision and the
+fleet-slug collision risk). F16.2 follows in a separate commit once
+F16.1's machinery is in place. F16.3/F16.4 are deferred to their
+respective downstream PRs.
