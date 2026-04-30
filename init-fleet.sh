@@ -147,11 +147,23 @@ if [[ -n "$pending" ]]; then
     # interiors are intentionally excluded from the prompt flow).
     hint="$(grep -E "^${key}[[:space:]]*=" "$tfvars" \
             | awk -F'#' 'NF>1 { sub(/^[[:space:]]+/, "", $2); print $2; exit }' || true)"
+    # If the hint begins with `default: <token>`, blank input is accepted
+    # and substitutes the default. Convention: `default: <token> — <prose>`
+    # (em-dash separator). Tokens are matched as bash-shell-safe single
+    # words (no whitespace); for multi-word defaults extend the regex.
+    default=""
+    if [[ "$hint" =~ ^default:\ ([^[:space:]]+)([[:space:]].*)?$ ]]; then
+      default="${BASH_REMATCH[1]}"
+    fi
     while true; do
       if [[ -n "$hint" ]]; then
         read -r -p "  ${key} (${hint}): " val </dev/tty
       else
         read -r -p "  ${key}: " val </dev/tty
+      fi
+      if [[ -z "$val" && -n "$default" ]]; then
+        val="$default"
+        break
       fi
       [[ -n "$val" ]] && break
       warn "  ✗ required"

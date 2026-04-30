@@ -90,55 +90,6 @@ This finding interacts with F12: any solution to F13 that prompts
 inside the `environments` map requires F12's fix first (today the
 wrapper can't descend into the map at all).
 
-## F14 — `init-fleet.sh` must prompt for `primary_region`
-
-**Observation.** `init/inputs.auto.tfvars` ships
-`primary_region = "eastus"` as a hard-coded default with no
-`__PROMPT__` sentinel, so the wrapper never asks. The renderer uses
-this value as the only region key under
-`networking.envs.<env>.regions.<r>` for every env, and it is also
-where every fleet-shared resource (ACR, fleet KV, tfstate SA) lands
-via `acr.location` / `keyvault.location`.
-
-In practice the adopter's hub VNet, BYO Private DNS Zones, and
-Azure subscriptions are typically in a single chosen region that is
-**not** `eastus`. During this walkthrough the hub VNet was in
-`swedencentral`, which means the rendered yaml had to be hand-edited
-(`sed`) to match before re-running, because VNet peering rejects
-cross-region peers. Today the only signal that the default is wrong
-is a Terraform error at `bootstrap/fleet` apply time
-(`mgmt_vnet_ids[acr.location]` membership check) or, worse, a
-peering failure deep in the apply.
-
-**Risk.** Same class as F12/F13 — discoverability. The default is
-a foot-gun rather than a sensible fallback because most adopters'
-infrastructure is regional and `eastus` is just "the first region
-GitHub Actions runners spin up in fastest." Hand-editing the
-rendered yaml after init is also error-prone: the value appears in
-multiple keys (`acr.location`, `keyvault.location`, every
-`networking.envs.<env>.regions.<r>` key, `envs.mgmt.location`).
-
-**Options.**
-- **Option A — prompt with `eastus` as default-suggested.** Add the
-  `__PROMPT__` sentinel; show `eastus` as the default in the prompt
-  text so adopters who genuinely want it can press enter. Tiny
-  change.
-- **Option B — derive from hub VNet.** When the hub VNet ARM id is
-  prompted (per env-region), parse `az resource show` to extract
-  the VNet's `location` and use it. Eliminates the foot-gun
-  entirely but couples init to live Azure auth.
-- **Option C — validate fail-fast at init time.** Keep the default
-  but, when any `hub_network_resource_id` is set, run `az resource
-  show --query location -o tsv` and refuse to proceed if the hub
-  region differs from `primary_region`. Catches the mistake before
-  Terraform sees it.
-
-**Recommendation.** A — prompt with `eastus` as the suggested
-default. Cheapest fix, immediately removes the silent-default
-foot-gun, and is independent of F12/F13 because `primary_region`
-is a top-level scalar (the existing prompt loop already handles
-those).
-
 ## F15 — Vendored `github-repo` module emits deprecated-attribute warnings on plan
 
 **Observation.** `terraform plan` on `bootstrap/fleet` surfaces five

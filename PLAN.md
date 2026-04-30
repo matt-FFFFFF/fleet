@@ -3160,7 +3160,12 @@ Interactive wizard by default; `--non-interactive` plus optional
    `init/inputs.auto.tfvars` via a small python-inline rewrite.
 3. **Prompt** for any variable in `init/inputs.auto.tfvars` still set
    to the sentinel `"__PROMPT__"`. The prompt text is derived from the
-   inline `# comment` after each variable line.
+   inline `# comment` after each variable line. If that comment begins
+   with `default: <token>` (single non-whitespace token, optionally
+   followed by ` — <prose>`), blank input substitutes `<token>` instead
+   of looping for required input — used for genuinely sensible defaults
+   that most adopters can accept (e.g. `primary_region` defaulting to
+   `eastus`).
 4. **Apply** the `init/` module via
    `terraform -chdir=init init && terraform apply -auto-approve`.
    Terraform's variable validation blocks reject malformed GUIDs,

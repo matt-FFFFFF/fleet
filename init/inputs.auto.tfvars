@@ -31,7 +31,7 @@ codeowners_owner   = ""           # CODEOWNERS owner: empty → @<github_org>; e
 
 # ---- Azure ------------------------------------------------------------------
 
-primary_region = "eastus"
+primary_region = "__PROMPT__" # default: eastus — Azure region (lowercase, alnum) shared by every fleet-shared resource (ACR, runners KV, tfstate SA) and used as the only region key per env in `networking.envs.<env>.regions.<r>`. Must match your hub VNet's region. Press enter to accept the default.
 
 # ---- DNS --------------------------------------------------------------------
 
