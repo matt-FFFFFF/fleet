@@ -145,6 +145,7 @@ module "fleet_repo" {
             { context = "yamllint" },
             { context = "subnet slots" },
             { context = "naming parity" },
+            { context = "schema lint" },
           ]
         }
       }
