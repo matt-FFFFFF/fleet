@@ -86,6 +86,25 @@ The overlay file uses plain HCL `key = "value"` lines (see
 
 ## 3. Post-init edits
 
+Adopter-supplied edits land in `clusters/_fleet.yaml` (single source of
+truth) and the per-cluster `cluster.yaml` files. Both are validated by
+JSON Schema:
+
+- `clusters/_fleet.yaml` → `schemas/fleet.v1.schema.json`
+- `clusters/**/cluster.yaml` (and every `_defaults.yaml` overlay)
+  → `schemas/cluster.v1.schema.json`
+
+Each YAML carries a modeline (`# yaml-language-server: $schema=...`)
+that VS Code, JetBrains, and the standalone YAML language server
+(vim/nvim/helix) honour automatically — so structural mistakes
+(misspelled keys, wrong types, the F19 `use_remote_gateways:` at the
+wrong nesting level) appear as red squiggles in your editor before
+`terraform init` ever runs. The same schemas are enforced by the
+`schema-lint` job in `.github/workflows/validate.yaml` on every PR.
+
+Schemas are versioned in their filename (`fleet.v1.schema.json`); see
+`schemas/README.md` for the bump policy.
+
 Some values can't be prompted because they typically don't exist yet
 at adoption time. Fill these into `clusters/_fleet.yaml` before the
 first Terraform apply — the file documents each with a `TODO` or

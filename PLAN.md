@@ -2569,6 +2569,15 @@ both pinned for reproducibility — the latter via
   - `terraform fmt -check -recursive`
   - `tflint` per module / stage
   - `yamllint` over `clusters/` and `platform-gitops/config/`
+  - JSON-schema validation of `clusters/_fleet.yaml`
+    (`schemas/fleet.v1.schema.json`) and every cluster.yaml +
+    `_defaults.yaml` (`schemas/cluster.v1.schema.json`). Per-file,
+    pre-merge structural lint; semantic checks (uuid resolution,
+    subnet-slot uniqueness, CIDR math) stay in the bootstrap-stage HCL
+    preconditions. Schema versioning lives in the filename and `$id`;
+    bump rules in `schemas/README.md`. The bump policy is conservative:
+    schemas start at v1 and only increment on incompatible change
+    (rename / remove / type-tighten); additive changes stay on v1.
   - JSON-schema validation of merged `cluster.yaml` and `teams/*.yaml`
   - **Team-config linter** (`.github/scripts/lint-teams.sh`): for
     every `platform-gitops/config/teams/*.yaml`:

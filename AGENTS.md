@@ -49,8 +49,9 @@ full before proposing or writing any change.
    and stage TF `yamldecode(file(...))` it. **Never** reintroduce
    `var.fleet` / `var.environment` or duplicate subscription IDs.
 5. **Naming derivation parity.** If you touch a name derivation rule,
-   touch all three: `docs/naming.md`, `config-loader/load.sh`, and
-   the HCL `local.derived` in the affected bootstrap/stage module.
+   touch all four: `docs/naming.md`, `config-loader/load.sh`,
+   the HCL `local.derived` in the affected bootstrap/stage module,
+   and the relevant `schemas/<doc>.vN.schema.json`.
 6. **Version constraints.** Pessimistic-minor everywhere
    (`~> X.Y`). Module `required_version` floor: `~> 1.14` (minimum
    Terraform supported by the codebase; required for reliable
@@ -86,6 +87,11 @@ terraform/
   stages/{1-cluster,2-kubernetes}/     Stage 1/2
   modules/                             reusable modules
   config-loader/load.sh                yq deep-merge → tfvars.json
+schemas/
+  fleet.v1.schema.json                 contract for clusters/_fleet.yaml
+  cluster.v1.schema.json               contract for clusters/**/cluster.yaml + _defaults.yaml
+  README.md                            versioning policy + bump rules
+  tests/                               valid/invalid fixtures + test.sh
 docs/
   adoption.md naming.md                contracts
   findings.md                          open design/implementation findings (detailed rationale for STATUS Rework items)

@@ -137,6 +137,9 @@
 
 ### §10 deferred
 
+- [x] JSON-schema validation of `clusters/_fleet.yaml` and per-file
+  cluster.yaml/_defaults.yaml (`schemas/{fleet,cluster}.v1.schema.json`,
+  `schema-lint` job in `validate.yaml`).
 - [ ] JSON-schema validation of merged `cluster.yaml` + team YAMLs.
 - [ ] `lint-teams.sh` team-config linter.
 - [ ] `helm lint` over `platform-gitops/components/*`.
