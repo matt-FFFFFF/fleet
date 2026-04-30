@@ -105,3 +105,41 @@ resource "azapi_resource" "ra_meta_sub_uaa" {
     }
   }
 }
+
+# --- uami-fleet-mgmt → Key Vault Secrets User on the runners KV (mgmt-only) -
+#
+# The mgmt cluster's tf-apply.yaml run authenticates as `uami-fleet-mgmt`
+# (the env-scope UAMI created by `module.env_github` below). On the
+# `matrix.cluster.role == 'management'` leg, the workflow runs an
+# `az keyvault secret show` against the runners KV to fetch the
+# `fleet-meta` GitHub App PEM, mints an installation token, and uses it
+# to publish `MGMT_*` repo variables (Stage 1 mgmt outputs → repo vars
+# consumed by spoke clusters' Stage 1/2 plans).
+#
+# The runners KV uses RBAC authorization (`enableRbacAuthorization=true`
+# in `bootstrap/fleet/main.kv.tf`), so subscription-scope Contributor
+# does **not** transitively grant data-plane secret read access; an
+# explicit `Key Vault Secrets User` assignment scoped to the KV is
+# required. Co-located here (rather than in `bootstrap/fleet`) because
+# `uami-fleet-mgmt` itself is created in this stage — keeping the
+# grant in the same apply graph avoids a cross-stage data dependency.
+#
+# Gated on `var.env == "mgmt"` because only the mgmt env's UAMI runs
+# the publish step; non-mgmt envs' tf-apply.yaml legs never read from
+# the runners KV.
+
+resource "azapi_resource" "ra_env_uami_runners_kv_secrets_user" {
+  count = var.env == "mgmt" ? 1 : 0
+
+  type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
+  name      = uuidv5("url", "fleet-mgmt-runners-kv-secrets-user-${local.runners_kv_id}")
+  parent_id = local.runners_kv_id
+
+  body = {
+    properties = {
+      roleDefinitionId = "/subscriptions/${local.derived.acr_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/${local.role_kv_secrets_user}"
+      principalId      = module.env_github.identity.principal_id
+      principalType    = "ServicePrincipal"
+    }
+  }
+}

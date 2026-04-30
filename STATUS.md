@@ -60,6 +60,13 @@
         Steps 1+3 done (ACR absorbed; `fleet_kv_secrets_user` removed);
         `length == 1` precondition + `ACR_*` repo-level publishes
         pending.
+  - [x] env=mgmt grants `uami-fleet-mgmt` `Key Vault Secrets User`
+        on the runners KV so the `tf-apply.yaml` mgmt-publish step
+        (`az keyvault secret show fleet-meta-app-pem` →
+        `actions/create-github-app-token` → `MGMT_*` repo-var upsert)
+        can read the PEM. Required because the runners KV uses RBAC
+        authorization (no transitive access from subscription
+        Contributor).
 - [~] `bootstrap/team/` — refactored; awaits `team-bootstrap.yaml` CI flow.
 
 ### Stage 1 — `terraform/stages/1-cluster`

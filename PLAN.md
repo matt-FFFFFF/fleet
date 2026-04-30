@@ -2599,15 +2599,16 @@ long-lived cloud secrets in Actions. Identities:
 | Identity            | Created by              | Used by                                  | Scope                                                                                                                                                                                                                                                                                         |
 | ------------------- | ----------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `fleet-meta` UAMI   | `bootstrap/fleet`       | env-bootstrap + team-bootstrap workflows; `tf-apply.yaml` repo-var publish steps for env=mgmt + Stage 1 mgmt | Tenant/subscription-wide UAccessAdmin + Contributor (no Graph permissions)                                                                                                                                                                                                                    |
-| `fleet-mgmt` UAMI   | `bootstrap/environment` (env=mgmt) | Stage 1 mgmt cluster matrix leg | env subscription/RG Contributor + `tfstate-mgmt` Blob Contributor + mgmt cluster KV Secrets User + ACR UAccessAdmin + `User Access Administrator` scoped to the env AMW resource id + owns `uami-kargo-mgmt` (workload identity). No Graph permissions — Argo + Kargo AAD app registrations are owned by `bootstrap/fleet` (operator-applied). |
+| `fleet-mgmt` UAMI   | `bootstrap/environment` (env=mgmt) | Stage 1 mgmt cluster matrix leg | env subscription/RG Contributor + `tfstate-mgmt` Blob Contributor + mgmt cluster KV Secrets User + **runners KV Secrets User** (data-plane read of `fleet-meta-app-pem` so `tf-apply.yaml`'s mgmt-publish step can mint a fleet-meta App token to upsert `MGMT_*` repo vars; granted in `bootstrap/environment` env=mgmt's `main.identities.tf` since the runners KV uses RBAC authorization and subscription Contributor does **not** transitively grant data-plane access) + ACR UAccessAdmin + `User Access Administrator` scoped to the env AMW resource id + owns `uami-kargo-mgmt` (workload identity). No Graph permissions — Argo + Kargo AAD app registrations are owned by `bootstrap/fleet` (operator-applied). |
 | `fleet-<env>` UAMI  | `bootstrap/environment` | Stage 1 + Stage 2 matrix legs            | env subscription/RG Contributor + `tfstate-<env>` Blob Contributor + mgmt cluster KV Secrets User + ACR UAccessAdmin + `User Access Administrator` scoped to the env AMW resource id (to delegate `Monitoring Metrics Publisher` to cluster addon identities in Stage 1). No Graph permissions. |
 
 Stage 1 **consumes fleet-shared outputs via repo variables**
 (`vars.ACR_RESOURCE_ID`, `vars.MGMT_CLUSTER_KV_ID`,
-`vars.ARGO_AAD_APP_ID`, etc., published by `bootstrap/environment`
-env=mgmt and Stage 1 mgmt) rather than `terraform_remote_state`.
-This removes Stage 1's need to read other stages' tfstate
-containers and keeps stage boundaries clean.
+`vars.ARGO_AAD_APP_ID`, etc., published by `bootstrap/fleet`,
+`bootstrap/environment` env=mgmt, and Stage 1 mgmt) rather than
+`terraform_remote_state`. This removes Stage 1's need to read
+other stages' tfstate containers and keeps stage boundaries
+clean.
 
 ### GitHub environments
 
