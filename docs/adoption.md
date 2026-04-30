@@ -119,6 +119,32 @@ those address spaces. See `docs/networking.md` for the two-pool
 layout and `docs/onboarding-cluster.md` for the single-PR new-cluster
 flow (picking `subnet_slot`).
 
+### Handling globally-unique-name collisions
+
+Three resources this repo creates have **Azure-globally-unique** names
+— the chosen `fleet.name` slug is woven into them and must be unique
+across every Azure tenant worldwide:
+
+| Resource       | Default formula             | Length cap | Override field                       |
+| -------------- | --------------------------- | ---------- | ------------------------------------ |
+| Fleet state SA | `st<fleet.name>tfstate`     | 24         | `state.storage_account_name_override` |
+| Fleet ACR      | `acr<fleet.name>shared`     | 50         | `acr.name_override`                   |
+| Runners KV     | `kv-<fleet.name>-runners`   | 24         | `runners_keyvault.name_override`      |
+
+If you hit `StorageAccountAlreadyTaken` / `RegistryNameAlreadyExists`
+/ `VaultAlreadyExists` on the first `terraform apply` (or after a
+tear-down before the soft-deleted Key Vault has purged — KV
+soft-delete retention is 7-90 days, default 90), edit
+`clusters/_fleet.yaml` and set the relevant `*_override` field to a
+globally-unique name you've verified is free, then re-run apply.
+Overrides bypass the formula completely; you are responsible for
+length and character-class compliance (see `docs/naming.md` §
+"Override semantics").
+
+The same pattern applies to per-cluster Key Vaults (`kv-<cluster.name>`,
+24-char cap, globally unique): set `platform.keyvault.name` in the
+relevant `cluster.yaml` to override.
+
 Commit the initialized repo:
 
 ```sh

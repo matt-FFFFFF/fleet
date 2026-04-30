@@ -83,7 +83,7 @@ from the cluster.yaml itself (required, immutable — see PLAN §3.4).
 | Prometheus rule group — node  | `NodeRecordingRulesRuleGroup-<cluster.name>`                      | per-cluster recording rules (node_exporter baseline) |
 | Prometheus rule group — k8s   | `KubernetesRecordingRulesRuleGroup-<cluster.name>`                | per-cluster recording rules (kube-state-metrics + cadvisor) |
 | Prometheus rule group — UX    | `UXRecordingRulesRuleGroup-<cluster.name>`                        | per-cluster recording rules (container insights compat) |
-| Runner ACR (per-pool)     | `acrfleetrunners` (module-derived from `postfix = "fleet-runners"`, hyphens stripped) | ≤ 50 chars, a-z0-9 |
+| Runner ACR (per-pool)     | `acr<fleet.name>runners` (passed to vendored `cicd-runners` module via `container_registry_name`) | ≤ 50 chars, a-z0-9 |
 | Runner ACA environment    | `cae-fleet-runners`                                                   |                      |
 | Cluster DNS zone FQDN     | `<cluster.name>.<cluster.region>.<cluster.env>.<dns.fleet_root>`      |                      |
 | Env-region VNet           | `vnet-<fleet.name>-<env>-<region>` (uniform across envs incl. mgmt)   |                      |
