@@ -2613,21 +2613,45 @@ both pinned for reproducibility — the latter via
   3. Post a consolidated plan summary as a single PR comment.
 
 - **`tf-apply.yaml`** (`push` to `main`):
-  1. Same change detection, same environment mapping.
-  2. Per cluster, a **single job** runs Stage 1 apply → pipe outputs
-     to Stage 2 tfvars → mint AAD token into `TF_VAR_aks_access_token`
-     → Stage 2 apply. Sequential within the job. Blast-radius control
-     is left to the PR boundary: one PR per env (or per cluster) keeps
-     the affected-clusters set narrow, so we do not cap `max-parallel`
-     at workflow level. The mgmt cluster's Stage 1 leg additionally
+  1. **Saved-plan replay contract.** Post-merge `tf-apply` does NOT
+     re-plan on the merge commit. It downloads the merging PR's
+     `plan-*` artefacts from the matching `tf-plan` workflow run and
+     replays each one with `terraform apply <plan-file>`. Terraform's
+     own stale-plan check is the drift signal: if state has advanced
+     under the plan, apply refuses with "Saved plan is stale" and the
+     job fails loudly — exactly the desired signal that an unreviewed
+     change has slipped in. The pre-F25 behaviour (re-plan on merge,
+     then apply) silently absorbed drift, so reviewed plan ≠ applied
+     plan was undetectable.
+  2. **PR lookup.** The `discover` job resolves the PR number for the
+     merge commit via `gh api repos/<owner>/<repo>/commits/<sha>/pulls`
+     (squash-merge produces a brand-new SHA on main; the PR's tf-plan
+     ran on the PR's *head* commit, which differs). Direct pushes to
+     main with no associated PR yield zero artefacts and the apply
+     skips with success — `tf-plan`'s path filter already governs what
+     produces a plan; `tf-apply` is a strict consumer of that set.
+  3. **Matrix from artefacts.** The per-cluster matrix is built from
+     the downloaded `meta.json` files (one per `plan-*` artefact),
+     emitted by `tf-plan` alongside each binary plan. The PR's plan
+     set IS the source of truth — `detect-affected-clusters.sh` is not
+     re-run here. If the PR produced zero plans (e.g. it only touched
+     paths outside `tf-plan.yaml`'s path filter), the apply skips.
+  4. Per cluster, a **single job** replays Stage 1's saved plan →
+     pipes Stage 1 outputs into `stage2.auto.tfvars.json` → mints AAD
+     token into `TF_VAR_aks_access_token` → replays Stage 2's saved
+     plan. Sequential within the job. Blast-radius control is left to
+     the PR boundary: one PR per env (or per cluster) keeps the
+     affected-clusters set narrow, so we do not cap `max-parallel` at
+     workflow level. The mgmt cluster's Stage 1 leg additionally
      publishes its fleet-wide repo variables (see §4 Stage 1 mgmt
      publication table) using the `fleet-meta` GH App; the env=mgmt
      `bootstrap/environment` apply publishes `ACR_RESOURCE_ID`,
      `ACR_NAME`, `ACR_LOGIN_SERVER` via the same App.
 
      ```yaml
-     - name: Stage 1 apply
-       run: terraform -chdir=terraform/stages/1-cluster apply -auto-approve -var-file=$TFVARS
+     - name: Stage 1 apply (replay saved plan)
+       working-directory: terraform/stages/1-cluster
+       run: terraform apply -auto-approve plan.tfplan
      - name: Stage 1 outputs → Stage 2 tfvars
        run: |
          terraform -chdir=terraform/stages/1-cluster output -json \
@@ -2636,15 +2660,23 @@ both pinned for reproducibility — the latter via
          cp "$RUNNER_TEMP/stage2.auto.tfvars.json" terraform/stages/2-kubernetes/
      - name: Mint AAD token → TF_VAR_aks_access_token
        run: .github/scripts/mint-aks-token.sh # the curl/jq recipe in §4 Stage 2
-     - name: Stage 2 apply
-       run: terraform -chdir=terraform/stages/2-kubernetes apply -auto-approve
+     - name: Stage 2 apply (replay saved plan)
+       working-directory: terraform/stages/2-kubernetes
+       run: terraform apply -auto-approve plan.tfplan
      ```
+
+     `terraform apply <plan-file>` does not accept `-var` / `-var-file`
+     — variables are baked into the saved plan. The pre-F25 mass of
+     `TF_VAR_*` env vars in the apply step is therefore gone; the
+     plan contains everything needed to apply.
 
      `stage2.auto.tfvars.json` holds Stage 1 infra outputs (CA marked
      `sensitive`). The AAD token flows via env var `TF_VAR_aks_access_token`
      (masked with `::add-mask::`) straight into Stage 2's `sensitive`
-     variable — never written to disk, never in TF state.
-  3. Summary posted back to the merged PR.
+     variable — never written to disk, never in TF state. The Stage 2
+     saved plan does not include the token; the kubernetes/helm
+     providers consume it at apply time via the env var.
+  5. Summary posted back to the merged PR.
 
 ### Azure authentication
 

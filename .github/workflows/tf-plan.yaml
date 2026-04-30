@@ -200,10 +200,40 @@ jobs:
             | tee plan.txt
           terraform show -no-color plan.tfplan > plan.show.txt
 
+      # Bundle a small meta.json next to the binary plan so `tf-apply.yaml`
+      # can rebuild its matrix purely from the downloaded plan set without
+      # re-running detect-affected-clusters.sh on the merge commit. The
+      # metadata fields mirror detect-affected-clusters.sh's output shape
+      # (path / env / region / name / role) so downstream consumers see the
+      # same per-cluster object regardless of whether they came from
+      # detection or plan replay (PLAN §10 saved-plan replay; F25).
+      - name: Write plan meta.json
+        working-directory: terraform/stages/1-cluster
+        env:
+          CLUSTER_PATH:   ${{ matrix.cluster.path }}
+          CLUSTER_ENV:    ${{ matrix.cluster.env }}
+          CLUSTER_REGION: ${{ matrix.cluster.region }}
+          CLUSTER_NAME:   ${{ matrix.cluster.name }}
+          CLUSTER_ROLE:   ${{ matrix.cluster.role }}
+        run: |
+          jq -cn \
+            --arg path "$CLUSTER_PATH" \
+            --arg env "$CLUSTER_ENV" \
+            --arg region "$CLUSTER_REGION" \
+            --arg name "$CLUSTER_NAME" \
+            --arg role "$CLUSTER_ROLE" \
+            '{stage: "1-cluster", path: $path, env: $env, region: $region, name: $name, role: $role}' \
+            > meta.json
+
       # TODO(stage2): uncomment when `terraform/stages/2-kubernetes/` lands.
       # Stage 2 consumes Stage 1 outputs in-job — no `terraform_remote_state`.
       # The plan step here needs a minted AAD access token for the in-plan
       # kubernetes/helm providers; see `tf-apply.yaml` for the mint recipe.
+      # Stage 2 emits its own `plan-stage2-*` artefact so `tf-apply.yaml`
+      # can replay each stage's saved plan independently (PLAN §10
+      # saved-plan replay; F25). The matrix in tf-apply walks both
+      # stages' artefacts and applies stage1 then stage2 sequentially
+      # within the same job.
       #
       # - name: Stage 1 outputs → Stage 2 tfvars
       #   working-directory: terraform/stages/1-cluster
@@ -230,6 +260,33 @@ jobs:
       #       -backend-config="key=${REGION}/${NAME}/stage2.tfstate"
       #     terraform plan -no-color -out plan.tfplan | tee plan.txt
       #     terraform show -no-color plan.tfplan > plan.show.txt
+      #
+      # - name: Write Stage 2 plan meta.json
+      #   working-directory: terraform/stages/2-kubernetes
+      #   env:
+      #     CLUSTER_PATH:   ${{ matrix.cluster.path }}
+      #     CLUSTER_ENV:    ${{ matrix.cluster.env }}
+      #     CLUSTER_REGION: ${{ matrix.cluster.region }}
+      #     CLUSTER_NAME:   ${{ matrix.cluster.name }}
+      #     CLUSTER_ROLE:   ${{ matrix.cluster.role }}
+      #   run: |
+      #     jq -cn \
+      #       --arg path "$CLUSTER_PATH" \
+      #       --arg env "$CLUSTER_ENV" \
+      #       --arg region "$CLUSTER_REGION" \
+      #       --arg name "$CLUSTER_NAME" \
+      #       --arg role "$CLUSTER_ROLE" \
+      #       '{stage: "2-kubernetes", path: $path, env: $env, region: $region, name: $name, role: $role}' \
+      #       > meta.json
+      #
+      # - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      #   with:
+      #     name: plan-stage2-${{ matrix.cluster.env }}-${{ matrix.cluster.region }}-${{ matrix.cluster.name }}
+      #     path: |
+      #       terraform/stages/2-kubernetes/plan.tfplan
+      #       terraform/stages/2-kubernetes/plan.show.txt
+      #       terraform/stages/2-kubernetes/meta.json
+      #     retention-days: 7
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -237,6 +294,7 @@ jobs:
           path: |
             terraform/stages/1-cluster/plan.tfplan
             terraform/stages/1-cluster/plan.show.txt
+            terraform/stages/1-cluster/meta.json
           retention-days: 7
 
   # -------------------------------------------------------------------------

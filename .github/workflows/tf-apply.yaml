@@ -3,25 +3,30 @@ name: tf-apply
 # Post-merge Terraform apply pipeline. PLAN §10:
 #
 #   - `push` to main; self-hosted runners (private tfstate + KV).
-#   - Change detection identical to `tf-plan.yaml` — same script, same
-#     rules. Re-plans fresh on the merge commit rather than replaying
-#     the PR's plan artefact (safer: base has advanced).
-#   - Per-cluster leg runs once per affected cluster. Each job is a
-#     SINGLE matrix leg that runs Stage 1 apply → pipes Stage 1
-#     outputs into `stage2.auto.tfvars.json` → mints an AAD access token
-#     into `TF_VAR_aks_access_token` → Stage 2 apply. Sequential within
-#     the job. Blast-radius control is left to the PR boundary: one PR
-#     per env (or per cluster) keeps the affected-clusters set narrow,
-#     so we do not cap `max-parallel` at workflow level.
+#   - Replays the PR's saved plan artefacts (`plan-*` from `tf-plan.yaml`)
+#     instead of re-planning fresh. Terraform's stale-plan check is the
+#     drift signal: if state has advanced under the plan, `terraform apply
+#     plan.tfplan` refuses with "Saved plan is stale" and the apply
+#     fails loudly. The pre-F25 behaviour (re-plan + apply on the merge
+#     commit) silently absorbed drift, so reviewed plan ≠ applied plan
+#     was undetectable. See PLAN §10 "saved-plan replay" + docs/findings.md
+#     F25 (deleted on close).
+#   - Per-cluster matrix is built from the downloaded plan set (one
+#     matrix leg per `meta.json` recovered from the artefacts). The PR's
+#     plan set IS the source of truth — `detect-affected-clusters.sh` is
+#     not re-run here. If a path-filtered tf-plan run produced zero
+#     plans (e.g. docs-only push to main, or push to main without an
+#     associated PR), apply skips with success.
 #   - On the **management** cluster only (cluster.yaml `cluster.role:
-#     management`), Stage 1 apply additionally publishes a small set of
-#     fleet-scope repo variables (`ACR_*` post-Step-1 absorption are
-#     published from `bootstrap/environment` env=mgmt; `ARGO_AAD_APP_ID`,
-#     `KARGO_*`, `KARGO_MGMT_UAMI_*`, `MGMT_CLUSTER_KV_ID`,
-#     `MGMT_AKS_*` published here) for spoke Stage 1/2 to consume.
+#     management`, recovered from meta.json), Stage 1 apply additionally
+#     publishes a small set of fleet-scope repo variables
+#     (`MGMT_CLUSTER_KV_ID`, `KARGO_*`, `MGMT_AKS_*`, etc.) for spoke
+#     Stage 1/2 to consume.
 #
 # Stage 2 is scaffolded below as a commented-out block; enable in
 # lockstep with the `terraform/stages/2-kubernetes/` module landing.
+# Stage 2 will follow the same saved-plan replay contract via its own
+# `plan-stage2-*` artefacts.
 
 on:
   push:
@@ -39,6 +44,13 @@ concurrency:
 
 permissions:
   contents: read
+  # Read access to Pull Requests so the discover job can resolve the PR
+  # number associated with the merge commit (used to scope the artefact
+  # download to the merging PR's tf-plan run).
+  pull-requests: read
+  # Read access to Actions so dawidd6/action-download-artifact can list
+  # workflow runs and download artefacts from the matching tf-plan run.
+  actions: read
 
 # Force GitHub Actions' canonical bash invocation
 # (`bash --noprofile --norc -eo pipefail {0}`) on every `run:` step.
@@ -53,72 +65,146 @@ defaults:
 
 # Note: `id-token: write` is granted at job-level on the jobs that
 # call `azure/login` (cluster). Granting it workflow-wide would force
-# every job — including the utility `detect` job without an
+# every job — including the utility `discover` job without an
 # `environment:` — to satisfy `include_claim_keys=environment`, which
 # `bootstrap/fleet` configures repo-wide. GitHub refuses to start such
 # jobs with the error "the claim 'environment' cannot be `null` or
 # empty".
 
 jobs:
-  detect:
-    name: detect affected
+  discover:
+    name: discover plan artefacts
     runs-on: [self-hosted]
     outputs:
-      clusters:    ${{ steps.detect.outputs.clusters }}
-      any:         ${{ steps.detect.outputs.any }}
-      initialized: ${{ steps.init_guard.outputs.initialized }}
+      pr:           ${{ steps.find_pr.outputs.number }}
+      clusters:     ${{ steps.collect.outputs.clusters }}
+      any:          ${{ steps.collect.outputs.any }}
+      initialized:  ${{ steps.init_guard.outputs.initialized }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
 
       - name: Initialisation guard
         id: init_guard
         uses: ./.github/actions/fleet-initialized
 
-      - name: Detect
-        id: detect
+      # Resolve the PR associated with the merge commit. Squash-merge
+      # produces a brand-new SHA on main; the PR's tf-plan workflow ran
+      # on the PR's *head* commit, which differs. The most reliable
+      # lookup is `repos/<owner>/<repo>/commits/<sha>/pulls`, which
+      # returns every PR that contains the commit (closed or merged).
+      # We pick the first entry — for squash-merge there is exactly one.
+      # For direct pushes to main with no associated PR, the API returns
+      # `[]` and we emit an empty number; the artefact download step
+      # then yields zero plans and the cluster job skips.
+      - name: Find associated PR
+        id: find_pr
+        if: steps.init_guard.outputs.initialized == 'true'
         env:
-          INITIALIZED: ${{ steps.init_guard.outputs.initialized }}
-          BASE_REF: HEAD~1
-          HEAD_REF: HEAD
+          GH_TOKEN: ${{ github.token }}
+          SHA:      ${{ github.sha }}
+          REPO:     ${{ github.repository }}
         run: |
-          if [[ "$INITIALIZED" != "true" ]]; then
-            # Emit valid-JSON defaults so downstream `fromJSON(...)`
-            # expressions don't hard-fail on empty strings.
-            echo 'clusters=[]'    >> "$GITHUB_OUTPUT"
-            echo 'any=false'      >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          number="$(gh api "repos/${REPO}/commits/${SHA}/pulls" --jq '.[0].number // empty' || true)"
+          if [[ -z "$number" ]]; then
+            echo "No PR associated with ${SHA} (likely a direct push to main); apply will skip." >&2
+          else
+            echo "Found PR #${number} for ${SHA}" >&2
+          fi
+          echo "number=${number}" >> "$GITHUB_OUTPUT"
+
+      # Download every plan-* artefact from the matching tf-plan run.
+      # `if_no_artifact_found: warn` keeps the job green when the PR
+      # produced zero plans (e.g. the PR only touched paths outside
+      # tf-plan.yaml's path-filter set). For direct pushes to main
+      # (no PR) we skip the download entirely — `pr` is empty and
+      # dawidd6 would otherwise error.
+      - name: Download PR plan artefacts
+        id: download
+        if: steps.init_guard.outputs.initialized == 'true' && steps.find_pr.outputs.number != ''
+        uses: dawidd6/action-download-artifact@b6e2e70617bc3265edd6dab6c906732b2f1ae151 # v21
+        with:
+          github_token:         ${{ github.token }}
+          workflow:             tf-plan.yaml
+          pr:                   ${{ steps.find_pr.outputs.number }}
+          workflow_conclusion:  success
+          name:                 plan-
+          name_is_regexp:       true
+          path:                 plans
+          if_no_artifact_found: warn
+
+      # Build the matrix from the downloaded plan set's meta.json files.
+      # Each plan-* artefact contains a meta.json with the cluster shape
+      # (path, env, region, name, role, stage). We collect Stage 1
+      # entries here; Stage 2 (when enabled) lives in its own
+      # plan-stage2-* artefacts and is consumed by the same matrix in a
+      # later step inside the cluster job.
+      - name: Collect cluster matrix from plans
+        id: collect
+        if: steps.init_guard.outputs.initialized == 'true'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          # Stage 1 artefacts are named `plan-<env>-<region>-<name>`.
+          # Stage 2 artefacts (future) are named `plan-stage2-...` and
+          # are picked up by a separate step inside the cluster job.
+          stage1_dirs=(plans/plan-*)
+          # Filter out any plan-stage2-* directories that future tf-plan
+          # uploads may produce (the regex download grabs the union).
+          filtered=()
+          for d in "${stage1_dirs[@]+"${stage1_dirs[@]}"}"; do
+            base="${d#plans/}"
+            [[ "$base" == plan-stage2-* ]] && continue
+            filtered+=("$d")
+          done
+          if (( ${#filtered[@]} == 0 )); then
+            echo "No Stage 1 plan artefacts; apply will skip." >&2
+            echo 'clusters=[]'   >> "$GITHUB_OUTPUT"
+            echo 'any=false'     >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Diff against the commit that was at HEAD~1 prior to the merge
-          # — every PR merged to main is a merge commit with one
-          # first-parent and one second-parent; `HEAD~1` is the previous
-          # main tip, which is what we want to compare against.
-          result="$(.github/scripts/detect-affected-clusters.sh)"
-          echo "$result" | jq .
-          clusters="$(echo "$result" | jq -c .clusters)"
-          any="$(echo "$clusters" | jq 'length > 0')"
-          echo "clusters=$clusters" >> "$GITHUB_OUTPUT"
-          echo "any=$any" >> "$GITHUB_OUTPUT"
+          # Each meta.json carries one cluster object; jq -cs '.' across
+          # them all assembles the matrix list.
+          metas=()
+          for d in "${filtered[@]}"; do
+            if [[ -f "$d/meta.json" ]]; then
+              metas+=("$d/meta.json")
+            else
+              echo "WARNING: $d has no meta.json; skipping (was the artefact produced by a pre-F25 tf-plan run?)" >&2
+            fi
+          done
+          if (( ${#metas[@]} == 0 )); then
+            echo "No meta.json files found in plan artefacts; apply will skip." >&2
+            echo 'clusters=[]'   >> "$GITHUB_OUTPUT"
+            echo 'any=false'     >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          clusters="$(jq -cs '.' "${metas[@]}")"
+          echo "$clusters" | jq .
+          echo "clusters=${clusters}" >> "$GITHUB_OUTPUT"
+          echo 'any=true'              >> "$GITHUB_OUTPUT"
 
   # -------------------------------------------------------------------------
-  # Per-cluster apply. Single job per cluster runs Stage 1 → Stage 2.
+  # Per-cluster apply. Single job per cluster runs Stage 1 → Stage 2 by
+  # replaying each stage's saved plan from the PR.
   # -------------------------------------------------------------------------
   cluster:
     name: apply ${{ matrix.cluster.env }}/${{ matrix.cluster.region }}/${{ matrix.cluster.name }}
-    needs: detect
+    needs: discover
     if: |
-      needs.detect.outputs.initialized == 'true' &&
-      fromJSON(needs.detect.outputs.clusters)[0] != null
+      needs.discover.outputs.initialized == 'true' &&
+      needs.discover.outputs.any == 'true'
     runs-on: [self-hosted]
     environment: fleet-${{ matrix.cluster.env }}
     permissions:
-      contents: read
-      id-token: write
+      contents:      read
+      id-token:      write
+      actions:       read
+      pull-requests: read
     strategy:
       fail-fast: false
       matrix:
-        cluster: ${{ fromJSON(needs.detect.outputs.clusters) }}
+        cluster: ${{ fromJSON(needs.discover.outputs.clusters) }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -139,14 +225,21 @@ jobs:
           tenant-id:       ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Render tfvars
-        id: tfvars
-        env:
-          CLUSTER_PATH: ${{ matrix.cluster.path }}
-        run: |
-          terraform/config-loader/load.sh "$CLUSTER_PATH" \
-            > "$RUNNER_TEMP/stage1.tfvars.json"
-          echo "file=$RUNNER_TEMP/stage1.tfvars.json" >> "$GITHUB_OUTPUT"
+      # Re-download just this cluster's Stage 1 plan into the working
+      # directory. Identical lookup to the `discover` job; performed
+      # per-job so each matrix leg is self-contained (no inter-job
+      # artefact-passing dance) and the same stale-plan abort fires
+      # locally.
+      - name: Download Stage 1 plan for this cluster
+        uses: dawidd6/action-download-artifact@b6e2e70617bc3265edd6dab6c906732b2f1ae151 # v21
+        with:
+          github_token:         ${{ github.token }}
+          workflow:             tf-plan.yaml
+          pr:                   ${{ needs.discover.outputs.pr }}
+          workflow_conclusion:  success
+          name:                 plan-${{ matrix.cluster.env }}-${{ matrix.cluster.region }}-${{ matrix.cluster.name }}
+          path:                 terraform/stages/1-cluster
+          if_no_artifact_found: fail
 
       - name: Stage 1 — init
         uses: ./.github/actions/tf-backend-config
@@ -159,32 +252,17 @@ jobs:
           TFSTATE_CONTAINER:       ${{ vars.TFSTATE_CONTAINER }}
           AZURE_SUBSCRIPTION_ID:   ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Stage 1 — apply
+      # Replay the saved plan. `terraform apply <plan-file>` does not
+      # accept `-var` / `-var-file` (variables are baked into the plan),
+      # so the long TF_VAR_* env-var block from the pre-F25 re-plan
+      # pattern is gone. If state has drifted under the plan, Terraform
+      # refuses with "Saved plan is stale" and the apply fails — which
+      # is the desired drift signal (PLAN §10; F25).
+      - name: Stage 1 — apply (replay saved plan)
         working-directory: terraform/stages/1-cluster
         env:
           ARM_USE_OIDC: "true"
-          TFVARS: ${{ steps.tfvars.outputs.file }}
-          # Fleet-scope repo variables. Post-REFACTOR.md:
-          #   ACR_RESOURCE_ID                — bootstrap/environment env=mgmt
-          #   MGMT_CLUSTER_KV_ID             — Stage 1 mgmt (this workflow,
-          #                                     publish step below; spoke ESO
-          #                                     scope)
-          #   KARGO_MGMT_UAMI_PRINCIPAL_ID   — Stage 1 mgmt (this workflow)
-          #   MGMT_AKS_OIDC_ISSUER_URL       — Stage 1 mgmt (this workflow,
-          #                                     `MGMT_AKS_*` block)
-          TF_VAR_acr_resource_id:                   ${{ vars.ACR_RESOURCE_ID }}
-          TF_VAR_mgmt_cluster_kv_id:                ${{ vars.MGMT_CLUSTER_KV_ID }}
-          TF_VAR_kargo_mgmt_uami_principal_id:      ${{ vars.KARGO_MGMT_UAMI_PRINCIPAL_ID }}
-          TF_VAR_mgmt_aks_oidc_issuer_url:          ${{ vars.MGMT_AKS_OIDC_ISSUER_URL }}
-          TF_VAR_fleet_env_uami_principal_id:       ${{ vars.FLEET_ENV_UAMI_PRINCIPAL_ID }}
-          TF_VAR_env_monitor_workspace_id:          ${{ vars.MONITOR_WORKSPACE_ID }}
-          TF_VAR_env_dce_id:                        ${{ vars.DCE_ID }}
-          TF_VAR_env_action_group_id:               ${{ vars.ACTION_GROUP_ID }}
-          TF_VAR_env_region_vnet_resource_id:       ${{ vars[format('{0}_{1}_VNET_RESOURCE_ID', matrix.cluster.env, matrix.cluster.region)] }}
-          TF_VAR_node_asg_resource_id:              ${{ vars[format('{0}_{1}_NODE_ASG_RESOURCE_ID', matrix.cluster.env, matrix.cluster.region)] }}
-          TF_VAR_route_table_resource_id:           ${{ vars[format('{0}_{1}_ROUTE_TABLE_RESOURCE_ID', matrix.cluster.env, matrix.cluster.region)] }}
-          TF_VAR_mgmt_vnet_resource_ids_json:       ${{ vars.MGMT_VNET_RESOURCE_IDS }}
-        run: terraform apply -auto-approve -var-file="$TFVARS"
+        run: terraform apply -auto-approve plan.tfplan
 
       # ---------------------------------------------------------------------
       # Mgmt-only: publish a curated set of Stage 1 outputs to fleet-scope
@@ -281,6 +359,24 @@ jobs:
           upsert MGMT_AKS_CLUSTER_RESOURCE_ID    "$(extract aks_cluster_resource_id)"
 
       # TODO(stage2): uncomment when `terraform/stages/2-kubernetes/` lands.
+      # Stage 2 follows the same saved-plan replay contract (PLAN §10;
+      # F25): tf-plan emits a separate `plan-stage2-<env>-<region>-<name>`
+      # artefact, and tf-apply downloads + replays it here, after Stage 1.
+      # The Stage 1 outputs → Stage 2 tfvars handoff and the AAD token
+      # mint still happen in this job (the saved Stage 2 plan does not
+      # include the AAD token; it is consumed by the kubernetes/helm
+      # providers at apply time).
+      #
+      # - name: Download Stage 2 plan for this cluster
+      #   uses: dawidd6/action-download-artifact@b6e2e70617bc3265edd6dab6c906732b2f1ae151 # v21
+      #   with:
+      #     github_token:         ${{ github.token }}
+      #     workflow:             tf-plan.yaml
+      #     pr:                   ${{ needs.discover.outputs.pr }}
+      #     workflow_conclusion:  success
+      #     name:                 plan-stage2-${{ matrix.cluster.env }}-${{ matrix.cluster.region }}-${{ matrix.cluster.name }}
+      #     path:                 terraform/stages/2-kubernetes
+      #     if_no_artifact_found: fail
       #
       # - name: Stage 1 outputs → Stage 2 tfvars
       #   working-directory: terraform/stages/1-cluster
@@ -309,8 +405,8 @@ jobs:
       #     TFSTATE_CONTAINER:       ${{ vars.TFSTATE_CONTAINER }}
       #     AZURE_SUBSCRIPTION_ID:   ${{ vars.AZURE_SUBSCRIPTION_ID }}
       #
-      # - name: Stage 2 — apply
+      # - name: Stage 2 — apply (replay saved plan)
       #   working-directory: terraform/stages/2-kubernetes
       #   env:
       #     ARM_USE_OIDC: "true"
-      #   run: terraform apply -auto-approve
+      #   run: terraform apply -auto-approve plan.tfplan
