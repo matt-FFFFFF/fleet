@@ -23,7 +23,7 @@ terraform {
     }
     github = {
       source  = "integrations/github"
-      version = "~> 6.11"
+      version = "~> 6.12"
     }
     # `modtm` is required by the `Azure/avm-ptn-alz-sub-vending/azure`
     # module (see main.network.tf). Telemetry is disabled at the module

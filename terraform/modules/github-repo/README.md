@@ -105,7 +105,7 @@ The following requirements are needed by this module:
 
 - <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) (~> 1.14)
 
-- <a name="requirement_github"></a> [github](#requirement\_github) (~> 6.11)
+- <a name="requirement_github"></a> [github](#requirement\_github) (~> 6.12)
 
 ## Resources
 
@@ -117,6 +117,7 @@ The following resources are used by this module:
 - [github_repository.this](https://registry.terraform.io/providers/integrations/github/latest/docs/resources/repository) (resource)
 - [github_repository_collaborator.this](https://registry.terraform.io/providers/integrations/github/latest/docs/resources/repository_collaborator) (resource)
 - [github_repository_file.this](https://registry.terraform.io/providers/integrations/github/latest/docs/resources/repository_file) (resource)
+- [github_repository_vulnerability_alerts.this](https://registry.terraform.io/providers/integrations/github/latest/docs/resources/repository_vulnerability_alerts) (resource)
 - [github_team_repository.this](https://registry.terraform.io/providers/integrations/github/latest/docs/resources/team_repository) (resource)
 - [github_organization.this](https://registry.terraform.io/providers/integrations/github/latest/docs/data-sources/organization) (data source)
 - [github_repository.this](https://registry.terraform.io/providers/integrations/github/latest/docs/data-sources/repository) (data source)
@@ -322,8 +323,9 @@ The map key is an arbitrary identifier to avoid known-after-apply issues.
 - `variables` - Map of environment variables (arbitrary key):
   - `name` - The variable name.
   - `value` - The variable value.
-- `secrets` - Map of environment secrets (arbitrary key). Values are NOT managed by Terraform:
-  - `name` - The secret name.
+- `secrets` - **Currently disabled** (must be empty / omitted).  
+  Pending provider migration off `plaintext_value`; see VENDORING.md  
+  and `modules/environment/main.tf` for context.
 - `deployment_policy` - Deployment branch policy:
   - `protected_branches` - Whether only protected branches can deploy.
   - `custom_branch_policies` - Whether only matching branch/tag patterns can deploy.

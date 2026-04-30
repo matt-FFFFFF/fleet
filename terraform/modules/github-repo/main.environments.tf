@@ -13,10 +13,13 @@ module "environment" {
   prevent_self_review = each.value.prevent_self_review
   reviewers           = each.value.reviewers
   variables           = each.value.variables
-  secrets             = each.value.secrets
-  deployment_policy   = each.value.deployment_policy
-  branch_policies     = each.value.branch_policies
-  tag_policies        = each.value.tag_policies
+  # secrets passthrough disabled; see modules/environment/main.tf
+  # for the deprecation context. The `secrets` field on `var.environments`
+  # is retained for caller compatibility but rejected if non-empty by
+  # a validation block in variables.environments.tf.
+  deployment_policy = each.value.deployment_policy
+  branch_policies   = each.value.branch_policies
+  tag_policies      = each.value.tag_policies
 
   # Azure identity
   identity                    = each.value.identity

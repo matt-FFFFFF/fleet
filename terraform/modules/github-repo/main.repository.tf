@@ -23,7 +23,6 @@ resource "github_repository" "this" {
   allow_squash_merge     = var.allow_squash_merge
   allow_rebase_merge     = var.allow_rebase_merge
   delete_branch_on_merge = var.delete_branch_on_merge
-  vulnerability_alerts   = var.vulnerability_alerts
 
   dynamic "template" {
     for_each = var.template != null ? [var.template] : []
@@ -56,6 +55,26 @@ resource "github_branch_default" "this" {
 
   repository = github_repository.this[0].name
   branch     = var.default_branch
+}
+
+# -----------------------------------------------------------------------------
+# Vulnerability alerts (Dependabot)
+#
+# Migrated off the now-deprecated `vulnerability_alerts` field on
+# `github_repository` (the provider says "use the
+# `github_repository_vulnerability_alerts` resource instead. This field
+# will be removed in a future version"). Behaviour is unchanged: the
+# resource is created iff `var.vulnerability_alerts == true`, scoped to
+# the repo this module owns. Existing repos created with the old field
+# keep the alert state until they are next applied; on next apply, the
+# field is dropped from `github_repository` and the dedicated resource
+# is created in its place — no destroy/recreate of the repo itself.
+# -----------------------------------------------------------------------------
+
+resource "github_repository_vulnerability_alerts" "this" {
+  count = var.create_repository && var.vulnerability_alerts ? 1 : 0
+
+  repository = github_repository.this[0].name
 }
 
 # -----------------------------------------------------------------------------

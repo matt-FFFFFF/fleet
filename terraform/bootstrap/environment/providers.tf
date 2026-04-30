@@ -16,7 +16,7 @@ terraform {
     }
     github = {
       source  = "integrations/github"
-      version = "~> 6.11"
+      version = "~> 6.12"
     }
     # Required by Azure/avm-ptn-alz-sub-vending/azure (~> 0.2). The
     # provider emits anonymous module-telemetry; we silence it via the

@@ -90,51 +90,6 @@ This finding interacts with F12: any solution to F13 that prompts
 inside the `environments` map requires F12's fix first (today the
 wrapper can't descend into the map at all).
 
-## F15 — Vendored `github-repo` module emits deprecated-attribute warnings on plan
-
-**Observation.** `terraform plan` on `bootstrap/fleet` surfaces five
-deprecation warnings sourced from
-`terraform/modules/github-repo/`:
-
-- `github_repository.vulnerability_alerts` — provider says "use the
-  `github_repository_vulnerability_alerts` resource instead. This
-  field will be removed in a future version" (3 occurrences across
-  the fleet repo + the 3 GitHub App-authored bootstrap repos).
-- `github_actions_environment_secret.plaintext_value` referenced in
-  an `ignore_changes` list — provider says the attribute is
-  deprecated (2 occurrences).
-
-**Risk.** Today these are warnings only — plan/apply succeed. When
-the provider drops the deprecated attributes (likely the next
-major), `terraform plan` will hard-fail until the vendored module is
-updated. We are pinned via `~> X.Y` so the failure won't surprise
-us until we deliberately bump, but the bump will then be blocked on
-the module fix.
-
-The module is vendored (a fork of the AVM `github-repo` module) and
-lives under our `modules/`, so the fix has to land in this repo —
-upstream may or may not have addressed it. PLAN §16 / Stage -1
-already documents the vendor relationship.
-
-**Options.**
-- **Option A — fix the warnings now.** Replace
-  `vulnerability_alerts = var.vulnerability_alerts` on the
-  `github_repository` resource with a separate
-  `github_repository_vulnerability_alerts` resource keyed by
-  `repository = github_repository.this[0].name`. Drop
-  `plaintext_value` from the `ignore_changes` list (the provider
-  has replaced the input shape).
-- **Option B — track upstream and rebase the vendor.** If the AVM
-  module has already migrated, a re-vendor is cheaper than
-  hand-fixing.
-- **Option C — defer.** Leave it until the next github provider
-  major bump forces the issue.
-
-**Recommendation.** B if upstream is fixed; A otherwise. Either way
-it's a low-priority cleanup — the PR can be small and
-self-contained. Stage 0+ doesn't touch this module so the blast
-radius is limited to `bootstrap/fleet` and `bootstrap/team`.
-
 ## F16 — Globally-unique resource names should carry a random suffix
 
 **Observation.** Several resources in the fleet derive names from

@@ -41,20 +41,41 @@ resource "github_actions_environment_variable" "this" {
 
 # -----------------------------------------------------------------------------
 # Environment secrets (names only — values managed externally)
+#
+# DISABLED — pending provider migration off `plaintext_value`. The
+# integrations/github provider has deprecated `plaintext_value` on
+# `github_actions_environment_secret`; the only remaining input is
+# `encrypted_value`, which expects a libsodium-encrypted blob keyed by
+# the environment's public key. The previous "create with REPLACE_ME
+# placeholder + ignore_changes, populate out-of-band via UI/CLI/API"
+# pattern does not survive that change — `encrypted_value` cannot
+# accept a plain sentinel.
+#
+# No caller in this repo passes `var.secrets` (default `{}`), so the
+# resource was a no-op for our use cases anyway. Commented out rather
+# than deleted to preserve the rough shape for whoever re-enables it
+# (callers who actually want Terraform-managed env secrets will need
+# to encrypt their payloads under the env's public key first; see the
+# provider's `github_actions_environment_secret` docs).
+#
+# Re-enablement: uncomment the resource and the matching `secrets`
+# variable + output below; replace `plaintext_value` with
+# `encrypted_value` (and `ignore_changes`); decide whether the
+# placeholder pattern still fits or whether the var should now carry
+# the encrypted payload directly.
 # -----------------------------------------------------------------------------
-
-resource "github_actions_environment_secret" "this" {
-  for_each = var.secrets
-
-  repository      = var.repository
-  environment     = github_repository_environment.this.environment
-  secret_name     = each.value.name
-  plaintext_value = "REPLACE_ME"
-
-  lifecycle {
-    ignore_changes = [plaintext_value]
-  }
-}
+# resource "github_actions_environment_secret" "this" {
+#   for_each = var.secrets
+#
+#   repository      = var.repository
+#   environment     = github_repository_environment.this.environment
+#   secret_name     = each.value.name
+#   plaintext_value = "REPLACE_ME"
+#
+#   lifecycle {
+#     ignore_changes = [plaintext_value]
+#   }
+# }
 
 # -----------------------------------------------------------------------------
 # Custom deployment policies (branches and tags)

@@ -16,14 +16,18 @@ output "variables" {
   }
 }
 
-output "secrets" {
-  description = "Map of environment secret names (values are not exposed)."
-  value = {
-    for k, v in github_actions_environment_secret.this : k => {
-      secret_name = v.secret_name
-    }
-  }
-}
+# DISABLED — see the matching note in main.tf.
+# Re-enable alongside the `github_actions_environment_secret` resource
+# and the `secrets` variable.
+#
+# output "secrets" {
+#   description = "Map of environment secret names (values are not exposed)."
+#   value = {
+#     for k, v in github_actions_environment_secret.this : k => {
+#       secret_name = v.secret_name
+#     }
+#   }
+# }
 
 output "deployment_policies" {
   description = "Map of deployment policy keys to their patterns."
