@@ -10,19 +10,6 @@ variable "fleet_repo_visibility" {
   default     = "private"
 }
 
-variable "allow_public_state_during_bootstrap" {
-  description = <<-EOT
-    First-apply-only escape hatch. When `true`, the fleet tfstate storage
-    account keeps `publicNetworkAccess = "Enabled"` (still with
-    `defaultAction = "Deny"`) long enough for this apply to seed the
-    private endpoint + optional DNS zone group. Flip back to `false` for
-    every subsequent apply. Reruns require a VNet-reachable workstation
-    (jump host / Bastion / VPN). See docs/adoption.md §5.
-  EOT
-  type        = bool
-  default     = false
-}
-
 variable "fleet_runners_app_pem" {
   description = <<-EOT
     PEM private key for the `fleet-runners` GitHub App.

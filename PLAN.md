@@ -1174,14 +1174,8 @@ messages; the rest must be arranged out-of-band by the adopter org.
   central zones (blob + ACR) — for the operator on first apply,
   and for the `fleet-meta` UAMI (for subsequent re-runs).
 - VNet-reachable workstation (jump host / Azure Bastion / VPN)
-  for every re-run of `bootstrap/fleet` after the first apply;
-  the tfstate storage account is PE-only once Stage -1 has run.
-- One-time first-apply escape hatch:
-  `var.allow_public_state_during_bootstrap = true` leaves the
-  tfstate SA's public endpoint Enabled (with `networkAcls.defaultAction
-  = "Deny"` still in place) long enough to seed the PE + DNS zone
-  group. The flag must be flipped back to `false` on the second
-  apply. No long-lived public exposure.
+  for every run of `bootstrap/fleet`, including the first; the
+  tfstate storage account is PE-only from creation.
 
 **GitHub**
 
@@ -1393,15 +1387,12 @@ Key design choices:
   Terraform state. Vendor patch documented in
   `modules/cicd-runners/VENDORING.md` §4.
 - **Private tfstate SA**: `bootstrap/fleet/main.state.tf` sets
-  `publicNetworkAccess = var.allow_public_state_during_bootstrap ? "Enabled"
-  : "Disabled"` (default `false`) with `networkAcls.defaultAction = "Deny"`
-  always, and seeds a `Microsoft.Network/privateEndpoints` + optional
+  `publicNetworkAccess = "Disabled"` with `networkAcls.defaultAction
+  = "Deny"`, and seeds a `Microsoft.Network/privateEndpoints` +
   `privateDnsZoneGroups` child referencing the central
-  `privatelink.blob.core.windows.net` zone from `_fleet.yaml`. **Two-phase
-  first apply** (see Prerequisites above): first apply with
-  `allow_public_state_during_bootstrap = true` to seed the PE / DNS zone
-  group; second apply (and every subsequent re-run) with the flag flipped
-  back to `false`, from a VNet-reachable workstation.
+  `privatelink.blob.core.windows.net` zone from `_fleet.yaml`. The
+  apply must run from a VNet-reachable workstation from the very
+  first invocation (see Prerequisites above).
 - **Per-pool private ACR + per-pool LAW** (`container_registry_creation_enabled
   = true`, `log_analytics_workspace_creation_enabled = true`). Keeps the
   runner plumbing off the fleet-ACR ABAC delegation path and gives each

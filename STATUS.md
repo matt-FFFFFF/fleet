@@ -209,7 +209,6 @@
 - [x] `terraform/modules/github-repo/` vendored fork.
 - [x] `terraform/modules/cicd-runners/` vendored fork.
 - [x] `terraform/modules/fleet-identity/` pure-function derivation module.
-- [x] `allow_public_state_during_bootstrap` first-apply-only variable.
 - [x] Terraform floor `~> 1.14` across all first-party modules + CI.
 - [x] `main`-branch protection via vendored `modules/ruleset`.
 

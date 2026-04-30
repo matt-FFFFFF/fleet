@@ -343,16 +343,10 @@ GitHub items must be arranged out-of-band by the adopter org.
 - Role assignment: **`Private DNS Zone Contributor`** on all four
   central zones — for the operator on the first apply, **and** for
   the `fleet-meta` and `fleet-<env>` UAMIs for every subsequent re-run.
-- **VNet-reachable workstation for every re-run**: jump host,
+- **VNet-reachable workstation for every apply**: jump host,
   Azure Bastion, or VPN into the fleet VNet. The tfstate SA is
-  private-only after the first apply — Terraform cannot reach it
-  from a laptop over the public internet.
-- **First-apply-only escape hatch**: set
-  `allow_public_state_during_bootstrap = true` for the very first
-  `bootstrap/fleet` apply. This leaves the storage account's
-  public endpoint Enabled (with `defaultAction = "Deny"` still in
-  place) long enough to seed the PE and DNS zone group; flip it back
-  to `false` on the second apply. Do not leave it on.
+  private-only from the very first apply — Terraform cannot reach
+  it from a laptop over the public internet.
 
 **GitHub**
 
@@ -413,11 +407,8 @@ terraform init
 # `fleet_runners_app_pem` + `fleet_runners_app_pem_version` and is
 # auto-loaded — no `-var-file` flag required. See §5.1.
 
-# First apply — leave the tfstate SA's public endpoint Enabled long
-# enough to seed the private endpoint + DNS zone group.
-terraform apply -var allow_public_state_during_bootstrap=true
-
-# Every subsequent apply (from a VNet-reachable workstation):
+# Apply (run from a VNet-reachable workstation; the tfstate SA is
+# private-only from the first apply onward).
 terraform apply
 ```
 
