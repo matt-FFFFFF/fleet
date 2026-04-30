@@ -1,10 +1,9 @@
 # main.acr.tf
 #
 # Fleet-wide Azure Container Registry — created here on env=mgmt runs only
-# (REFACTOR.md Step 1; PLAN §4 bootstrap/environment env=mgmt).
+# (PLAN §4 bootstrap/environment env=mgmt).
 #
-# Mgmt is a fleet-wide singleton under PLAN §1 hub-and-spoke; absorbing the
-# fleet ACR into env=mgmt eliminates Stage 0 (REFACTOR.md). The ACR lives in
+# Mgmt is a fleet-wide singleton under PLAN §1 hub-and-spoke. The ACR lives in
 # `rg-fleet-shared` (created by `bootstrap/fleet`, NOT in `rg-fleet-mgmt-shared`)
 # and its private endpoint lands in mgmt's `snet-pe-fleet` subnet, co-located
 # with `acr.location` via same-region-else-first (PLAN §3.4).
@@ -15,19 +14,17 @@
 # id of the same ACR as created here on a prior env=mgmt run.
 #
 # Repo-level vars `ACR_RESOURCE_ID`, `ACR_NAME`, `ACR_LOGIN_SERVER` are
-# published at the bottom of this file (replacing the Stage 0 outputs of the
-# same name). Per-cluster kubelet identities are granted `AcrPull` against
-# this ACR by Stage 1 (condition-bounded via the env UAMI's `acr_uaa_bounded`
-# role assignment in main.github.tf).
+# published at the bottom of this file. Per-cluster kubelet identities are
+# granted `AcrPull` against this ACR by Stage 1 (condition-bounded via the
+# env UAMI's `acr_uaa_bounded` role assignment in main.github.tf).
 
 locals {
   # Fleet-shared RG id — `rg-fleet-shared` is created by `bootstrap/fleet`
-  # in the ACR subscription. Reconstructed by name (parity with the Stage 0
-  # `local.derived.fleet_shared_rg_id` it replaces).
+  # in the ACR subscription. Reconstructed by name.
   fleet_shared_rg_id = "/subscriptions/${local.derived.acr_subscription_id}/resourceGroups/${local.derived.acr_resource_group}"
 
   # `acr_sku` is not exposed via `module.identity.derived`; read directly
-  # from the YAML doc with the same default as Stage 0 used.
+  # from the YAML doc, defaulting to Premium.
   acr_sku = try(local.fleet_doc.acr.sku, "Premium")
 
   # Central BYO `privatelink.azurecr.io` zone id (PLAN §3.4); precondition
@@ -36,10 +33,9 @@ locals {
 
   # --- Cluster inventory scan -----------------------------------------------
   #
-  # Mirrors Stage 0's scan (terraform/stages/0-fleet/main.tf). Used here only
-  # for the singleton-mgmt precondition; redirect-URI derivation for the
-  # Argo / Kargo AAD apps moves to Stage 1 mgmt (REFACTOR.md Step 4), not
-  # here.
+  # Used here only for the singleton-mgmt precondition. Redirect-URI
+  # derivation for the Argo / Kargo AAD apps lives in `bootstrap/fleet`
+  # (which owns the AAD apps), not here.
   cluster_files = sort(fileset("${path.module}/../../../clusters", "*/*/*/cluster.yaml"))
 
   clusters = [
@@ -53,8 +49,8 @@ locals {
 
   mgmt_clusters = [for c in local.clusters : c if c.role == "management"]
 
-  # Mgmt region co-located with the fleet ACR. Same-region-else-first;
-  # mirrors the Stage 0 selector. Used to land the ACR PE in the correct
+  # Mgmt region co-located with the fleet ACR. Same-region-else-first.
+  # Used to land the ACR PE in the correct
   # mgmt VNet's `snet-pe-fleet` subnet.
   acr_mgmt_region = (
     length(var.mgmt_pe_fleet_subnet_ids) == 0 ? "" :
@@ -70,7 +66,7 @@ locals {
 # PLAN §1 hard-limits a fleet to exactly one cluster with `cluster.role:
 # management`. The check fires as a precondition on a `terraform_data`
 # resource so the failure surfaces during plan/refresh — before any apply
-# work — per REFACTOR.md Step 1.
+# work.
 # -----------------------------------------------------------------------------
 
 resource "terraform_data" "mgmt_singleton_check" {
@@ -89,7 +85,7 @@ resource "terraform_data" "mgmt_singleton_check" {
 }
 
 # -----------------------------------------------------------------------------
-# Fleet ACR (env=mgmt only). Body verbatim from the Stage 0 it replaces.
+# Fleet ACR (env=mgmt only).
 # -----------------------------------------------------------------------------
 
 resource "azapi_resource" "fleet_acr" {
@@ -200,8 +196,8 @@ resource "azapi_resource" "fleet_acr_pe_dns_zone_group" {
 # -----------------------------------------------------------------------------
 # Repo-level GitHub Actions variables for downstream consumers.
 #
-# Replaces the Stage 0 outputs of the same name. REPOSITORY-scoped (NOT env-
-# scoped) per REFACTOR.md Step 1 — these flow into Stage 1 / Stage 2 of every
+# REPOSITORY-scoped (NOT env-scoped) — these flow into Stage 1 / Stage 2
+# of every
 # cluster and into other env runs, so a per-env scope would be wrong. The
 # fleet-meta GitHub App (provider configured in providers.tf) holds the
 # `actions_variables: write` repo permission required to author these.

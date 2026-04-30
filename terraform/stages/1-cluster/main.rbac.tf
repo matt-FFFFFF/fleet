@@ -98,10 +98,6 @@ resource "azapi_resource" "ra_eso_cluster_kv" {
 # main.aad.argocd.tf). On the mgmt cluster itself this assignment is
 # redundant: `ra_eso_cluster_kv` already grants the same role on the
 # same KV, so it's gated `count = mgmt_role_cluster ? 0 : 1`.
-#
-# Pre-refactor: `ra_eso_runners_kv` (renamed in REFACTOR.md Step 2)
-# scoped at the runner-pool KV — which used to also hold the Argo RP
-# secret. Step 4 of REFACTOR.md retargets to the mgmt cluster KV.
 
 resource "azapi_resource" "ra_eso_mgmt_cluster_kv" {
   count = local.mgmt_role_cluster ? 0 : 1
@@ -127,11 +123,11 @@ resource "azapi_resource" "ra_eso_mgmt_cluster_kv" {
 }
 
 # State-migration shim: this role assignment was previously
-# `ra_eso_runners_kv` (REFACTOR.md Step 2 renamed it from
-# `ra_eso_fleet_kv`). REFACTOR.md Step 4 retargets it from the
-# runner-pool KV to the mgmt cluster KV — the `moved {}` chain keeps
-# existing state addressed correctly across both renames so adopters
-# upgrading don't see a destroy + recreate of the role assignment.
+# `ra_eso_runners_kv` (and before that `ra_eso_fleet_kv`); it was
+# also retargeted from the runner-pool KV to the mgmt cluster KV.
+# The `moved {}` chain keeps existing state addressed correctly
+# across both renames so adopters upgrading don't see a destroy +
+# recreate of the role assignment.
 moved {
   from = azapi_resource.ra_eso_fleet_kv
   to   = azapi_resource.ra_eso_runners_kv

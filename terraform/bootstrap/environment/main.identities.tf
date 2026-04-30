@@ -27,7 +27,7 @@ locals {
   # KV: created by `bootstrap/fleet`; referenced here by synthesized ARM id
   # using the same naming derivation as docs/naming.md.
   #
-  # ACR: created by THIS stage on env=mgmt runs (REFACTOR.md Step 1; see
+  # ACR: created by THIS stage on env=mgmt runs (see
   # main.acr.tf). On env=mgmt resolve to the live resource id so the
   # `acr_uaa_bounded` role assignment in main.github.tf depends on its
   # creation; on non-mgmt envs synthesize the same id (the ACR is created
@@ -76,7 +76,8 @@ resource "azapi_resource" "rg_env_obs" {
 # Contributor + User Access Administrator at subscription scope to run
 # team-bootstrap / env-bootstrap against this env. No Graph permissions
 # are required: under PLAN §1 hub-and-spoke, per-env UAMIs do not
-# mutate AAD apps (only `uami-fleet-stage0` and `uami-fleet-mgmt` do).
+# mutate AAD apps (only `uami-fleet-mgmt` does, for runtime rotation
+# of the Argo / Kargo AAD apps that `bootstrap/fleet` owns).
 
 resource "azapi_resource" "ra_meta_sub_contrib" {
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"

@@ -9,12 +9,13 @@
 # The fleet-meta UAMI, its federated credentials, and its Azure RBAC
 # assignments are created by `module.fleet_repo` (see main.github.tf).
 #
-# Microsoft Graph app-role assignments are NOT issued from this stage
-# post-REFACTOR.md (Stage 0 deletion). The single Graph grant the fleet
-# needs — `Application.ReadWrite.OwnedBy` on `uami-fleet-mgmt` for
-# Stage 1 mgmt-cluster Argo + Kargo AAD app management — is issued
-# manually by the operator after `bootstrap/environment` env=mgmt
-# bootstraps the UAMI. See `docs/adoption.md §5.3`.
+# Microsoft Graph app-role assignments are NOT issued from this stage.
+# The single Graph grant the fleet needs —
+# `Application.ReadWrite.OwnedBy` on `uami-fleet-mgmt` for Stage 1 mgmt
+# Kargo password rotation + future FIC management on the Argo / Kargo
+# AAD apps owned by `bootstrap/fleet` — is issued manually by the
+# operator after `bootstrap/environment` env=mgmt bootstraps the UAMI.
+# See `docs/adoption.md §5.3`.
 
 # --- Fleet shared resource group (for ACR / fleet KV / shared state) ---------
 

@@ -47,8 +47,8 @@
 #      nsg-pe-fleet-<region> + nsg-runners-<region>. RG
 #      rg-net-mgmt-<region>.
 #
-# Files intentionally omitted from this stage (move to later stages):
-#   - Fleet ACR → `bootstrap/environment` env=mgmt (REFACTOR.md Step 1)
+# Files intentionally omitted from this stage (owned elsewhere):
+#   - Fleet ACR → `bootstrap/environment` env=mgmt
 #   - Per-env state containers + env UAMIs → bootstrap/environment
 #   - Env VNets + cluster-workload subnets on mgmt VNets + mgmt↔env
 #     peerings + per-env node ASGs → bootstrap/environment

@@ -1,7 +1,7 @@
 # main.state.tf
 #
 # Creates the fleet-wide Terraform state storage. All downstream stages —
-# Stage 0, bootstrap/environment, bootstrap/team, and the per-env Stage 1 /
+# bootstrap/environment, bootstrap/team, and the per-env Stage 1 /
 # Stage 2 containers seeded by bootstrap/environment — land in this account.
 #
 # Resource scope: the shared subscription (fleet.state.subscription_id).

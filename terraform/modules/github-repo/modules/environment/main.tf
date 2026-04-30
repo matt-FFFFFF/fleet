@@ -192,7 +192,7 @@ resource "azapi_resource" "federated_identity_credential" {
 #
 # Role-assignment resource names are Azure-scope GUIDs; deriving them
 # deterministically from (role_key, scope, principalId) via `uuidv5` matches
-# the repo-wide convention (see terraform/stages/0-fleet/main.kv.tf and
+# the repo-wide convention (see terraform/bootstrap/fleet/main.kv.tf and
 # terraform/bootstrap/environment/main.identities.tf) and makes IDs stable
 # across recreations/imports.
 # -----------------------------------------------------------------------------

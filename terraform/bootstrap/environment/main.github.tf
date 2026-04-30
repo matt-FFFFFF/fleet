@@ -190,10 +190,11 @@ resource "github_actions_environment_variable" "env_vars" {
 #
 # Previously: `Application.ReadWrite.OwnedBy` on every `uami-fleet-<env>`,
 # granted via `bootstrap/fleet`'s `AppRoleAssignment.ReadWrite.All` on
-# `uami-fleet-meta`. Under hub-and-spoke, the only UAMIs that mutate the
-# Argo / Kargo AAD apps are `uami-fleet-stage0` (Stage 0; tenant-admin
-# bootstrap-time grant) and `uami-fleet-mgmt` (Stage 1 mgmt — Kargo
-# password rotation; future mgmt-side Argo / Kargo FICs).
+# `uami-fleet-meta`. Under hub-and-spoke, the only UAMI that mutates the
+# Argo / Kargo AAD apps is `uami-fleet-mgmt` (Stage 1 mgmt — Kargo
+# password rotation; future mgmt-side Argo / Kargo FICs); the AAD apps
+# themselves are owned by `bootstrap/fleet` and created by the operator
+# at apply time using their own Graph perms.
 #
 # `uami-fleet-mgmt` receives its `Application.ReadWrite.OwnedBy` grant
 # manually post-bootstrap; the long-lived `AppRoleAssignment.ReadWrite.All`

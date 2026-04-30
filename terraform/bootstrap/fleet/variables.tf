@@ -95,7 +95,7 @@ variable "fleet_meta_app_pem_version" {
 }
 
 # -----------------------------------------------------------------------------
-# Argo + Kargo AAD-app inputs (REFACTOR.md Step 4).
+# Argo + Kargo AAD-app inputs.
 #
 # `mgmt_cluster_kv_id` is the chicken-and-egg switch that gates the
 # OIDC RP `client_secret` writes into the mgmt cluster KV. It must be

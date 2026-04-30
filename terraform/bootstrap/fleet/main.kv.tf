@@ -4,12 +4,12 @@
 #
 # Stage ownership: bootstrap/fleet (Stage -1) owns KV creation so that
 # the Stage -1 runner pool's Container App Job can reference the GH App
-# PEM secret (`fleet-runners-app-pem`) at module-apply time. Stage 0
-# consumes the existing KV (derived id, no data lookup) and (a) seeds
-# additional fleet-wide secrets — `argocd-github-app-pem`,
-# `argocd-oidc-client-secret`, GH App PEMs created by `init-gh-apps.sh`
-# — and (b) holds `Key Vault Secrets Officer` for the Stage 0 executor
-# so rotations can write new secret versions.
+# PEM secret (`fleet-runners-app-pem`) at module-apply time. The two
+# GH App PEMs (`fleet-runners-app-pem`, `fleet-meta-app-pem`) are
+# seeded into this vault by the data-plane PUTs at the bottom of this
+# file; the operator running `bootstrap/fleet apply` holds
+# `Key Vault Secrets Officer` (self-grant below) so first-apply
+# succeeds without a manual portal step.
 #
 # Networking pattern mirrors the per-pool ACR:
 #   - publicNetworkAccess = Disabled
@@ -60,9 +60,8 @@ resource "azapi_resource" "runners_kv" {
 }
 
 # State-migration shim: the resource was previously named
-# `azapi_resource.fleet_kv` (Step 2 of REFACTOR.md renamed it to
-# `runners_kv`). `moved {}` keeps existing state addressed correctly so
-# the rename does not destroy + recreate the vault.
+# `azapi_resource.fleet_kv`; `moved {}` keeps existing state addressed
+# correctly across the rename so the vault is not destroyed + recreated.
 moved {
   from = azapi_resource.fleet_kv
   to   = azapi_resource.runners_kv
@@ -185,8 +184,8 @@ resource "azapi_resource" "ra_runner_kv_secrets_user" {
 # runners KV.
 #
 # Vault-wide scope (rather than per-secret) so future fleet-wide
-# secrets — e.g. `argocd-github-app-pem`, `argocd-oidc-client-secret`
-# (Stage 0) — are reachable without additional role assignments.
+# secrets seeded into this KV are reachable without additional role
+# assignments.
 
 resource "azapi_resource" "ra_meta_kv_secrets_user" {
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"

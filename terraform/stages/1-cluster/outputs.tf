@@ -4,8 +4,8 @@
 # All values are consumed by Stage 2 (running in the same CI job) as
 # tfvars via the `tf-apply.yaml` workflow — no remote state reads.
 #
-# Passthroughs from Stage 0 / bootstrap/environment (runners KV, env AMW,
-# env DCE, env AG) save Stage 2 from redoing the lookup.
+# Passthroughs from bootstrap/environment (env AMW, env DCE, env AG)
+# save Stage 2 from redoing the lookup.
 
 # --- AKS -------------------------------------------------------------------
 
@@ -102,7 +102,7 @@ output "cluster_keyvault_uri" {
   value       = module.cluster_kv.vault_uri
 }
 
-# --- Mgmt-only repo-var outputs (REFACTOR.md Step 4) ------------------------
+# --- Mgmt-only repo-var outputs --------------------------------------------
 #
 # Published by tf-apply.yaml (publish-stage1-mgmt job) as repo-level
 # GitHub variables consumed by spoke Stage 1 / Stage 2 plans:

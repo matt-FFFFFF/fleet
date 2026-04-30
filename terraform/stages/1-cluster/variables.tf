@@ -128,11 +128,12 @@ variable "route_table_resource_id" {
   nullable    = false
 }
 
-# --- Fleet-scope passthroughs (published by Stage 0) -----------------------
+# --- Fleet-scope passthroughs (published as repo variables) ----------------
 #
-# These piggyback on the Stage 0 → repo-variable publishing path (PLAN §4
-# Stage 0 Outputs). `tf-apply.yaml` wires each to a `TF_VAR_*` of the
-# same snake-case name for every Stage 1 leg. No remote state, no
+# These arrive as repo-level GitHub Actions variables published by
+# `bootstrap/environment` (env=mgmt) and the mgmt cluster's Stage 1
+# apply. `tf-apply.yaml` wires each to a `TF_VAR_*` of the same
+# snake-case name for every Stage 1 leg. No remote state, no
 # plan-time data sources — everything arrives as a string.
 
 variable "mgmt_cluster_kv_id" {
@@ -168,8 +169,8 @@ variable "acr_resource_id" {
     by `bootstrap/fleet`. Stage 1 assigns `AcrPull` on this ACR to the
     cluster's AKS-managed kubelet identity (read from the AVM module's
     `kubelet_identity.object_id` output). Published as the
-    `ACR_RESOURCE_ID` fleet-scope repo variable (Stage 0 output
-    `acr_resource_id`).
+    `ACR_RESOURCE_ID` fleet-scope repo variable, published by
+    `bootstrap/environment` (env=mgmt).
   EOT
   type        = string
   nullable    = false
@@ -178,7 +179,8 @@ variable "acr_resource_id" {
 variable "kargo_mgmt_uami_principal_id" {
   description = <<-EOT
     Principal id of the fleet-wide singleton Kargo UAMI
-    (`uami-kargo-mgmt`), owned by Stage 0. Stage 1 assigns `Azure
+    (`uami-kargo-mgmt`), created by the mgmt cluster's own Stage 1
+    apply (see `main.identities.kargo.tf`). Stage 1 assigns `Azure
     Kubernetes Service RBAC Reader` on the **mgmt** cluster's AKS
     resource to this principalId so Kargo (mgmt-resident) can read
     Argo `Application` CRs — under PLAN §1 hub-and-spoke, all such
@@ -205,9 +207,9 @@ variable "mgmt_aks_oidc_issuer_url" {
     Required on spokes (cluster.role != "management"); accepted as
     null on mgmt itself (no spoke FICs are authored there).
 
-    While the `stage0-publisher` GH App that publishes this var is
-    gated `if: false`, the operator must populate it manually after
-    the first successful mgmt-cluster Stage 1 apply. See
+    Published by the mgmt cluster's Stage 1 apply (via tf-apply.yaml's
+    post-apply repo-var publish step). On the very first mgmt apply
+    the spoke leg cannot run until this var has been written; see
     `docs/adoption.md` for the bootstrap order.
   EOT
   type        = string
