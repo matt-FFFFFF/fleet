@@ -53,13 +53,13 @@
         mgmt-cluster KV writes on `var.mgmt_cluster_kv_id` (two-pass
         apply per docs/adoption.md §5.3). `azuread` provider
         re-added.
-  - [~] **Deferral (F26)**: runner pool ships with
+  - [~] **Deferral (PLAN §15)**: runner pool ships with
         `use_private_networking = false` because the vendored
         `cicd-runners` module silently disables LAW public ingestion
         + query when private networking is on but authors no
         AMPLS/NSP path. Re-enable contract is documented in the
-        callsite comment block + F26 Recommendation. ACR public,
-        ACA platform-managed VNet, LAW public ingestion until F26
+        callsite comment block + the §15 NSP recommendation. ACR public,
+        ACA platform-managed VNet, LAW public ingestion until §15
         closes.
 - [~] `bootstrap/environment/` — code complete; not applied.
   - [~] **Refactor**: env=mgmt absorbs fleet ACR + PE +

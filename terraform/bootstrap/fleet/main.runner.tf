@@ -10,7 +10,7 @@
 #
 #   1. Create the runner UAMI (`uami-fleet-runners`) in `rg-fleet-shared`.
 #   2. Invoke the vendored ACA+KEDA runner module with:
-#        - public networking (see "Networking" below; F26)
+#        - public networking (see "Networking" below; PLAN §15)
 #        - per-pool ACR + LAW (module defaults)
 #        - KV-reference for the GitHub App PEM (vendor extension — see
 #          terraform/modules/cicd-runners/VENDORING.md §4)
@@ -139,7 +139,7 @@ module "runner" {
 
   # Networking --------------------------------------------------------------
   #
-  # Private networking is currently DISABLED (see findings F26). The
+  # Private networking is currently DISABLED (see PLAN §15 "Runner-pool LAW + ACR private networking deferred"). The
   # vendored module's LAW defaults flip both
   # `log_analytics_workspace_internet_ingestion_enabled` and
   # `log_analytics_workspace_internet_query_enabled` to the negation of
@@ -148,7 +148,7 @@ module "runner" {
   # networking without first landing AMPLS/NSP results in a LAW that
   # cannot ingest from the runner pool nor be queried from the portal.
   #
-  # Until F26 closes (NSP or AMPLS for the runner LAW + DCE), the
+  # Until the §15 deferral closes (NSP or AMPLS for the runner LAW + DCE), the
   # callsite ships the runner pool with public networking:
   #   - ACR is created with public network access enabled.
   #   - The Container App Environment runs on the ACA-platform-managed
@@ -158,7 +158,7 @@ module "runner" {
   # The fleet-plane subnets and central PDZ refs in main.network.tf and
   # `_fleet.yaml.networking` remain authored — they are still consumed by
   # the tfstate SA, runners KV, and fleet ACR PEs. They simply do not
-  # land on this module call. When F26 closes, the
+  # land on this module call. When the §15 deferral closes, the
   # `container_app_subnet_id`, `container_registry_private_endpoint_subnet_id`,
   # `container_registry_private_dns_zone_creation_enabled`, and
   # `container_registry_dns_zone_id` inputs return here together with
@@ -169,7 +169,7 @@ module "runner" {
   # Hub firewall handles egress via UDR on the runner subnet; no NAT or
   # public IP owned by this module. (These are also gated on
   # use_private_networking inside the module, so they are inert today,
-  # but kept explicit so the intent survives F26 re-enablement.)
+  # but kept explicit so the intent survives future re-enablement.)
   nat_gateway_creation_enabled = false
   public_ip_creation_enabled   = false
 
