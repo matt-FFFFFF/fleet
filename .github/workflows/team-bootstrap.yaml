@@ -46,7 +46,7 @@ defaults:
 jobs:
   detect:
     name: detect new teams
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted]
     outputs:
       teams:       ${{ steps.detect.outputs.teams }}
       any:         ${{ steps.detect.outputs.any }}

@@ -464,6 +464,38 @@ of `bootstrap/fleet` require the operator to hold
 **Cloud Application Administrator** or **Global Administrator**
 in the tenant — the same role used at first apply.
 
+### 5.4 CI runner placement
+
+After `bootstrap/fleet` lands the runner pool (the KEDA-scaled
+Container App Job under `rg-fleet-runners`), every workflow in
+`.github/workflows/` that ships in the adopter repo runs on
+`runs-on: [self-hosted]` against that pool. There is no
+GitHub-hosted fallback for adopter workflows — `validate.yaml`,
+`tf-plan.yaml`, `tf-apply.yaml`, `env-bootstrap.yaml`, and
+`team-bootstrap.yaml` all dispatch to the fleet pool.
+
+Why a single pool: the fleet tfstate SA, the runner-pool KV, and
+the mgmt cluster KV are private-only (PE-bound, public access
+disabled), so any tfstate-touching job must run on a runner inside
+the fleet VNet regardless. Keeping utility jobs (lint, fmt, change
+detection) on the same pool collapses the trust boundary to one
+image and one egress path. Cold-start cost (KEDA scale-from-zero,
+~1–2 min) is paid once per PR and amortises across the matrix.
+
+Consequence: when the runner pool is broken, *all* CI is broken —
+including lint and fmt. This is acceptable because the runner pool
+is bootstrap-laptop-applied (see §5.2). Recovery from a broken
+pool is `terraform apply` from the operator laptop against
+`terraform/bootstrap/fleet`, not "another CI workflow that needs
+the pool to be healthy." The two failure paths converge on the
+same recovery, so splitting them buys nothing.
+
+The two template-only workflows (`template-selftest.yaml`,
+`status-check.yaml`) stay on `ubuntu-24.04`. They run in the
+fleet template repo and on fresh forks before `init-fleet.sh`,
+where no fleet runner pool exists. `init-fleet.sh` deletes them
+during self-cleanup; they never appear in adopter-repo CI.
+
 ## Re-running `init-fleet.sh`
 
 The script self-deletes after a successful run, so there is no

@@ -2515,18 +2515,38 @@ they like provided their namespaces start with `<team>-`.
 
 ### Runner selection
 
-Every workflow that writes to Terraform state — `env-bootstrap.yaml`,
-`team-bootstrap.yaml`, `tf-plan.yaml`, `tf-apply.yaml`, and the
-(deferred) `fleet-bootstrap-rerun.yaml` — **must** use
-`runs-on: [self-hosted]`. The fleet tfstate SA, the runner-pool KV,
-and the mgmt cluster KV are private-only; GitHub-hosted runners
-cannot reach them. The self-hosted runner pool is the single pool
-created by `bootstrap/fleet` (§4 Stage -1, "Runner infrastructure").
+Every adopter workflow runs on `runs-on: [self-hosted]` against the
+fleet runner pool created by `bootstrap/fleet` (§4 Stage -1, "Runner
+infrastructure"). This includes both tfstate-touching workflows
+(`env-bootstrap.yaml`, `team-bootstrap.yaml`, `tf-plan.yaml`,
+`tf-apply.yaml`, the deferred `fleet-bootstrap-rerun.yaml`) and
+utility workflows (`validate.yaml`).
 
-Template-level workflows that do **not** touch tfstate — `validate.yaml`,
-`tflint.yaml`, `template-selftest.yaml`, `status-check.yaml` — stay on
-`runs-on: ubuntu-latest`. They are deleted from adopter repos by
-`init-fleet.sh` anyway.
+Rationale: a single trust boundary. One image to harden, one egress
+path to audit, one identity surface (the fleet runner UAMI plus its
+federated credentials). The fleet tfstate SA, the runner-pool KV,
+and the mgmt cluster KV are private-only — Azure-touching jobs
+*must* run on `[self-hosted]` regardless. Running utility jobs on
+the same pool removes the second runner class without measurable
+benefit; cold-start cost is paid once per PR and amortises across
+the matrix.
+
+Trade-off: when the runner pool is broken, *all* CI is broken
+(including lint/fmt). This is acceptable because the runner pool is
+bootstrap-laptop-applied (§4 Stage -1) — recovery from a broken
+pool is laptop-apply, not "another CI workflow." A broken pool
+that takes lint with it is the same recovery path as a broken pool
+that takes apply with it.
+
+Template-only workflows (`template-selftest.yaml`,
+`status-check.yaml`) stay on `runs-on: ubuntu-24.04`. They run in
+the template repo and on fresh forks before `init-fleet.sh`, where
+no fleet runner pool exists. They are deleted from adopter repos
+by `init-fleet.sh` and never reach the self-hosted contract.
+
+The Ubuntu version (`ubuntu-24.04`) and the Terraform version are
+both pinned for reproducibility — the latter via
+`.terraform-version` at the repo root, read by every workflow.
 
 ### Workflows
 

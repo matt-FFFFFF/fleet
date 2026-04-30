@@ -67,7 +67,7 @@ jobs:
   # -------------------------------------------------------------------------
   detect:
     name: detect affected
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted]
     outputs:
       clusters:    ${{ steps.detect.outputs.clusters }}
       any:         ${{ steps.detect.outputs.any }}
@@ -247,7 +247,7 @@ jobs:
     name: summarize plans
     needs: [detect, cluster]
     if: always() && needs.detect.outputs.initialized == 'true' && needs.detect.outputs.any == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 

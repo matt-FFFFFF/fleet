@@ -59,7 +59,7 @@ defaults:
 jobs:
   guard:
     name: initialisation guard
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted]
     outputs:
       initialized: ${{ steps.init_guard.outputs.initialized }}
     steps:
