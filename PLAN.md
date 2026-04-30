@@ -3194,20 +3194,32 @@ Interactive wizard by default; `--non-interactive` plus optional
    followed by ` — <prose>`), blank input substitutes `<token>` instead
    of looping for required input — used for genuinely sensible defaults
    that most adopters can accept (e.g. `primary_region` defaulting to
-   `eastus`).
-4. **Apply** the `init/` module via
+   `eastus`). Only **top-level scalar** assignments are prompted; the
+   wrapper has no HCL parser and does not descend into map/object
+   literals (e.g. the per-env entries inside `environments`).
+4. **Pre-flight refusal** for nested-map sentinels: scan the file for
+   any indented `key = "__PROMPT__"` line still in place after the
+   prompt loop, and if any are found, print the file:line references
+   with instructions to edit by hand and re-run. Interactive callers
+   exit 0 (the wizard reports unfinished work, not an error);
+   `--non-interactive` callers exit 1 (the supplied fixture/values
+   file is incomplete). Without this step, `terraform apply` would
+   fire and reject the sentinels via per-variable `validation {}`
+   blocks with multi-line stack traces — useless for first-run
+   adopters.
+5. **Apply** the `init/` module via
    `terraform -chdir=init init && terraform apply -auto-approve`.
    Terraform's variable validation blocks reject malformed GUIDs,
    slugs, DNS names, etc. — the shell contains zero format regexes.
-5. Terraform renders (via `local_file` + `templatefile`):
+6. Terraform renders (via `local_file` + `templatefile`):
    - `clusters/_fleet.yaml`
    - `.github/CODEOWNERS` (`* @<github_org>/platform-engineers`)
    - `README.md` (replaces the pre-init template README)
    - `.fleet-initialized` marker (yamlencoded; committed)
-6. **Offer to remove example clusters**
+7. **Offer to remove example clusters**
    (`clusters/mgmt/eastus/aks-mgmt-01`,
    `clusters/nonprod/eastus/aks-nonprod-01`). Default: keep.
-7. **Self-cleanup**: delete `init/`, `init-fleet.sh` itself,
+8. **Self-cleanup**: delete `init/`, `init-fleet.sh` itself,
    `.github/workflows/template-selftest.yaml`,
    `.github/workflows/status-check.yaml`, and `.github/fixtures/` so
    the adopter repo contains zero template machinery. Also strip the

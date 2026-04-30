@@ -53,8 +53,11 @@ networking_pdz_grafana   = "__PROMPT__" # BYO privatelink.grafana.azure.com zone
 # Per-env identity + networking, keyed by env name. Edit this map directly:
 # add entries (e.g. `dev`, `stage`, `qa`) as needed, remove any you don't
 # want. The init-fleet.sh prompt flow does not walk nested map values —
-# fill in GUIDs and hub resource IDs here before running init, or after a
-# first selftest run.
+# fill in GUIDs and hub resource IDs here before running init. If any
+# `__PROMPT__` sentinels remain inside this map at run time, init-fleet.sh
+# refuses to apply, prints the offending file:line references, and asks
+# you to edit them first; it does not invoke `terraform apply` against
+# unfilled sentinels.
 #
 # Each entry:
 #   subscription_id           Azure subscription GUID for this env.

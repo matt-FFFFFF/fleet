@@ -5,50 +5,6 @@ Open design/implementation concerns that don't fit `PLAN.md` (intent) or
 work queued in the Rework program in `STATUS.md`. Close a finding by
 deleting its section when the matching rework item is completed.
 
-## F12 — `init-fleet.sh` prompt loop does not walk nested map values
-
-**Observation.** The wrapper iterates top-level scalar variables in
-`init/inputs.auto.tfvars` and substitutes `__PROMPT__` sentinels via
-TTY prompts, but does not descend into nested map values. The
-`environments` variable is a map of objects whose values include
-`subscription_id` and `hub_network_resource_id` — both of which ship
-as `__PROMPT__` per env. On first run, the wrapper prints "Running
-terraform apply" and the apply fails on the `validation { condition }`
-blocks for `environments.<env>.{subscription_id,hub_network_resource_id}`
-because those sentinels were never substituted. The adopter is left
-hand-editing the file (or running `sed`) before re-running.
-
-The comment at `init/inputs.auto.tfvars:55` already acknowledges
-this — *"The init-fleet.sh prompt flow does not walk nested map
-values — fill in GUIDs and hub resource IDs here before running
-init"* — but the prompt UX is misleading: the wrapper happily runs
-the apply that is guaranteed to fail.
-
-**Risk.** Every adopter hits this on first run. The error surface is
-two long Terraform validation errors with stack traces, not a
-human-friendly message. Adopters either guess at the file edit or
-read source to understand the prompt model.
-
-**Options.**
-- **Option A — recursive prompt walk.** Teach the wrapper to descend
-  into `map(object(...))` values, prompting per-key per-env. Requires
-  parsing HCL (or the schema) at runtime; today the wrapper just
-  greps for `__PROMPT__`. Bash + `hcl2json` or a tiny Python helper.
-- **Option B — pre-flight refusal.** Have the wrapper grep for any
-  remaining `__PROMPT__` after the scalar prompt loop, and if found,
-  list the offending lines with file:line references and exit 0
-  with instructions ("edit these lines, then re-run") instead of
-  invoking `terraform apply`. Smaller change; punts the full UX to
-  a future iteration.
-- **Option C — flatten the schema.** Replace the `environments` map
-  with per-env top-level scalars (`mgmt_subscription_id`,
-  `nonprod_subscription_id`, …) so the existing scalar-only prompt
-  loop covers everything. Loses the symmetry of the map and makes
-  adding new envs (`dev`, `stage`) more invasive.
-
-**Recommendation.** B as a stop-gap (1-day fix; eliminates the
-foot-gun), then A as the proper solution.
-
 ## F13 — `init-fleet.sh` should prompt for `egress_next_hop_ip`
 
 **Observation.** Every region in `networking.envs.<env>.regions.<r>`
@@ -63,9 +19,9 @@ at cluster apply** in any region whose clusters have hub-routed
 egress. The adopter therefore hits the same edit-and-re-apply cycle
 on first cluster create that they hit on first init.
 
-**Risk.** Same as F12: discoverability. The TODO comment is in the
-rendered yaml, not in the prompt flow, so the adopter only finds it
-when Stage 1 errors.
+**Risk.** Discoverability. The TODO comment is in the rendered yaml,
+not in the prompt flow, so the adopter only finds it when Stage 1
+errors.
 
 **Options.**
 - **Option A — prompt per env-region.** The init flow already knows
@@ -86,9 +42,14 @@ when Stage 1 errors.
 hub-properties; one prompt block per env-region keeps the UX
 linear. Empty input on either field still maps to `null` (opt-out).
 
-This finding interacts with F12: any solution to F13 that prompts
-inside the `environments` map requires F12's fix first (today the
-wrapper can't descend into the map at all).
+Implementation note: `hub_network_resource_id` lives inside the
+`environments` map, and the wrapper does not yet descend into nested
+map values (the prompt loop walks top-level scalars only; nested
+`__PROMPT__` sentinels trigger a pre-flight refusal that asks the
+adopter to edit by hand). Any of the options above that prompts
+inside the map requires teaching the wrapper to walk nested literals
+first — Option A/C from F13's perspective is therefore a meaningful
+chunk of work, not just a few lines of bash.
 
 ## F16 — Globally-unique resource names should carry a random suffix
 
