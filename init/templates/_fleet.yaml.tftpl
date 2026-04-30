@@ -115,6 +115,31 @@ networking:                                            # Repo-owned VNets + BYO 
   #   create_reverse_peering    Optional, default true. Set false when
   #                             the hub is owned by a team that forbids
   #                             spoke-initiated reverse peerings.
+  #   hub_peering               Optional nested block. Currently
+  #                             supports one field:
+  #                               use_remote_gateways  bool, default
+  #                                                    false. Set true
+  #                                                    when the hub
+  #                                                    has a gateway
+  #                                                    (ExpressRoute
+  #                                                    or VPN) whose
+  #                                                    routes this
+  #                                                    spoke should
+  #                                                    inherit. Plumbed
+  #                                                    to
+  #                                                    `hub_peering_options_tohub.use_remote_gateways`
+  #                                                    on the spoke→hub
+  #                                                    peering. NOTE:
+  #                                                    this field MUST
+  #                                                    be nested under
+  #                                                    `hub_peering:` —
+  #                                                    writing
+  #                                                    `use_remote_gateways:`
+  #                                                    at the region
+  #                                                    top level is
+  #                                                    rejected by the
+  #                                                    fleet-identity
+  #                                                    schema validator.
   #   dns_servers               Optional, default `[]`. VNet-level DNS
   #                             servers for this env-region's spoke
   #                             VNet. Empty list means Azure-provided
@@ -140,6 +165,8 @@ networking:                                            # Repo-owned VNets + BYO 
           egress_next_hop_ip: null
           # TODO: full ARM resource id of the ${env} hub VNet in ${primary_region}, or null to opt out of hub peering.
           hub_network_resource_id: ${cfg.hub_network_resource_id == null ? "null" : format("\"%s\"", cfg.hub_network_resource_id)}
+          # hub_peering:
+          #   use_remote_gateways: false  # set true when the hub has an ExpressRoute / VPN gateway whose routes this spoke should inherit.
           # dns_servers: []  # default = Azure-provided DNS (168.63.129.16). Set to hub-resolver IPs when this env-region requires forwarder-based DNS.
 %{ endfor ~}
 

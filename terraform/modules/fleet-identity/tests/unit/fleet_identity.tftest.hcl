@@ -849,3 +849,53 @@ run "networking_derived_surfaces_f6_hub_spoke_knobs" {
     error_message = "dns_servers must default to [] when not set on this region."
   }
 }
+
+# ---- negative: per-region schema validator rejects unknown keys ------------
+#
+# Catches the F19 nesting mistake where an adopter writes
+# `use_remote_gateways: true` at the region top level instead of nested
+# under `hub_peering:`. Without the validator, `try(region_block.hub_peering.use_remote_gateways, false)`
+# silently falls back to false and the misconfigured peering is created
+# with the wrong flag. The variable validation block in variables.tf
+# enforces the allowed key set.
+
+run "rejects_unknown_per_region_key" {
+  command = plan
+
+  variables {
+    fleet_doc = {
+      fleet = {
+        name      = "acme"
+        tenant_id = "11111111-1111-1111-1111-111111111111"
+      }
+      acr = {
+        name_override   = ""
+        resource_group  = "rg-fleet-shared"
+        subscription_id = "22222222-2222-2222-2222-222222222222"
+        location        = "eastus"
+      }
+      runners_keyvault = { name_override = "" }
+      state = {
+        storage_account_name_override = ""
+        resource_group                = "rg-fleet-tfstate"
+        subscription_id               = "22222222-2222-2222-2222-222222222222"
+        containers                    = { fleet = "tfstate-fleet" }
+      }
+      envs = { mgmt = { location = "eastus" } }
+      networking = {
+        envs = {
+          mgmt = {
+            regions = {
+              eastus = {
+                address_space       = ["10.50.0.0/20"]
+                use_remote_gateways = true # F19: must be under hub_peering, not here
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.fleet_doc]
+}
