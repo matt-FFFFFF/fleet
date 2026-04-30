@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=/schemas/cluster.v1.schema.json
 cluster:
   role: workload
   resource_group: rg-aks-nonprod-eastus-01
