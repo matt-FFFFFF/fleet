@@ -1,0 +1,20 @@
+cluster:
+  role: management
+  resource_group: rg-aks-mgmt-eastus-01
+
+networking:
+  subnet_slot: 0                                    # /24 slot inside mgmt-env VNet (PLAN §3.4)
+
+# Argo GH App specifics for the mgmt cluster (installation-id differs per
+# cluster if separate installations are used; otherwise inherit from defaults).
+platform:
+  argocd:
+    github_app:
+      app_id: "<argocd-app-id>"
+      installation_id: "<argocd-mgmt-installation-id>"
+  kargo:
+    github_app:
+      app_id: "<kargo-app-id>"
+      installation_id: "<kargo-mgmt-installation-id>"
+
+teams: []

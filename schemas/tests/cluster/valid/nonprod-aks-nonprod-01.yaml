@@ -1,0 +1,14 @@
+cluster:
+  role: workload
+  resource_group: rg-aks-nonprod-eastus-01
+
+networking:
+  subnet_slot: 0                                    # /24 slot inside nonprod-eastus VNet (PLAN §3.4)
+
+platform:
+  argocd:
+    github_app:
+      app_id: "<argocd-app-id>"
+      installation_id: "<argocd-nonprod-installation-id>"
+
+teams: []

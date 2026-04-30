@@ -1,0 +1,12 @@
+# Region-scope defaults for mgmt/eastus clusters.
+#
+# Merged under every cluster file by terraform/config-loader/load.sh:
+#   fleet/_defaults.yaml << env/_defaults.yaml << region/_defaults.yaml << cluster.yaml
+#
+# Per-env-region networking config (address_space, egress_next_hop_ip,
+# hub_network_resource_id, create_reverse_peering) lives in
+# `_fleet.yaml` under `networking.envs.mgmt.regions.eastus` — not here.
+# This file is a placeholder for future region-wide mgmt/eastus
+# tunables that do NOT belong in _fleet.yaml (e.g. region-specific
+# cluster defaults). Empty until the first such tunable appears.
+{}

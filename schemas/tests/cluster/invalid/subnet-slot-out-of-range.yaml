@@ -1,0 +1,6 @@
+# Should fail: subnet_slot 16 exceeds the /20 capacity ceiling.
+cluster:
+  role: workload
+  resource_group: rg-aks-nonprod-eastus-01
+networking:
+  subnet_slot: 16

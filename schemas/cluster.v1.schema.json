@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/matt-FFFFFF/fleet/blob/main/schemas/cluster.v1.schema.json",
+  "title": "cluster.v1",
+  "description": "Structural contract for any one of: clusters/<env>/<region>/<name>/cluster.yaml, clusters/_template/cluster.yaml, clusters/_defaults.yaml, clusters/<env>/_defaults.yaml, clusters/<env>/<region>/_defaults.yaml. Schema is per-file and intentionally lax: every field is optional because cluster.yaml is layered onto the _defaults chain by terraform/config-loader/load.sh. Required-shape validation lives in the bootstrap stages (HCL preconditions). Versioning lives in the filename and $id; bump to v2 only on incompatible change. See schemas/README.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "cluster": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Cluster-identity block. Required at the cluster.yaml leaf; absent on _defaults.yaml.",
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": ["management", "workload"],
+          "description": "`management` cluster runs Kargo + the platform control plane; `workload` clusters do not."
+        },
+        "subscription_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Override only when this single cluster lives in a different sub from envs.<env>.subscription_id."
+        },
+        "resource_group": {"type": "string", "minLength": 1}
+      }
+    },
+    "networking": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subnet_slot": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15,
+          "description": "Per-cluster index into the env+region VNet subnet pools (PLAN \u00a73.4). /20 \u2192 16, /21 \u2192 12, /22 \u2192 4. Immutable; changing forces re-create."
+        }
+      }
+    },
+    "kubernetes": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "AKS control-plane settings. Defaulted in clusters/_defaults.yaml.",
+      "properties": {
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
+        "sku_tier": {"type": "string", "enum": ["Free", "Standard", "Premium"]},
+        "node_image_upgrade": {"type": "string", "enum": ["NodeImage", "None", "SecurityPatch", "Unmanaged"]},
+        "control_plane_upgrade": {"type": "string", "enum": ["patch", "stable", "rapid", "node-image"]},
+        "cluster_autoscaler_profile": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Autoscaler profile passthrough; keys map directly to AKS API. Open shape because the AKS field set evolves."
+        }
+      }
+    },
+    "node_pools": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Pool definitions. `apps: null` is the deletion sentinel honoured by the loader (see clusters/mgmt/_defaults.yaml).",
+      "properties": {
+        "system": {"$ref": "#/$defs/nodePoolOrNull"},
+        "apps": {"$ref": "#/$defs/nodePoolOrNull"}
+      }
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gitops": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repo_url": {"type": "string", "minLength": 1},
+            "path": {"type": "string", "minLength": 1},
+            "revision": {"type": "string", "minLength": 1}
+          }
+        },
+        "argocd": {"$ref": "#/$defs/platformAppBlock"},
+        "kargo": {
+          "allOf": [{"$ref": "#/$defs/platformAppBlock"}],
+          "description": "Honoured only when cluster.role == management."
+        },
+        "keyvault": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Optional cluster KV overrides; resolved by config-loader load.sh.",
+          "properties": {
+            "name_override": {"type": "string"},
+            "resource_group": {"type": "string", "minLength": 1}
+          }
+        },
+        "observability": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "managed_prometheus": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {"type": "boolean"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "teams": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "description": "Team names this cluster opts into; basenames of platform-gitops/config/teams/*.yaml."
+    }
+  },
+  "$defs": {
+    "nodePoolOrNull": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vm_size": {"type": "string", "minLength": 1},
+            "min_count": {"type": "integer", "minimum": 0},
+            "max_count": {"type": "integer", "minimum": 1},
+            "zones": {
+              "type": "array",
+              "items": {"type": "integer", "enum": [1, 2, 3]},
+              "uniqueItems": true
+            },
+            "enable_auto_scaling": {"type": "boolean"}
+          }
+        }
+      ]
+    },
+    "platformAppBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "helm_version": {"type": "string", "minLength": 1},
+        "oidc": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "issuer": {"type": "string", "minLength": 1},
+            "client_id_kv_secret": {"type": "string", "minLength": 1}
+          }
+        },
+        "github_app": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "app_id": {"type": ["string", "integer", "null"]},
+            "installation_id": {"type": ["string", "integer", "null"]},
+            "private_key_kv_secret": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,365 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/matt-FFFFFF/fleet/blob/main/schemas/fleet.v1.schema.json",
+  "title": "fleet.v1",
+  "description": "Structural contract for clusters/_fleet.yaml. Versioning lives in the filename and $id; bump to v2 only on incompatible change (rename, removal, type tightening). See schemas/README.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["fleet", "acr", "runners_keyvault", "state", "networking", "github_app", "aad", "observability", "envs", "dns"],
+  "properties": {
+    "fleet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "display_name", "tenant_id", "github_org", "github_repo", "team_template_repo"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]{1,11}$",
+          "description": "Fleet slug. Lowercase alphanumeric, leading letter, 2-12 chars. Embedded in derived resource names; see docs/naming.md."
+        },
+        "display_name": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "format": "uuid", "description": "AAD tenant id (uuid)."},
+        "github_org": {"type": "string", "minLength": 1},
+        "github_repo": {"type": "string", "minLength": 1, "description": "Adopter fleet repository name (e.g. 'platform-fleet')."},
+        "team_template_repo": {"type": "string", "minLength": 1, "description": "Repository name of the team-repo template that team-bootstrap clones from."}
+      }
+    },
+    "acr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name_override", "resource_group", "subscription_id", "location", "sku"],
+      "properties": {
+        "name_override": {"type": "string", "description": "Empty string uses derived `acr<fleet.name>shared`. Non-empty must satisfy ACR naming (a-z0-9, <=50)."},
+        "resource_group": {"type": "string", "minLength": 1},
+        "subscription_id": {"type": "string", "format": "uuid"},
+        "location": {"type": "string", "minLength": 1},
+        "sku": {"type": "string", "enum": ["Premium"], "description": "Premium required for private endpoints."}
+      }
+    },
+    "runners_keyvault": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name_override", "resource_group", "location"],
+      "properties": {
+        "name_override": {"type": "string", "description": "Empty string uses derived `kv-<fleet.name>-runners`. Non-empty must satisfy KV naming (3-24 chars)."},
+        "resource_group": {"type": "string", "minLength": 1},
+        "location": {"type": "string", "minLength": 1}
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["storage_account_name_override", "resource_group", "subscription_id", "containers"],
+      "properties": {
+        "storage_account_name_override": {"type": "string", "description": "Empty string uses derived `st<fleet.name>tfstate`. Non-empty must be 3-24 chars, a-z0-9."},
+        "resource_group": {"type": "string", "minLength": 1},
+        "subscription_id": {"type": "string", "format": "uuid"},
+        "containers": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["fleet"],
+          "properties": {
+            "fleet": {"type": "string", "minLength": 1, "description": "Container name for fleet/env/team tfstate blobs."}
+          }
+        }
+      }
+    },
+    "networking": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["private_dns_zones", "envs"],
+      "properties": {
+        "private_dns_zones": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "BYO central PDZs for PE A-record registration. All optional/nullable; must be ARM resource ids when set.",
+          "properties": {
+            "blob": {"$ref": "#/$defs/armPdzIdOrNull"},
+            "vaultcore": {"$ref": "#/$defs/armPdzIdOrNull"},
+            "azurecr": {"$ref": "#/$defs/armPdzIdOrNull"},
+            "grafana": {"$ref": "#/$defs/armPdzIdOrNull"}
+          }
+        },
+        "envs": {
+          "type": "object",
+          "description": "Env-tier VNets. One VNet per env-per-region.",
+          "propertyNames": {"$ref": "#/$defs/envName"},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["regions"],
+            "properties": {
+              "regions": {
+                "type": "object",
+                "propertyNames": {"$ref": "#/$defs/regionName"},
+                "additionalProperties": {"$ref": "#/$defs/regionBlock"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "github_app": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fleet_runners", "fleet_meta"],
+      "properties": {
+        "fleet_runners": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["app_id", "installation_id", "private_key_kv_secret"],
+          "description": "KEDA polling App (actions:read + metadata:read).",
+          "properties": {
+            "app_id": {"type": ["integer", "null"], "minimum": 1},
+            "installation_id": {"type": ["integer", "null"], "minimum": 1},
+            "private_key_kv_secret": {"type": "string", "minLength": 1}
+          }
+        },
+        "fleet_meta": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["app_id", "client_id", "installation_id", "private_key_kv_secret"],
+          "description": "Admin App used by env-bootstrap / team-bootstrap (administration:write etc.).",
+          "properties": {
+            "app_id": {"type": ["integer", "null"], "minimum": 1},
+            "client_id": {"type": ["string", "null"], "format": "uuid"},
+            "installation_id": {"type": ["integer", "null"], "minimum": 1},
+            "private_key_kv_secret": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "aad": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["argocd", "kargo", "grafana", "aks"],
+      "properties": {
+        "argocd": {"$ref": "#/$defs/aadAppBlock"},
+        "kargo": {"$ref": "#/$defs/aadAppBlock"},
+        "grafana": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sku", "zone_redundancy", "api_key_enabled", "deterministic_outbound_ip"],
+          "properties": {
+            "sku": {"type": "string", "enum": ["Standard"]},
+            "zone_redundancy": {"type": "boolean"},
+            "api_key_enabled": {"type": "boolean", "description": "AAD-only; must be false."},
+            "deterministic_outbound_ip": {"type": "boolean"}
+          }
+        },
+        "aks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tenant_id", "disable_local_accounts", "enable_azure_rbac"],
+          "properties": {
+            "tenant_id": {"type": "string", "format": "uuid"},
+            "disable_local_accounts": {"const": true, "description": "Hard requirement; AKS module pin."},
+            "enable_azure_rbac": {"const": true, "description": "Hard requirement; AKS module pin."}
+          }
+        }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["network_isolation", "monitor_workspace", "data_collection_endpoint", "action_group"],
+      "properties": {
+        "network_isolation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "nsp_profile_name", "grafana_private_dns_zone"],
+          "properties": {
+            "mode": {"type": "string", "enum": ["network_security_perimeter"]},
+            "nsp_profile_name": {"type": "string", "minLength": 1},
+            "grafana_private_dns_zone": {"type": "string", "minLength": 1}
+          }
+        },
+        "monitor_workspace": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["public_network_access"],
+          "properties": {
+            "public_network_access": {"type": "string", "enum": ["Disabled", "Enabled"]}
+          }
+        },
+        "data_collection_endpoint": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["public_network_access"],
+          "properties": {
+            "public_network_access": {"type": "string", "enum": ["Disabled", "Enabled"]}
+          }
+        },
+        "action_group": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["short_name_prefix"],
+          "properties": {
+            "short_name_prefix": {"type": "string", "minLength": 1, "maxLength": 12, "description": "Per-env env name is appended at render time; the combined Action Group short name must be <=12 chars total, so this prefix should leave room for the env suffix."}
+          }
+        }
+      }
+    },
+    "envs": {
+      "type": "object",
+      "description": "Per-env subscription + AAD bindings. Env names are open (any matching naming.md slug).",
+      "propertyNames": {"$ref": "#/$defs/envName"},
+      "additionalProperties": {"$ref": "#/$defs/envBlock"}
+    },
+    "dns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fleet_root", "resource_group_pattern"],
+      "properties": {
+        "fleet_root": {
+          "type": "string",
+          "pattern": "^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,}$",
+          "description": "Private DNS root FQDN. Every cluster zone is `<cluster>.<region>.<env>.<fleet_root>`."
+        },
+        "resource_group_pattern": {
+          "type": "string",
+          "pattern": ".*\\{env\\}.*",
+          "description": "Pattern for per-env DNS RG; must contain `{env}` placeholder."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "envName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]{1,7}$",
+      "description": "Env slug: lowercase alphanumeric, leading letter, 2-8 chars (kept short because env appears in derived names like `amw-<fleet>-<env>`, `kv-<fleet>-<env>` which have hard length caps)."
+    },
+    "regionName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]+$",
+      "description": "Azure region short name, e.g. `eastus`, `westeurope`."
+    },
+    "armPdzIdOrNull": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "string",
+          "pattern": "^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/.+$"
+        }
+      ]
+    },
+    "armVnetIdOrNull": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "string",
+          "pattern": "^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$"
+        }
+      ]
+    },
+    "armRouteTableIdOrNull": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "string",
+          "pattern": "^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\\.Network/routeTables/[^/]+$"
+        }
+      ]
+    },
+    "ipv4OrNull": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "string", "pattern": "^(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:\\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$"}
+      ]
+    },
+    "cidr": {
+      "type": "string",
+      "pattern": "^(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:\\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}/(?:[0-9]|[12][0-9]|3[0-2])$"
+    },
+    "regionBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-(env,region) network block. The closed key set here mirrors terraform/modules/fleet-identity/variables.tf:43-62 (the F19 fix). New keys must land in both surfaces in the same PR.",
+      "required": ["address_space"],
+      "properties": {
+        "address_space": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/cidr"},
+          "description": "VNet CIDR list; /20 or wider (semantic check enforced by fleet-identity)."
+        },
+        "location": {"type": "string", "minLength": 1, "description": "Optional override; defaults to envs.<env>.location for non-mgmt or the region key itself."},
+        "hub_network_resource_id": {"$ref": "#/$defs/armVnetIdOrNull"},
+        "egress_next_hop_ip": {"$ref": "#/$defs/ipv4OrNull"},
+        "create_reverse_peering": {"type": "boolean", "description": "Default true. Set false when the hub forbids spoke-initiated reverse peerings."},
+        "hub_peering": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Nested only. Writing `use_remote_gateways:` at the region top level is rejected by both this schema and the fleet-identity HCL validator (F19).",
+          "properties": {
+            "use_remote_gateways": {"type": "boolean"}
+          }
+        },
+        "dns_servers": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:\\.(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)){3}$"},
+          "description": "VNet-level DNS servers. Empty = Azure-provided (168.63.129.16)."
+        },
+        "subnet_route_table_ids": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/armRouteTableIdOrNull"},
+          "description": "Optional per-subnet UDR overrides; key = subnet name."
+        }
+      }
+    },
+    "aadAppBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["display_name", "owners", "group_claim_name"],
+      "properties": {
+        "display_name": {"type": "string", "minLength": 1},
+        "owners": {
+          "type": "array",
+          "items": {"type": "string", "format": "uuid"},
+          "description": "AAD object IDs of app owners."
+        },
+        "group_claim_name": {"type": "string", "minLength": 1}
+      }
+    },
+    "envBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subscription_id", "aks", "grafana", "action_group"],
+      "properties": {
+        "subscription_id": {"type": "string", "format": "uuid"},
+        "location": {"type": "string", "minLength": 1, "description": "Required for `mgmt` (location for fleet-wide non-cluster resources). Other envs take location from networking.envs.<env>.regions.<region>."},
+        "aks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["admin_groups", "rbac_cluster_admins", "rbac_readers"],
+          "properties": {
+            "admin_groups": {"type": "array", "items": {"type": "string", "format": "uuid"}, "description": "AAD group object IDs. Break-glass (bypass K8s RBAC)."},
+            "rbac_cluster_admins": {"type": "array", "items": {"type": "string", "format": "uuid"}, "description": "AAD group object IDs. Platform SRE (AAD -> K8s RBAC)."},
+            "rbac_readers": {"type": "array", "items": {"type": "string", "format": "uuid"}}
+          }
+        },
+        "grafana": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["admins", "editors"],
+          "properties": {
+            "admins": {"type": "array", "items": {"type": "string", "format": "uuid"}},
+            "editors": {"type": "array", "items": {"type": "string", "format": "uuid"}}
+          }
+        },
+        "action_group": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["receivers"],
+          "properties": {
+            "receivers": {
+              "type": "object",
+              "description": "Per-env receivers (pagerduty / slack / email). Open shape; keys are receiver names."
+            }
+          }
+        }
+      }
+    }
+  }
+}
