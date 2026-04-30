@@ -137,15 +137,43 @@ variable "route_table_resource_id" {
 
 variable "runners_kv_id" {
   description = <<-EOT
-    Full ARM id of the runner-pool Key Vault (`kv-<fleet.name>-runners`),
-    owned by `bootstrap/fleet`. Stage 1 assigns `Key Vault Secrets User`
-    on this KV to the cluster's ESO UAMI so fleet-wide secrets (GH App
-    PEMs, etc.) flow through External Secrets Operator. Published as
-    the `RUNNERS_KV_ID` fleet-scope repo variable (Stage 0 output
-    `runners_kv_id`).
+    DEPRECATED — to be removed in a follow-up commit. The runner-pool
+    KV is no longer consumed by Stage 1 (REFACTOR.md Step 4 retargeted
+    spoke ESO from the runner-pool KV to the mgmt cluster KV via
+    `mgmt_cluster_kv_id`). Retained nullable for one cycle so any
+    `tf-apply.yaml` leg still passing TF_VAR_runners_kv_id does not
+    break; nothing reads its value.
   EOT
   type        = string
-  nullable    = false
+  nullable    = true
+  default     = null
+}
+
+variable "mgmt_cluster_kv_id" {
+  description = <<-EOT
+    Full ARM id of the **management cluster's** Key Vault
+    (`kv-<mgmt.cluster.name>` in `<mgmt.cluster.resource_group>`),
+    owned by the mgmt cluster's Stage 1 (this stage; published as
+    repo variable `MGMT_CLUSTER_KV_ID` after a successful mgmt
+    apply).
+
+    Consumed by **spoke** clusters' Stage 1 to grant the cluster's
+    ESO UAMI `Key Vault Secrets User` on the mgmt cluster KV — that
+    KV holds the Argo OIDC RP secret (`argocd-oidc-client-secret`)
+    and any future fleet-shared mgmt-only secrets that ESO needs to
+    fan into spoke cluster namespaces (PLAN §1 hub-and-spoke; PLAN
+    §8 secrets).
+
+    On the **mgmt cluster's own** Stage 1 plan this variable may be
+    null/empty (or set to the same value as `module.cluster_kv.resource_id`
+    — both are accepted). The `ra_eso_mgmt_cluster_kv` role assignment
+    is gated `count = mgmt_role_cluster ? 0 : 1` since
+    `ra_eso_cluster_kv` already covers the same KV on the mgmt
+    cluster.
+  EOT
+  type        = string
+  nullable    = true
+  default     = null
 }
 
 variable "acr_resource_id" {

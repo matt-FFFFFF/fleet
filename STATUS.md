@@ -58,12 +58,18 @@
 - [~] Networking slice — code complete; not applied.
   - [x] Identity/RBAC follow-up (cluster KV, UAMIs, role assignments,
         managed Prometheus, mgmt-only Kargo OIDC rotation).
-  - [ ] **Refactor**: mgmt cluster Stage 1 absorbs Argo + Kargo AAD
+  - [~] **Refactor**: mgmt cluster Stage 1 absorbs Argo + Kargo AAD
         apps + RP-secret rotation, `uami-kargo-mgmt` + AcrPull, and
         publishes `ARGO_AAD_APP_ID` / `KARGO_AAD_*` /
         `KARGO_MGMT_UAMI_*` / `MGMT_CLUSTER_KV_ID` repo vars.
-  - [ ] **Refactor**: spoke `ra_eso_fleet_kv` →
+        4a-b-c done (AAD apps + RP rotation in `main.aad.argocd.tf` +
+        `main.aad.kargo.tf`; `uami-kargo-mgmt` + AcrPull in
+        `main.identities.kargo.tf`; spoke ESO retargeted to mgmt
+        cluster KV in `ra_eso_mgmt_cluster_kv`); repo-var publishes
+        pending Step 5.
+  - [~] **Refactor**: spoke `ra_eso_fleet_kv` →
         `ra_eso_mgmt_cluster_kv` (consumes `mgmt_cluster_kv_id`).
+        Done (Step 4c).
 - [x] Pod CIDR / service CIDR fleet-wide constants in `modules/aks-cluster`.
 - [x] `validate.yaml` subnet_slot PR-check.
 - [x] `tf-apply.yaml` workflow.
