@@ -246,3 +246,90 @@ jobs:
 
       - name: Diff load.sh vs fleet-identity
         run: .github/scripts/check-naming-parity.sh
+
+  schema-lint:
+    name: schema lint
+    runs-on: ubuntu-24.04
+    # Validates `clusters/_fleet.yaml` against `schemas/fleet.v1.schema.json`
+    # and every cluster.yaml + _defaults.yaml against
+    # `schemas/cluster.v1.schema.json`. Pure structural lint — semantic
+    # validation (uuid resolution, subnet-slot uniqueness, CIDR math)
+    # stays in the bootstrap-stage HCL preconditions. Hosted runner;
+    # no Azure or GitHub-App credentials needed.
+    #
+    # Template/adopter-mode render mirrors the other jobs: in template
+    # mode we render `_fleet.yaml` from the test fixture; adopter repos
+    # assert the committed file exists.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read Terraform version
+        id: tf_version
+        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ steps.tf_version.outputs.version }}
+          terraform_wrapper: false
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Detect template-mode render inputs
+        id: render_check
+        run: |
+          if [[ -d init && -f .github/fixtures/adopter-test.tfvars ]]; then
+            echo "template_mode=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "template_mode=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Render clusters/_fleet.yaml (template-mode only)
+        if: steps.render_check.outputs.template_mode == 'true'
+        working-directory: init
+        run: |
+          terraform init -backend=false
+          terraform apply -auto-approve \
+            -var-file=../.github/fixtures/adopter-test.tfvars \
+            -target=local_file.fleet_yaml
+
+      - name: Verify committed _fleet.yaml (adopter-mode only)
+        if: steps.render_check.outputs.template_mode == 'false'
+        run: test -f clusters/_fleet.yaml
+
+      - name: Schema fixture self-tests
+        run: schemas/tests/test.sh
+
+      - name: Validate live clusters/_fleet.yaml
+        run: |
+          tmp=$(mktemp --suffix=.json)
+          yq -o=json '.' clusters/_fleet.yaml > "$tmp"
+          npx --yes -p ajv-cli@5 -p ajv-formats@3 -- ajv validate \
+            --spec=draft2020 --strict-types=false -c ajv-formats \
+            -s schemas/fleet.v1.schema.json -d "$tmp"
+          rm -f "$tmp"
+
+      - name: Validate every cluster.yaml + _defaults.yaml
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            tmp=$(mktemp --suffix=.json)
+            if ! yq -o=json '.' "$f" > "$tmp" 2>/dev/null; then
+              echo "::error file=$f::yaml parse failed"
+              fail=$((fail + 1))
+              rm -f "$tmp"
+              continue
+            fi
+            if ! npx --yes -p ajv-cli@5 -p ajv-formats@3 -- ajv validate \
+                --spec=draft2020 --strict-types=false -c ajv-formats \
+                -s schemas/cluster.v1.schema.json -d "$tmp" 2>&1; then
+              echo "::error file=$f::failed cluster.v1 schema"
+              fail=$((fail + 1))
+            fi
+            rm -f "$tmp"
+          done < <(find clusters -type f \( -name 'cluster.yaml' -o -name '_defaults.yaml' \))
+          exit "$fail"
