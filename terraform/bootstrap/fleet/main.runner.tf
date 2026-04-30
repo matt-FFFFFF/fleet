@@ -111,6 +111,14 @@ module "runner" {
   postfix  = local.runner_postfix
   location = local.derived.acr_location
 
+  # Container Registry name. Without this override the vendored module
+  # would fall back to `acr${var.postfix}` = `acrfleetrunners` — a
+  # literal string shared by every adopter using this template, which
+  # collides globally on the first apply. Microsoft.ContainerRegistry/
+  # registries names are global, ≤ 50 chars, lowercase alnum.
+  # docs/naming.md "Runner ACR (per-pool)" row.
+  container_registry_name = "acr${local.fleet.name}runners"
+
   resource_group_creation_enabled = false
   resource_group_name             = azapi_resource.rg_fleet_runners.name
 
