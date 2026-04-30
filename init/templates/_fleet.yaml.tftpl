@@ -115,6 +115,14 @@ networking:                                            # Repo-owned VNets + BYO 
   #   create_reverse_peering    Optional, default true. Set false when
   #                             the hub is owned by a team that forbids
   #                             spoke-initiated reverse peerings.
+  #   dns_servers               Optional, default `[]`. VNet-level DNS
+  #                             servers for this env-region's spoke
+  #                             VNet. Empty list means Azure-provided
+  #                             DNS (168.63.129.16). Set to a list of
+  #                             hub-resolver IPs when this env-region
+  #                             requires forwarder-based resolution
+  #                             (on-prem hostnames, Azure Private DNS
+  #                             Resolver inbound endpoints, etc.).
   #
   # Pod CIDR: all clusters share 100.64.0.0/16 (hard-coded in
   # modules/aks-cluster). Non-routable under CNI Overlay + Cilium;
@@ -132,6 +140,7 @@ networking:                                            # Repo-owned VNets + BYO 
           egress_next_hop_ip: null
           # TODO: full ARM resource id of the ${env} hub VNet in ${primary_region}, or null to opt out of hub peering.
           hub_network_resource_id: ${cfg.hub_network_resource_id == null ? "null" : format("\"%s\"", cfg.hub_network_resource_id)}
+          # dns_servers: []  # default = Azure-provided DNS (168.63.129.16). Set to hub-resolver IPs when this env-region requires forwarder-based DNS.
 %{ endfor ~}
 
 github_app:
