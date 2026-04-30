@@ -11,9 +11,10 @@
 #                       children of the env VNet
 #   main.aks.tf       : AKS cluster (via modules/aks-cluster) + per-cluster
 #                       private DNS zone (via modules/cluster-dns)
-#   main.kv.tf        : cluster Key Vault + mgmt-only Kargo OIDC secret
-#                       rotation (azuread_application_password + time_rotating
-#                       + KV secret writes)
+#   main.kv.tf        : cluster Key Vault (also serves as the mgmt-shared
+#                       fleet KV on `cluster.role == "management"`; see
+#                       file header for the bootstrap/fleet two-pass
+#                       contract)
 #   main.identities.tf: per-cluster UAMIs (external-dns, ESO, team-<team>)
 #   main.rbac.tf      : role assignments on every scope this stage touches
 #                       (cluster KV, runners KV, fleet ACR, this AKS resource,

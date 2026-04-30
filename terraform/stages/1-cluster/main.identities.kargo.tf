@@ -1,12 +1,11 @@
 # stages/1-cluster/main.identities.kargo.tf
 #
 # Fleet-wide Kargo UAMI — singleton, attached (via FIC) to the Kargo
-# controller SA on the management cluster. Pre-refactor home:
-# terraform/stages/0-fleet/main.identities.tf. Moved here (REFACTOR.md
-# Step 4) so the mgmt cluster's Stage 1 owns the UAMI alongside the
-# Kargo AAD app (main.aad.kargo.tf) and the Kargo OIDC password
-# rotation (main.kv.tf). FIC binding the UAMI to the Kargo controller
-# SA already lives in Stage 2 mgmt; unchanged.
+# controller SA on the management cluster. Workload identity only;
+# the Kargo AAD application registration itself lives in
+# `bootstrap/fleet` (operator-applied, PLAN §4 Stage -1). FIC binding
+# this UAMI to the Kargo controller SA lives in Stage 2 mgmt
+# (needs the AKS OIDC issuer URL, which is a Stage 1 output).
 #
 # Role assignments on this UAMI:
 #
@@ -16,11 +15,7 @@
 #                                    Stage 1 (main.rbac.tf), unchanged
 #
 # Parent RG: the mgmt cluster's resource group (`local.cluster.resource_group`),
-# resolved by config-loader from `cluster.yaml`. Pre-refactor home was
-# `rg-fleet-shared` (Stage 0 created it there for proximity to the
-# fleet ACR); moving to the mgmt cluster RG keeps lifecycle aligned
-# with the rest of the mgmt cluster's identities (`uami-eso`,
-# `uami-external-dns`, …).
+# resolved by config-loader from `cluster.yaml`.
 
 locals {
   kargo_uami_resource_group_id = "/subscriptions/${local.cluster.subscription_id}/resourceGroups/${local.cluster.resource_group}"

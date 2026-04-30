@@ -18,11 +18,14 @@
 #      fleet-runners Key Vault Secrets User on the runners KV.
 #      Subscription-scope assignments for fleet-meta are deferred to
 #      bootstrap/environment (one per env subscription).
-#   6. (no Microsoft Graph grants from this stage; the single grant the
-#      fleet needs — `Application.ReadWrite.OwnedBy` on `uami-fleet-mgmt`
-#      for Stage 1 mgmt-cluster Argo + Kargo AAD app management — is
-#      issued manually by the operator after `bootstrap/environment`
-#      env=mgmt bootstraps the UAMI; see `docs/adoption.md §5.3`).
+#   6. Argo + Kargo AAD app registrations + service principals + 2-year
+#      RP `client_secret` values (operator-applied via interactive
+#      `az login`; no UAMI Graph grant needed). On the second-pass
+#      apply (with `var.mgmt_cluster_kv_id` set from the
+#      `MGMT_CLUSTER_KV_ID` repo var published by Stage 1 mgmt), the
+#      `client_secret` values are written into the mgmt cluster KV.
+#      Repo-level GH Actions vars `ARGO_AAD_APP_ID`, `KARGO_AAD_APP_ID`,
+#      `KARGO_AAD_APPLICATION_OBJECT_ID` published. See main.aad.tf.
 #   7. Fleet GitHub repo + branch protection; team-repo-template repo.
 #   8. fleet-meta GitHub environment with env variables, including
 #      JSON-encoded MGMT_VNET_RESOURCE_IDS / MGMT_PE_FLEET_SUBNET_IDS /

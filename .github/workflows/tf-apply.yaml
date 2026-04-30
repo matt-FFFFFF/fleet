@@ -273,9 +273,6 @@ jobs:
             fi
           }
           upsert MGMT_CLUSTER_KV_ID              "$(extract mgmt_cluster_keyvault_id)"
-          upsert ARGO_AAD_APP_ID                 "$(extract argocd_aad_application_id)"
-          upsert KARGO_AAD_APP_ID                "$(extract kargo_aad_application_id)"
-          upsert KARGO_AAD_APPLICATION_OBJECT_ID "$(extract kargo_aad_application_object_id)"
           upsert KARGO_MGMT_UAMI_PRINCIPAL_ID    "$(extract kargo_mgmt_uami_principal_id)"
           upsert KARGO_MGMT_UAMI_CLIENT_ID       "$(extract kargo_mgmt_uami_client_id)"
           upsert MGMT_AKS_OIDC_ISSUER_URL        "$(extract aks_oidc_issuer_url)"

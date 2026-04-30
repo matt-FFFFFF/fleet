@@ -46,6 +46,13 @@
         environment + `uami-fleet-stage0` + Graph
         `Application.ReadWrite.OwnedBy` grant; `azuread` provider
         removed.
+  - [x] **Refactor (Step 4 revert)**: own Argo + Kargo AAD apps +
+        SPs + 2-year RP `client_secret` values; publish
+        `ARGO_AAD_APP_ID` / `KARGO_AAD_APP_ID` /
+        `KARGO_AAD_APPLICATION_OBJECT_ID` repo-level vars; gate
+        mgmt-cluster KV writes on `var.mgmt_cluster_kv_id` (two-pass
+        apply per docs/adoption.md §5.3). `azuread` provider
+        re-added.
 - [~] `bootstrap/environment/` — code complete; not applied.
   - [~] **Refactor**: env=mgmt absorbs fleet ACR + PE +
         `length(mgmt_clusters) == 1` precondition; publishes
@@ -59,13 +66,14 @@
 
 - [~] Networking slice — code complete; not applied.
   - [x] Identity/RBAC follow-up (cluster KV, UAMIs, role assignments,
-        managed Prometheus, mgmt-only Kargo OIDC rotation).
-  - [x] **Refactor**: mgmt cluster Stage 1 absorbs Argo + Kargo AAD
-        apps + RP-secret rotation, `uami-kargo-mgmt` + AcrPull, and
-        publishes `ARGO_AAD_APP_ID` / `KARGO_AAD_*` /
-        `KARGO_MGMT_UAMI_*` / `MGMT_CLUSTER_KV_ID` / `MGMT_AKS_*`
-        repo vars (via `tf-apply.yaml` post-apply step gated on
-        `matrix.cluster.role == 'management'`).
+        managed Prometheus).
+  - [x] **Refactor**: mgmt cluster Stage 1 owns `uami-kargo-mgmt` +
+        AcrPull and publishes `MGMT_CLUSTER_KV_ID` / `KARGO_MGMT_UAMI_*` /
+        `MGMT_AKS_*` repo vars (via `tf-apply.yaml` post-apply step
+        gated on `matrix.cluster.role == 'management'`). Argo + Kargo
+        AAD apps + RP secrets moved to `bootstrap/fleet` (operator-
+        applied; PLAN §4 Stage -1) — Stage 1 mgmt no longer touches
+        Microsoft Graph.
   - [~] **Refactor**: spoke `ra_eso_fleet_kv` →
         `ra_eso_mgmt_cluster_kv` (consumes `mgmt_cluster_kv_id`).
         Done (Step 4c).

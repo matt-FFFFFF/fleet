@@ -22,11 +22,11 @@ their own stage:
 | Stage 0 today                                         | Real owner |
 |-------------------------------------------------------|------------|
 | Fleet ACR + PE + DNS zone group                       | `bootstrap/environment` env=mgmt (mgmt-tenanted infra; mgmt is now a fleet-wide singleton) |
-| Argo AAD app + service principal + RP secret rotation | Stage 1 mgmt (Argo is mgmt-only per PLAN §1 hub-and-spoke) |
-| Kargo AAD app + service principal                     | Stage 1 mgmt (mgmt-only) |
-| `uami-kargo-mgmt` + AcrPull on fleet ACR              | Stage 1 mgmt (mgmt-only; FIC already lives in Stage 2 mgmt) |
+| Argo AAD app + service principal + RP secret          | `bootstrap/fleet` (operator-owned; least Stage 1 blast radius) |
+| Kargo AAD app + service principal + RP secret         | `bootstrap/fleet` (same) |
+| `uami-kargo-mgmt` + AcrPull on fleet ACR              | Stage 1 mgmt (workload identity, mgmt-only; FIC already lives in Stage 2 mgmt) |
 | KV Secrets Officer for stage0 identity                | Deleted (no Stage 0 identity exists post-refactor) |
-| `argocd-oidc-client-secret` rotation target           | Mgmt cluster KV (already exists, Stage 1 mgmt) |
+| `argocd-oidc-client-secret` rotation target           | Mgmt cluster KV — written by `bootstrap/fleet` once mgmt KV exists |
 | `mgmt_clusters` enumeration / validation              | `bootstrap/environment` env=mgmt (precondition `length == 1`) |
 
 Independently: the **fleet KV** was sized "fleet-wide" but actually holds
@@ -55,24 +55,36 @@ runner-pool's KV. Rename to reflect ownership.
    (`ACR_RESOURCE_ID`, `ACR_NAME`, `ACR_LOGIN_SERVER`) move from Stage
    0 outputs → `bootstrap/environment` env=mgmt repo-level vars.
 
-4. **Argo + Kargo AAD apps move to Stage 1 mgmt.** Gated on
-   `cluster.role == "management"`. Repo-var publishes
-   (`ARGO_AAD_APP_ID`, `KARGO_AAD_APP_ID`, `KARGO_AAD_APPLICATION_OBJECT_ID`,
-   `KARGO_MGMT_UAMI_PRINCIPAL_ID`, `KARGO_MGMT_UAMI_CLIENT_ID`) move
-   from Stage 0 → Stage 1 mgmt repo-level vars (Stage 1 already publishes
-   `MGMT_AKS_*` repo vars; this is an extension of that pattern).
+4. **Argo + Kargo AAD apps move to `bootstrap/fleet`** (NOT Stage 1
+   mgmt). Operator-applied locally via `az login` with Global Admin
+   credentials, so no Graph permission grants on any UAMI are
+   required. Apps are fleet singletons with stable lifecycle; this
+   keeps them outside per-cluster apply blast radius (Stage 1 mgmt
+   has no `azuread_*` resources). Long-lived (2-year) RP
+   `client_secret` per app, written into the mgmt cluster KV once
+   it exists. Repo-var publishes (`ARGO_AAD_APP_ID`,
+   `KARGO_AAD_APP_ID`, `KARGO_AAD_APPLICATION_OBJECT_ID`) move from
+   Stage 0 → `bootstrap/fleet` repo-level vars (via the existing
+   `github` provider). Stage 1 mgmt continues to publish
+   `MGMT_CLUSTER_KV_ID`, `KARGO_MGMT_UAMI_*`, `MGMT_AKS_*` repo vars
+   as those depend on Stage 1-owned resources.
 
 5. **`uami-kargo-mgmt` moves to Stage 1 mgmt.** AcrPull on fleet ACR
    stays — same scope, different stage. FIC binding the UAMI to the
    Kargo controller SA already lives in Stage 2 mgmt; unchanged.
 
-6. **Argo OIDC RP secret rotation moves to Stage 1 mgmt.** Written to
-   the **mgmt cluster KV** (already created by Stage 1 mgmt) under the
-   same secret name. ESO on every cluster (mgmt + spokes) reads it
-   from the mgmt cluster KV. ESO UAMI's KV-Secrets-User grant follows
-   the secret: spoke Stage 1's `ra_eso_fleet_kv` becomes
-   `ra_eso_mgmt_cluster_kv`, scoped to the mgmt cluster KV's resource
-   id (published as a Stage 1 mgmt repo var).
+6. **Argo + Kargo OIDC RP secrets written into the mgmt cluster KV
+   by `bootstrap/fleet`.** `bootstrap/fleet`'s `azapi_resource`s
+   target the mgmt cluster KV via `var.mgmt_cluster_kv_id`
+   (defaults `null`; `count` gates the writes when null). First
+   `bootstrap/fleet` apply creates Apps + passwords but skips the KV
+   writes. Stage 1 mgmt apply creates the mgmt KV and publishes
+   `MGMT_CLUSTER_KV_ID` repo var. Operator re-runs `bootstrap/fleet`
+   apply with `MGMT_CLUSTER_KV_ID` populated; secrets land. ESO on
+   every cluster (mgmt + spokes) reads them from the mgmt cluster
+   KV — unchanged. Spoke Stage 1's `ra_eso_fleet_kv` becomes
+   `ra_eso_mgmt_cluster_kv`, scoped to the mgmt cluster KV's
+   resource id.
 
 7. **Fleet KV renamed → runner-pool KV; reparented to
    `rg-fleet-runners`.** Naming derivation key
@@ -88,9 +100,13 @@ runner-pool's KV. Rename to reflect ownership.
 8. **`bootstrap/environment` `fleet_kv_secrets_user` env grant deleted.**
    No more fleet KV; per-env UAMIs don't read from the runner-pool KV.
 
-9. **`docs/adoption.md` ordering simplifies.** §5.3's manual Graph grant
-   recipe still applies (operator runs `az rest` once after env=mgmt to
-   give `uami-fleet-mgmt` Graph perms). Stage 0 references removed.
+9. **`docs/adoption.md` ordering simplifies.** Stage 0 references
+   removed. The previously documented §5.3 manual Graph grant on
+   `uami-fleet-mgmt` (`Application.ReadWrite.OwnedBy`) is also
+   removed — no UAMI carries Graph perms post-refactor; AAD app
+   lifecycle is operator-driven from `bootstrap/fleet`. Two-pass
+   `bootstrap/fleet` apply documented (first pass before mgmt
+   cluster, second pass after mgmt KV exists).
 
 ## Renames
 
@@ -169,35 +185,62 @@ restarting from zero), so this is a clean source-only edit:
   PE lives in mgmt's PE subnet, same as today.
 - DNS zone group unchanged (`privatelink.vaultcore.azure.net`).
 
-### Step 4 — Move Argo / Kargo AAD apps to Stage 1 mgmt
+### Step 4 — Move Argo / Kargo AAD apps to `bootstrap/fleet`
 
-- `terraform/stages/1-cluster/main.aad.argocd.tf` (new, gated
-  `count = local.mgmt_role_cluster ? 1 : 0`): Argo AAD app + SP +
-  `time_rotating` + `azuread_application_password` + write to mgmt
-  cluster KV.
-- `terraform/stages/1-cluster/main.aad.kargo.tf` (new, gated likewise):
-  Kargo AAD app + SP. Kargo `azuread_application_password` already
-  lives in `stages/1-cluster/main.kv.tf` — keep there, but its
-  `application_id` reference flips from
-  `var.kargo_aad_application_object_id` to the local resource id.
-- `terraform/stages/1-cluster/main.identities.kargo.tf` (new, gated):
-  `uami-kargo-mgmt` + AcrPull on fleet ACR.
-- `redirect_uris` derive from the local cluster (just one mgmt
-  cluster per fleet, by step 0's hard limit). The `for_each` over
-  `mgmt_clusters` collapses to a singleton.
-- Owner-principal lookups: `stage0_uami` data source disappears
-  entirely; `mgmt_uami` is the Stage 1 executor itself
-  (`data.azuread_client_config.current.object_id`), so no data-source
-  lookup needed.
-- Repo-var publishes via `github_actions_variable`:
+NOTE: this step replaces an earlier draft of REFACTOR.md that
+co-located the apps in Stage 1 mgmt. That draft was reverted because
+it forced Stage 1's `uami-fleet-mgmt` to carry Microsoft Graph
+`Application.ReadWrite.OwnedBy` and authored AAD apps on every cluster
+PR plan — both unwanted (operator-driven AAD lifecycle, narrow blast
+radius). Step 4 below is the replacement direction.
+
+- `terraform/bootstrap/fleet/main.aad.tf` (new):
+  - `azuread_application.argocd` + `azuread_service_principal.argocd`
+    — single-tenant, mgmt-cluster-local redirect URI derived from
+    `_fleet.yaml.dns.fleet_root` + the mgmt cluster's
+    `cluster.{name,region,env}` (resolved by reading `mgmt_clusters`
+    out of `_fleet.yaml`'s adjacent `clusters/` tree — same pattern
+    as `bootstrap/environment` env=mgmt).
+  - `azuread_application_password.argocd` — `end_date` set to
+    `now + 2y`. No `time_rotating`. Re-rolled by operator (taint or
+    new resource) when needed.
+  - `azuread_application.kargo` + `azuread_service_principal.kargo`
+    + `azuread_application_password.kargo` — same shape.
+  - `azapi_resource.argocd_oidc_secret` writing
+    `argocd-oidc-client-secret` to mgmt cluster KV; gated
+    `count = var.mgmt_cluster_kv_id != null ? 1 : 0`.
+  - `azapi_resource.kargo_oidc_secret` writing
+    `kargo-oidc-client-secret` to mgmt cluster KV; same gate.
+  - `github_actions_variable` repo-level vars: `ARGO_AAD_APP_ID`,
+    `KARGO_AAD_APP_ID`, `KARGO_AAD_APPLICATION_OBJECT_ID`.
+- `terraform/bootstrap/fleet/variables.tf`: add `var.mgmt_cluster_kv_id`
+  (default `null`).
+- `terraform/bootstrap/fleet/providers.tf`: re-introduce
+  `hashicorp/azuread ~> 3.0` provider. Operator-context auth
+  (`use_cli = true`).
+- `terraform/stages/1-cluster/main.aad.argocd.tf`: DELETE.
+- `terraform/stages/1-cluster/main.aad.kargo.tf`: DELETE.
+- `terraform/stages/1-cluster/main.kv.tf`: strip the Kargo RP-secret
+  rotation block (`time_rotating.kargo_oidc_secret`,
+  `azuread_application_password.kargo_oidc_secret`,
+  `azapi_resource.kargo_oidc_secret`). The cluster KV module call
+  remains unchanged.
+- `terraform/stages/1-cluster/providers.tf`: drop `azuread` +
+  `time` providers (no longer used by Stage 1).
+- `terraform/stages/1-cluster/main.identities.kargo.tf` (uami-kargo-mgmt
+  + AcrPull): UNCHANGED — workload identity, distinct from the AAD
+  app, stays in Stage 1 mgmt.
+- Spoke Stage 1's `ra_eso_mgmt_cluster_kv` (REFACTOR.md Step 4c earlier
+  commit): UNCHANGED — mgmt cluster KV is still the destination, only
+  the writer changes.
+- `terraform/stages/1-cluster/outputs.tf`: drop
+  `argocd_aad_application_id`, `kargo_aad_application_id`,
+  `kargo_aad_application_object_id`. Keep `kargo_mgmt_uami_*` and
+  `mgmt_cluster_keyvault_id` (Stage 1 mgmt still owns those).
+- `.github/workflows/tf-apply.yaml` mgmt-publish step: drop
   `ARGO_AAD_APP_ID`, `KARGO_AAD_APP_ID`,
-  `KARGO_AAD_APPLICATION_OBJECT_ID`,
-  `KARGO_MGMT_UAMI_PRINCIPAL_ID`, `KARGO_MGMT_UAMI_CLIENT_ID`.
-- Move the `argocd-oidc-client-secret` rotation target → mgmt cluster
-  KV. Publish `MGMT_CLUSTER_KV_ID` as a Stage 1 mgmt repo var so
-  spoke Stage 1s can grant ESO UAMI `Key Vault Secrets User` on it.
-- Spoke Stage 1's `ra_eso_fleet_kv` → `ra_eso_mgmt_cluster_kv`,
-  consuming `var.mgmt_cluster_kv_id` (new tfvar).
+  `KARGO_AAD_APPLICATION_OBJECT_ID` upserts (now published by
+  bootstrap/fleet via Terraform).
 
 ### Step 5 — Delete Stage 0
 
@@ -251,18 +294,25 @@ Single PR against adopter `main`. Body documents the one-time fleet KV
 recreate (step 3) for in-flight adopters.
 
 After merge:
-1. `terraform -chdir=terraform/bootstrap/fleet apply` (creates
-   runner-pool KV at new location; `init-gh-apps.sh --keep` re-seeds
-   PEMs).
-2. `env-bootstrap.yaml env=mgmt apply` (creates fleet ACR + grants env
-   UAMI ACR roles; publishes ACR repo vars).
-3. Manual Graph grant on `uami-fleet-mgmt` (`docs/adoption.md §5.3`).
-4. `tf-apply.yaml` cluster=mgmt (creates mgmt cluster + Argo/Kargo
-   AAD apps + uami-kargo-mgmt; publishes AAD/UAMI repo vars).
-5. `env-bootstrap.yaml env=nonprod apply` (env UAMIs get AcrPull on
-   fleet ACR — now exists).
-6. `env-bootstrap.yaml env=prod apply`.
-7. `tf-apply.yaml` cluster=nonprod/prod spokes.
+1. `terraform -chdir=terraform/bootstrap/fleet apply` — first pass.
+   Creates runner-pool KV at new location; creates Argo + Kargo AAD
+   apps + 2-year passwords; publishes
+   `ARGO_AAD_APP_ID`/`KARGO_AAD_APP_ID`/`KARGO_AAD_APPLICATION_OBJECT_ID`
+   repo vars. Mgmt cluster KV writes are skipped (KV doesn't exist
+   yet).
+2. `init-gh-apps.sh --keep` re-seeds App PEMs into the new runners KV.
+3. `env-bootstrap.yaml env=mgmt apply` — creates fleet ACR + grants
+   env UAMI ACR roles; publishes `ACR_*` repo vars.
+4. `tf-apply.yaml` cluster=mgmt — creates mgmt cluster + mgmt KV +
+   uami-kargo-mgmt; publishes `MGMT_CLUSTER_KV_ID`,
+   `KARGO_MGMT_UAMI_*`, `MGMT_AKS_*` repo vars.
+5. `terraform -chdir=terraform/bootstrap/fleet apply` — second pass.
+   `MGMT_CLUSTER_KV_ID` now resolves; Argo + Kargo OIDC RP secrets
+   land in mgmt cluster KV. Idempotent thereafter.
+6. `env-bootstrap.yaml env=nonprod apply` — env UAMIs get AcrPull on
+   fleet ACR.
+7. `env-bootstrap.yaml env=prod apply`.
+8. `tf-apply.yaml` cluster=nonprod/prod spokes.
 
 ## Risks
 
@@ -274,10 +324,13 @@ After merge:
    walkthrough) this is fine — the existing KV holds two PEMs both
    trivially re-seedable via `init-gh-apps.sh --keep`.
 
-3. **Stage 1 mgmt now creates AAD apps on first apply.** The mgmt
-   Stage 1 executor is `uami-fleet-mgmt`, which already gets the
-   manual Graph `Application.ReadWrite.OwnedBy` grant per §5.3. No
-   new permissions required.
+3. **Stage 1 mgmt creates no AAD apps.** Step 4's Stage-1-mgmt
+   draft was reverted; AAD apps now live in `bootstrap/fleet` and
+   are operator-applied. Stage 1 mgmt holds no `azuread_*`
+   resources and requires no Graph permission grants. The previously
+   documented manual `Application.ReadWrite.OwnedBy` grant on
+   `uami-fleet-mgmt` (`docs/adoption.md §5.3`) is no longer
+   required.
 
 4. **Spoke Stage 1 `var.mgmt_cluster_kv_id` is required.** First-time
    spoke applies must wait for mgmt Stage 1 to publish the repo var.

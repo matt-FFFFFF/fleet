@@ -242,13 +242,13 @@ GitHub items must be arranged out-of-band by the adopter org.
 - `az login` session in the tenant identified by
   `_fleet.yaml.fleet.tenant_id`. Both providers run with
   `use_cli = true`; no service-principal env vars are read.
-- Tenant role: **Privileged Role Administrator** (or Global
-  Administrator) — required to consent to the Microsoft Graph
-  app-role assignment that grants `fleet-stage0`
-  `Application.ReadWrite.OwnedBy` (issued automatically by
-  `bootstrap/fleet`), AND to manually issue the matching grant on
-  `uami-fleet-mgmt` after `bootstrap/environment` env=mgmt runs
-  (see §5.3).
+- Tenant role: **Global Administrator** or **Cloud Application
+  Administrator** — required to create the Argo / Kargo AAD
+  application registrations + service principals via the `azuread`
+  provider in `bootstrap/fleet`. No standing Microsoft Graph grant
+  is issued on any UAMI; AAD-app lifecycle is operator-owned and
+  re-runs of `bootstrap/fleet` (for re-rolls or KV writes) require
+  the same role.
 - Subscription role on `_fleet.yaml.acr.subscription_id`:
   **Owner** (or Contributor + User Access Administrator).
 - Resource provider registrations on the shared subscription:
@@ -414,57 +414,55 @@ No manual `terraform import` step is required.
 
 See `PLAN.md` §4 Stage -1 for the full bootstrap sequence.
 
-### 5.3 Post-`bootstrap/environment` (env=mgmt): manual Graph grant
+### 5.3 Two-pass `bootstrap/fleet` apply (Argo + Kargo OIDC RP secrets)
 
-`uami-fleet-mgmt` (created by `bootstrap/environment` when
-`env=mgmt`) needs Microsoft Graph `Application.ReadWrite.OwnedBy`
-so that **Stage 1 on the mgmt cluster** — running under that UAMI
-in CI — can mutate the `argocd-fleet` and `kargo-fleet` AAD apps it
-co-owns (rotating `azuread_application_password` for the Kargo
-OIDC client, writing future mgmt-side Argo/Kargo federated
-credentials, etc.). Stage 0 itself runs under `uami-fleet-stage0`
-and already holds the equivalent grant via `bootstrap/fleet`; this
-section is **only** about the mgmt-side UAMI. The grant is **not**
-issued from Terraform: doing so would require `bootstrap/fleet`
-(or `bootstrap/environment`) to hold
-`AppRoleAssignment.ReadWrite.All` long-term, which is exactly the
-blast radius we are trying to avoid (PLAN §13 Phase 2 / R1).
+`bootstrap/fleet` owns the Argo + Kargo AAD applications + service
+principals + their long-lived (2-year) RP `client_secret` values
+(used by Argo CD / Dex / Kargo for human OIDC SSO login). The
+secrets must land in the **mgmt cluster Key Vault**, which does
+not exist until Stage 1 mgmt has run. The resolution is a
+two-pass apply pattern:
 
-Instead, the operator (still holding **Privileged Role
-Administrator** from §5.1) issues the grant **once**, by hand, with
-`az`:
+1. **First pass — `bootstrap/fleet apply`**:
+   - Argo + Kargo AAD apps + SPs + 2-year passwords created.
+   - `ARGO_AAD_APP_ID`, `KARGO_AAD_APP_ID`, and
+     `KARGO_AAD_APPLICATION_OBJECT_ID` published as repo-level
+     GitHub Actions variables.
+   - KV writes are skipped because `var.mgmt_cluster_kv_id` is
+     null (default).
 
-```sh
-# Microsoft Graph service principal (well-known appId):
-GRAPH_SP_OBJECT_ID="$(az ad sp show \
-  --id 00000003-0000-0000-c000-000000000000 \
-  --query id -o tsv)"
+2. Run `init-gh-apps.sh --keep` if needed to seed the GH App PEMs
+   into the runners KV (skipped if already done).
 
-# uami-fleet-mgmt principalId (from bootstrap/environment env=mgmt
-# state). `env_uami` is an object output, so use `-json`:
-MGMT_UAMI_PRINCIPAL_ID="$(terraform -chdir=terraform/bootstrap/environment \
-  output -json env_uami | jq -r '.principal_id')"
+3. **`env-bootstrap.yaml env=mgmt apply`** — creates the fleet ACR
+   and publishes `ACR_*` repo vars.
 
-# Application.ReadWrite.OwnedBy app-role id (well-known on Graph):
-APP_RW_OWNED_BY_ROLE_ID="18a4783c-866b-4cc7-a460-3d5e5662c884"
+4. **`tf-apply.yaml cluster=<mgmt>`** — Stage 1 mgmt creates the
+   mgmt cluster and the mgmt cluster KV; publishes
+   `MGMT_CLUSTER_KV_ID`, `KARGO_MGMT_UAMI_*`, and `MGMT_AKS_*`
+   repo vars.
 
-az rest \
-  --method POST \
-  --uri "https://graph.microsoft.com/v1.0/servicePrincipals/${GRAPH_SP_OBJECT_ID}/appRoleAssignedTo" \
-  --headers "Content-Type=application/json" \
-  --body "$(jq -nc \
-    --arg pid "${MGMT_UAMI_PRINCIPAL_ID}" \
-    --arg rid "${APP_RW_OWNED_BY_ROLE_ID}" \
-    --arg gid "${GRAPH_SP_OBJECT_ID}" \
-    '{principalId: $pid, resourceId: $gid, appRoleId: $rid}')"
-```
+5. **Second pass — `bootstrap/fleet apply`** with
+   `TF_VAR_mgmt_cluster_kv_id=<value of MGMT_CLUSTER_KV_ID>`:
+   - Operator self-grants `Key Vault Secrets Officer` on the
+     mgmt cluster KV (in-plan).
+   - Argo + Kargo OIDC RP `client_secret` values written to the
+     mgmt cluster KV via data-plane PUT.
+   - ESO on every cluster (mgmt + spokes) reads them from this KV
+     into the `argocd` / `kargo` namespaces.
 
-The grant persists for the life of the UAMI. Re-running
-`bootstrap/environment` env=mgmt does **not** revoke it; deleting
-the UAMI does. If the grant is missing, the mgmt cluster's Stage 1
-operations that run under `uami-fleet-mgmt` can fail on Microsoft
-Graph-backed resources (for example `azuread_application_password`
-rotation on the Kargo AAD app) with `Authorization_RequestDenied`.
+After step 5 the apply graph is idempotent. Subsequent re-runs of
+`bootstrap/fleet` (e.g. to re-roll a secret by bumping
+`var.argocd_rp_secret_version` or `var.kargo_rp_secret_version`)
+require only that `var.mgmt_cluster_kv_id` remains set.
+
+The previous design (Stage 1 mgmt owning the AAD apps + a manual
+Microsoft Graph `Application.ReadWrite.OwnedBy` grant on
+`uami-fleet-mgmt`) has been retired. No standing Graph grant is
+issued on any UAMI; AAD-app lifecycle is operator-owned. Re-runs
+of `bootstrap/fleet` require the operator to hold
+**Cloud Application Administrator** or **Global Administrator**
+in the tenant — the same role used at first apply.
 
 ## Re-running `init-fleet.sh`
 
