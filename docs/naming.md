@@ -60,7 +60,6 @@ from the cluster.yaml itself (required, immutable — see PLAN §3.4).
 | Env DNS RG                | `dns.resource_group_pattern` with `{env}` substituted (default `rg-dns-<env>`) | |
 | Env observability RG      | `rg-obs-<env>`                                                        |                      |
 | Cluster RG                | declared in `cluster.yaml` (`cluster.resource_group`)                 |                      |
-| UAMI — fleet stage0       | `uami-fleet-stage0`                                                   |                      |
 | UAMI — fleet meta         | `uami-fleet-meta`                                                     |                      |
 | UAMI — fleet runners      | `uami-fleet-runners`                                                  |                      |
 | UAMI — per-env CI         | `uami-fleet-<env>`                                                    |                      |

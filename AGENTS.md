@@ -7,7 +7,7 @@ full before proposing or writing any change.
 
 - **`PLAN.md`** is **the** source of truth for intent, design, and
   deviations. It answers "what should be." Sections are stable and
-  numbered; cite them when explaining work (e.g. "per §4 Stage 0").
+  numbered; cite them when explaining work (e.g. "per §4 Stage 1").
   When an implementation deviates from PLAN, update the plan.
   Do not provide history or rationale in PLAN; it is a design document, not a journal.
 - **`STATUS.md`** is a **tracking aid** for the plan — a one-line-per-
@@ -83,7 +83,7 @@ clusters/
   {mgmt,nonprod,prod}/    per-env scopes; cluster.yaml under <region>/<name>/
 terraform/
   bootstrap/{fleet,environment,team}/  Stage -1
-  stages/{0-fleet,1-cluster,2-kubernetes}/  Stage 0/1/2
+  stages/{1-cluster,2-kubernetes}/     Stage 1/2
   modules/                             reusable modules
   config-loader/load.sh                yq deep-merge → tfvars.json
 docs/

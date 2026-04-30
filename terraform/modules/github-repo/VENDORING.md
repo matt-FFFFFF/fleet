@@ -45,8 +45,8 @@ vendored copy.
 - `identity.fic_name` — optional override for the federated identity
   credential resource name. When null or empty, falls back to the upstream
   default (`var.environment`). Required so the existing fleet FIC names
-  (`gh-fleet-stage0`, `gh-fleet-meta`, `gh-fleet-<env>`) survive the
-  vendoring refactor without a state rename.
+  (`gh-fleet-meta`, `gh-fleet-<env>`) survive the vendoring refactor
+  without a state rename.
 - `secrets` map + `github_actions_environment_secret` resource +
   `secrets` output — **commented out** pending provider migration off
   `plaintext_value`. The upstream "create with `REPLACE_ME` placeholder
@@ -69,8 +69,8 @@ Rewritten to the repo-wide convention (pessimistic-minor, per AGENTS.md §6):
 ## Callers inside this repo
 
 - `terraform/bootstrap/fleet/main.github.tf` — fleet monorepo +
-  team-template repo + `fleet-stage0` / `fleet-meta` environments (UAMIs,
-  FICs, role assignments, main-branch ruleset).
+  team-template repo + `fleet-meta` environment (UAMIs, FICs,
+  role assignments, main-branch ruleset).
 - `terraform/bootstrap/environment/main.github.tf` — per-env `fleet-<env>`
   environment (UAMI, FIC, env-scoped role assignments). Calls
   `modules/environment/` directly since the fleet repo is already owned by

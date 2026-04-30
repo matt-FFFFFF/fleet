@@ -46,12 +46,15 @@
 #   - Self-deletes (only on a fully successful run).
 #
 # The full GitHub App payload (IDs, client IDs, client secrets, PEMs,
-# webhook secrets, and other App metadata for all three Apps) is
-# persisted in .gh-apps.state.json. Stage 0's eventual consumer
-# (PLAN §16.4) will derive its own tfvars from state at that time; no
-# Stage-0 tfvars file is emitted today.
+# webhook secrets, and other App metadata for both Apps) is persisted
+# in .gh-apps.state.json. The only consumers today are (a) the narrow
+# `bootstrap/fleet` overlay written below, and (b) the GitHub App
+# credentials that env-bootstrap and team-bootstrap workflows read at
+# runtime via the `fleet-meta` App's installation. Adopters who need
+# additional fields can `jq` them out of the state file; the file is
+# the source of truth for App metadata.
 #
-# Idempotent: if .gh-apps.state.json already records all three Apps, the
+# Idempotent: if .gh-apps.state.json already records both Apps, the
 # script re-emits the tfvars overlay + _fleet.yaml patch and exits 0
 # without prompting. The tfvars file is overwritten in place on each run.
 #
@@ -127,8 +130,8 @@ state_file="$repo_root/.gh-apps.state.json"
 # fleet_runners_app_pem_version + fleet_meta_app_pem +
 # fleet_meta_app_pem_version) so `terraform apply` auto-loads it
 # without `-var-file` and without "undeclared variable" warnings.
-# Stage 0's full-payload tfvars file is not emitted today; PLAN §16.4
-# will derive it from state when the matching variable blocks land.
+# The full App payload (other client secrets, webhook secrets, etc.)
+# stays in .gh-apps.state.json; no other tfvars file is emitted.
 tfvars_file="$repo_root/terraform/bootstrap/fleet/.gh-apps.auto.tfvars"
 
 [[ -f "$fleet_yaml" ]] || die "clusters/_fleet.yaml not found — run ./init-fleet.sh first"
@@ -500,7 +503,7 @@ install_app() {
   # Note: installation_id is owner-scoped; it does not by itself guarantee
   # that $github_org/$github_repo is included in the install's repo
   # selection (which the operator can change at any time via the Apps UI).
-  # The subsequent bootstrap/Stage-0 apply will surface any access gap.
+  # The subsequent bootstrap apply will surface any access gap.
   existing_install=$(state_get "$slug" "installation_id")
   if [[ -n "$existing_install" ]]; then
     info "✓ $slug installation already recorded (id=$existing_install)"
@@ -587,12 +590,12 @@ done
 # auto-loads it without an explicit `-var-file` flag and without
 # "undeclared variable" warnings.
 #
-# Stage 0's eventual full-payload tfvars (PLAN §16.4) is intentionally not
-# emitted today — Stage 0 has no matching `variable` blocks declared, and
-# any file shape we picked now would need revisiting once §16.4 lands.
-# The full payload (IDs / client IDs / PEMs / webhook secrets for all three
-# Apps) lives in .gh-apps.state.json; §16.4 will derive its own tfvars
-# from state at that time.
+# The full App payload (IDs / client IDs / PEMs / webhook secrets for both
+# Apps) lives in .gh-apps.state.json. No additional tfvars file is
+# emitted: the only Terraform consumer of GitHub App material is
+# `bootstrap/fleet` (this overlay), and the workflow-level consumers
+# (`fleet-meta`-driven env/team bootstrap) read App credentials at
+# runtime, not via tfvars.
 #
 # `fleet_runners_app_pem_version` is an opaque rotation token. On first
 # emit it is `"0"`. On re-runs the writer reads the existing narrow
@@ -856,7 +859,7 @@ PY
 # ---- self-cleanup -----------------------------------------------------------
 
 echo ""
-echo "✔ All three GitHub Apps created, installed, and recorded."
+echo "✔ Both GitHub Apps created, installed, and recorded."
 echo "  - State:   $state_file (mode 0600, gitignored)"
 echo "  - Tfvars:  $tfvars_file (mode 0600, gitignored)"
 echo "  - YAML:    $fleet_yaml patched with fleet-runners IDs"

@@ -175,8 +175,8 @@ jobs:
           TFVARS: ${{ steps.tfvars.outputs.file }}
           # Fleet-scope repo variables (published by bootstrap/fleet,
           # bootstrap/environment env=mgmt, and Stage 1 mgmt apply).
-          # Post-REFACTOR.md Step 4: RUNNERS_KV_ID is no longer consumed
-          # by Stage 1 — spoke ESO targets MGMT_CLUSTER_KV_ID instead.
+          # RUNNERS_KV_ID is no longer consumed by Stage 1 — spoke ESO
+          # targets MGMT_CLUSTER_KV_ID instead.
           TF_VAR_acr_resource_id:                   ${{ vars.ACR_RESOURCE_ID }}
           TF_VAR_kargo_mgmt_uami_principal_id:      ${{ vars.KARGO_MGMT_UAMI_PRINCIPAL_ID }}
           TF_VAR_mgmt_cluster_kv_id:                ${{ vars.MGMT_CLUSTER_KV_ID }}

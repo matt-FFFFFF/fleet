@@ -40,17 +40,15 @@ runners_keyvault:                                      # RUNNERS KV (one; bootst
   resource_group: rg-fleet-shared
   location: ${primary_region}
   # Created by Stage -1 (bootstrap/fleet) so the runner pool's KV-reference
-  # for the GitHub App PEM resolves at deploy time. Stage 0 consumes the
-  # existing vault and seeds additional secrets. The vault is strictly
+  # for the GitHub App PEM resolves at deploy time. The vault is strictly
   # private — publicNetworkAccess=Disabled, defaultAction=Deny — with a
   # private endpoint on the mgmt env-region VNet's snet-pe-fleet subnet
   # and DNS registered in the central privatelink.vaultcore.azure.net zone.
   #
   # Stores fleet-wide secrets:
   #   fleet-runners-app-pem        (Stage -1; this pool's GH App PEM; seeded by init-gh-apps.sh)
-  #   argocd-github-app-pem        (every cluster's Argo reads it)
-  #   argocd-oidc-client-secret    (every cluster's Argo reads it; rotated 60d by Stage 0)
-  # Mgmt-only Kargo secrets live in the mgmt cluster's KV, not here.
+  #   fleet-meta-app-pem           (Stage -1; fleet-meta App PEM; seeded by init-gh-apps.sh)
+  # Argo / Kargo OIDC secrets live in the mgmt cluster's KV, not here.
 
 state:
   # Default name derived: st<fleet.name>tfstate. Override via `storage_account_name_override`.
@@ -58,7 +56,7 @@ state:
   resource_group: rg-fleet-tfstate
   subscription_id: ${environments["mgmt"].subscription_id}
   containers:
-    fleet: tfstate-fleet                               # Stage 0 + bootstrap/{environment,team}
+    fleet: tfstate-fleet                               # bootstrap/{fleet,environment,team}
 
 networking:                                            # Repo-owned VNets + BYO hub refs & central PDZs (PLAN §3.4)
   # Central private DNS zones for PE A-record registration. All BYO —

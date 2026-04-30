@@ -25,8 +25,8 @@ rule "terraform_naming_convention" {
 
 # Standard main.tf / variables.tf / outputs.tf layout is a Phase-7
 # hardening target (see PLAN §13 Phase 7). Many Phase-1 stubs
-# (bootstrap/team, stages/0-fleet providers-only scaffold) intentionally
-# don't conform yet. Re-enable when those fill in.
+# (bootstrap/team) intentionally don't conform yet. Re-enable when
+# those fill in.
 rule "terraform_standard_module_structure" {
   enabled = false
 }

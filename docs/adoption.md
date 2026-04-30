@@ -155,16 +155,15 @@ git push
 
 ## 4. Provision the GitHub Apps
 
-The fleet uses three GitHub Apps with deliberately different blast
+The fleet uses two GitHub Apps with deliberately different blast
 radius (rationale in `PLAN.md` §4 Stage -1):
 
 - **`fleet-meta`** (admin-class) — used by env-bootstrap and
-  team-bootstrap workflows behind a 2-reviewer gate.
+  team-bootstrap workflows behind a 2-reviewer gate. Also publishes
+  fleet-scope repo variables from `bootstrap/{fleet,environment}` and
+  Stage 1 mgmt apply post-steps.
   Permissions: `administration:write`, `environments:write`,
   `variables:write`, `secrets:write`, `contents:write`.
-- **`stage0-publisher`** (narrow) — used by the Stage 0 workflow
-  to publish outputs as repo variables.
-  Permissions: `variables:write` only.
 - **`fleet-runners`** (narrow) — used by the KEDA scaler inside the
   fleet runner pool to poll for queued runner jobs on this repo.
   Permissions: `actions:read`, `metadata:read`. Installed on the
@@ -182,16 +181,17 @@ consent to the requested permissions. The `init-gh-apps.sh` helper
 tree on self-cleanup — automates everything around that single
 click: building the manifest from `_fleet.yaml`, opening a localhost
 listener for the redirect, exchanging the temp code for the App
-credentials, and guiding the installation flow for all three Apps
+credentials, and guiding the installation flow for both Apps
 (the operator chooses the repo selection in the GitHub install UI;
 the script records the owner-scoped installation id but does not
 verify repo-selection coverage).
 
 > **Status:** `init-gh-apps.sh` is implemented at the repo root
 > (PLAN §16.4). The command block below is the actual adopter
-> experience. Stage 0 wiring that consumes the GitHub App
-> credentials is still pending; until then, only `bootstrap/fleet`
-> reads any of the App material (the `fleet-runners` PEM).
+> experience. The Terraform-side consumer of App material is
+> `bootstrap/fleet` (the `fleet-runners` PEM); workflow-side consumers
+> (`fleet-meta`-driven env/team bootstrap) read App credentials at
+> runtime via the GitHub App installation.
 
 ### Running `init-gh-apps.sh`
 
@@ -209,8 +209,8 @@ export GH_TOKEN=<PAT with repo + admin:org>
 ```
 
 The script persists the full App payload (App IDs, `client_id`,
-`client_secret`, PEMs, webhook secrets, and other App metadata for all
-three Apps) to `./.gh-apps.state.json` (gitignored, mode 0600) and
+`client_secret`, PEMs, webhook secrets, and other App metadata for both
+Apps) to `./.gh-apps.state.json` (gitignored, mode 0600) and
 writes a narrow per-module overlay at
 `terraform/bootstrap/fleet/.gh-apps.auto.tfvars` (gitignored, mode
 0600) carrying only `fleet_runners_app_pem` +
@@ -223,15 +223,14 @@ API. Because the overlay lives at the module root, `terraform apply`
 auto-loads it without an explicit `-var-file` flag. The executor
 running the apply must have private-network reach to the KV
 (`<vault>.vault.azure.net`).
-Stage 0 is intended to seed the remaining PEMs + webhook secrets and
-publish the App IDs / client IDs as repo variables, but no Stage-0
-tfvars file is emitted today — `terraform/stages/0-fleet` has no
-matching `variable` blocks declared, so any file shape would be
-premature. PLAN §16.4 will derive its own tfvars from
-`.gh-apps.state.json` when the matching variable blocks land. Both
-files (`.gh-apps.state.json` and the `bootstrap/fleet` overlay) remain
-on disk after applies. Keep them as long as you may need to re-plan
-or re-apply `terraform/bootstrap/fleet`: the `fleet_runners_app_pem`
+The full App payload — additional PEMs, client secrets, and webhook
+secrets — stays in `./.gh-apps.state.json`; no other tfvars file is
+emitted. Workflow-level consumers (`fleet-meta`-driven env-bootstrap
+and team-bootstrap) read App credentials at runtime via the App
+installation, not from tfvars. Both files (`.gh-apps.state.json` and
+the `bootstrap/fleet` overlay) remain on disk after applies. Keep
+them as long as you may need to re-plan or re-apply
+`terraform/bootstrap/fleet`: the `fleet_runners_app_pem`
 variable is `ephemeral` + `sensitive` + `nullable = false`, and
 `bootstrap/fleet` writes the PEM into Key Vault via a write-only
 data-plane `sensitive_body` — Terraform cannot read it back from
@@ -244,15 +243,6 @@ store you have safely stashed it in). The equivalent applies to a PEM
 rotation: bump `fleet_runners_app_pem_version` (the overlay does this
 automatically on re-run of `./init-gh-apps.sh`; otherwise bump it by
 hand) to drive a re-PUT of the KV secret.
-
-### Today (manual)
-
-Create the two GitHub Apps manually via *Organization settings →
-Developer settings → GitHub Apps → New GitHub App* with the
-permissions above. Do **not** expect Stage 0 to consume GitHub App
-credentials via `TF_VAR_*` env vars yet: `terraform/stages/0-fleet`
-does not currently declare those inputs, so they would be ignored.
-That wiring is planned for `PLAN.md` §16.4.
 
 ## 5. Bootstrap Terraform
 
@@ -352,7 +342,7 @@ GitHub items must be arranged out-of-band by the adopter org.
   `bootstrap/environment` registers each env's Grafana PE A-record.
 - Role assignment: **`Private DNS Zone Contributor`** on all four
   central zones — for the operator on the first apply, **and** for
-  the `fleet-stage0` / `fleet-meta` UAMIs for every subsequent re-run.
+  the `fleet-meta` and `fleet-<env>` UAMIs for every subsequent re-run.
 - **VNet-reachable workstation for every re-run**: jump host,
   Azure Bastion, or VPN into the fleet VNet. The tfstate SA is
   private-only after the first apply — Terraform cannot reach it
@@ -371,13 +361,12 @@ GitHub items must be arranged out-of-band by the adopter org.
 - `GITHUB_TOKEN` exported with classic-PAT scopes `repo:admin`
   and `admin:org` (the latter only if `github_org` is an
   organization).
-- The `fleet-meta` and `stage0-publisher` GitHub Apps from §4 are
-  **not** required for the initial `bootstrap/fleet` apply — they
-  become relevant for later workflows. Their credentials persist in
-  `./.gh-apps.state.json`; PLAN §16.4 will derive a Stage-0 tfvars
-  file from state when the matching `variable` blocks land.
-  `bootstrap/fleet` does not create, write, or manage the GitHub
-  App credentials.
+- The `fleet-meta` GitHub App from §4 is **not** required for the
+  initial `bootstrap/fleet` apply — it becomes relevant for later
+  workflows (env-bootstrap, team-bootstrap, and fleet-scope repo-var
+  publishing post-apply). Its credentials persist in
+  `./.gh-apps.state.json`. `bootstrap/fleet` does not create, write,
+  or manage the GitHub App credentials.
 - The **`fleet-runners`** GitHub App **is** required up-front: the
   vendored runner module validates that
   `github_app.fleet_runners.{app_id, installation_id}` are non-empty
@@ -400,10 +389,9 @@ GitHub items must be arranged out-of-band by the adopter org.
   the module root, `terraform apply` auto-loads it — no `-var-file`
   flag and no "undeclared variable" warnings. `bootstrap/fleet`
   writes the PEM into the fleet KV as the `fleet-runners-app-pem`
-  secret via the KV data plane. The full GitHub App payload (all
-  three Apps' IDs / client IDs / PEMs / webhook secrets) persists in
-  `./.gh-apps.state.json`; PLAN §16.4 will derive a Stage-0 tfvars
-  file from state when its matching `variable` blocks land.
+  secret via the KV data plane. The full GitHub App payload (every
+  App's IDs / client IDs / PEMs / webhook secrets) persists in
+  `./.gh-apps.state.json`; no other tfvars file is derived from it.
 - The team-template repo (`<github_org>/<team_template_repo>`,
   default `team-repo-template`) must **not** pre-exist; it is
   created fresh with `prevent_destroy = true`.
