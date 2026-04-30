@@ -10,9 +10,8 @@
 #
 #   1. Create the runner UAMI (`uami-fleet-runners`) in `rg-fleet-shared`.
 #   2. Invoke the vendored ACA+KEDA runner module with:
-#        - bring-your-own VNet (networking.*)
-#        - no NAT / no public IP (UDR + hub firewall own egress)
-#        - per-pool private ACR (module default)
+#        - public networking (see "Networking" below; F26)
+#        - per-pool ACR + LAW (module defaults)
 #        - KV-reference for the GitHub App PEM (vendor extension — see
 #          terraform/modules/cicd-runners/VENDORING.md §4)
 #
@@ -32,14 +31,6 @@ locals {
   runner_uami_name = "uami-fleet-runners"
   runner_postfix   = "fleet-runners"
   runner_pool_name = "fleet-runners"
-
-  # The runner pool is co-located with the fleet shared RG
-  # (`acr_location`). Pick the matching mgmt region for subnet
-  # resolution; fall back to the first mgmt region. The precondition on
-  # the `module "runner"` call surfaces a mismatch early.
-  runner_mgmt_region = contains(keys(local.mgmt_vnet_ids), local.derived.acr_location) ? (
-    local.derived.acr_location
-  ) : keys(local.mgmt_vnet_ids)[0]
 
   # Versionless KV secret URI — points at the runners KV created in
   # main.kv.tf. The Container App Job resolves the secret at runtime via
@@ -148,28 +139,41 @@ module "runner" {
 
   # Networking --------------------------------------------------------------
   #
-  # All three subnet / zone references land in repo-owned infrastructure
-  # authored by main.network.tf (PLAN §3.4):
-  #   - container_app_subnet_id                    → snet-runners in the
-  #                                                   co-located mgmt VNet
-  #   - container_registry_private_endpoint_subnet → snet-pe-fleet in the
-  #                                                   co-located mgmt VNet
-  #   - container_registry_dns_zone_id             → adopter-BYO
-  #                                                   privatelink.azurecr.io
-  #                                                   from networking.private_dns_zones.azurecr
-  use_private_networking                               = true
-  virtual_network_creation_enabled                     = false
-  container_app_subnet_id                              = local.mgmt_snet_runners_ids[local.runner_mgmt_region]
-  container_registry_private_endpoint_subnet_id        = local.mgmt_snet_pe_fleet_ids[local.runner_mgmt_region]
-  container_registry_private_dns_zone_creation_enabled = false
-  container_registry_dns_zone_id                       = local.networking_central.pdz_azurecr
+  # Private networking is currently DISABLED (see findings F26). The
+  # vendored module's LAW defaults flip both
+  # `log_analytics_workspace_internet_ingestion_enabled` and
+  # `log_analytics_workspace_internet_query_enabled` to the negation of
+  # `use_private_networking` and the module does not author any
+  # private-link path (AMPLS/NSP) for the workspace, so enabling private
+  # networking without first landing AMPLS/NSP results in a LAW that
+  # cannot ingest from the runner pool nor be queried from the portal.
+  #
+  # Until F26 closes (NSP or AMPLS for the runner LAW + DCE), the
+  # callsite ships the runner pool with public networking:
+  #   - ACR is created with public network access enabled.
+  #   - The Container App Environment runs on the ACA-platform-managed
+  #     VNet (no infrastructure subnet).
+  #   - LAW ingestion + query traverse the public endpoint.
+  #
+  # The fleet-plane subnets and central PDZ refs in main.network.tf and
+  # `_fleet.yaml.networking` remain authored — they are still consumed by
+  # the tfstate SA, runners KV, and fleet ACR PEs. They simply do not
+  # land on this module call. When F26 closes, the
+  # `container_app_subnet_id`, `container_registry_private_endpoint_subnet_id`,
+  # `container_registry_private_dns_zone_creation_enabled`, and
+  # `container_registry_dns_zone_id` inputs return here together with
+  # `use_private_networking = true`.
+  use_private_networking           = false
+  virtual_network_creation_enabled = false
 
   # Hub firewall handles egress via UDR on the runner subnet; no NAT or
-  # public IP owned by this module.
+  # public IP owned by this module. (These are also gated on
+  # use_private_networking inside the module, so they are inert today,
+  # but kept explicit so the intent survives F26 re-enablement.)
   nat_gateway_creation_enabled = false
   public_ip_creation_enabled   = false
 
-  # Per-pool private ACR + observability ------------------------------------
+  # Per-pool ACR + observability --------------------------------------------
   container_registry_creation_enabled      = true
   log_analytics_workspace_creation_enabled = true
 

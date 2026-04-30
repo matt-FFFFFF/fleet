@@ -58,7 +58,7 @@ manage upgrades, and add Kargo promotion.
 | Bootstrap model                 | `bootstrap/fleet` run locally once; `bootstrap/environment` and `bootstrap/team` run via GH Actions under the `fleet-meta` environment (2-reviewer gate).                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Cross-stage output propagation  | Published to repo variables by the publishing stage; downstream stages consume `vars.*`. **`terraform_remote_state` is never used.** Cross-stage values flow as follows: `bootstrap/fleet` → downstream via repo-level vars (e.g., `RUNNERS_KV_NAME`, `MGMT_VNET_RESOURCE_IDS`, `ARGO_AAD_APP_ID`, `KARGO_AAD_APP_ID`, `KARGO_AAD_APPLICATION_OBJECT_ID`); `bootstrap/environment` env=mgmt → downstream via repo-level vars (`ACR_RESOURCE_ID`, `ACR_NAME`, `ACR_LOGIN_SERVER`); `bootstrap/environment` (every env) → Stage 1 via env-scoped vars (`<ENV>_<REGION>_VNET_RESOURCE_ID`, etc.); Stage 1 mgmt → spoke Stage 1 / Stage 2 via repo-level vars (`MGMT_AKS_*`, `KARGO_MGMT_UAMI_PRINCIPAL_ID`, `KARGO_MGMT_UAMI_CLIENT_ID`, `MGMT_CLUSTER_KV_ID`); Stage 1 → Stage 2 via **in-job `terraform output -json` piped into `stage2.auto.tfvars.json`** (single cluster, single CI job). Stage 2 therefore makes zero Azure data-source calls at plan time. No Stage 1-to-Stage 1 cross-cluster propagation outside the mgmt-only carve-out. |
 | DNS for ingress                 | Opinionated: single `fleet_root` in `clusters/_fleet.yaml`; each cluster's private zone FQDN auto-derived from its directory path as `<name>.<region>.<env>.<fleet_root>`; linked to supplied VNets; external-dns scoped to its own zone only                                                                                                                                                                                                                                                                                                                           |
-| Self-hosted CI runners          | Single shared repo-scoped GitHub Actions runner pool on **Azure Container Apps + KEDA** (label `self-hosted`), created by `bootstrap/fleet` via a vendored `Azure/terraform-azurerm-avm-ptn-cicd-agents-and-runners` module. Trust boundary is the GitHub Environment + federated credential (not the VNet). Per-pool private ACR; LAW; no NAT / no public IP (egress via UDR through the hub firewall). A dedicated `fleet-runners` GitHub App (`actions:read` + `metadata:read`) drives KEDA polling; its PEM lives in the runner-pool KV and is referenced into the Container App Job as a Key Vault secret reference (never plaintext). |
+| Self-hosted CI runners          | Single shared repo-scoped GitHub Actions runner pool on **Azure Container Apps + KEDA** (label `self-hosted`), created by `bootstrap/fleet` via a vendored `Azure/terraform-azurerm-avm-ptn-cicd-agents-and-runners` module. Trust boundary is the GitHub Environment + federated credential (not the VNet). Per-pool ACR + LAW. **Private networking is deferred** (`use_private_networking = false` at the callsite) until an AMPLS/NSP path for the LAW + DCE lands; without one, the module's default flips LAW public ingestion/query off and the pool ingests zero rows (see findings F26). The ACR is therefore created with public network access enabled and pulls traverse the public endpoint; egress from the runner Container App is platform-managed (no callsite-owned NAT or public IP). A dedicated `fleet-runners` GitHub App (`actions:read` + `metadata:read`) drives KEDA polling; its PEM lives in the runner-pool KV and is referenced into the Container App Job as a Key Vault secret reference (never plaintext). |
 | `azurerm` carveout (runners)    | Narrow, **module-internal-only** carveout inside the vendored `terraform/modules/cicd-runners/` tree, mirroring the existing `azuread` carveout rationale: the upstream AVM module relies on `azurerm_container_app_job`, `azurerm_private_dns_*`, `azurerm_nat_*`, `azurerm_public_ip`, and the `Azure/avm-res-containerregistry-registry` child module. `bootstrap/fleet` itself authors zero `azurerm_*` resources or data sources — the `provider "azurerm"` block in `bootstrap/fleet/providers.tf` exists only because Terraform requires the parent to configure every provider any child references. |
 | Secret retrieval                | Key Vault-reference on workload resources wherever the target service supports it (e.g. Container App Job `secret { keyVaultUrl + identity }`); **ephemeral `azapi_resource_action`** (confirmed on `azapi ~> 2.9`) whenever Terraform itself must read a KV secret to make an Azure API call that takes the plaintext. Plaintext KV secret values **never** enter Terraform state. Driver: `azurerm_container_app_job.secret.value` has no `write_only` on `azurerm 4.69.0`; `azurerm_key_vault_secret.value_wo` is present and is the preferred path for writes. |
 
@@ -1114,15 +1114,30 @@ messages; the rest must be arranged out-of-band by the adopter org.
 
 **Networking (Stage -1 runner pool + private tfstate SA)**
 
+> **Status — runner pool networking is currently public.** The
+> bootstrap/fleet callsite passes `use_private_networking = false`
+> to the vendored `cicd-runners` module pending an AMPLS or NSP
+> path for the runner LAW + DCE (see findings F26). The
+> subnet / PE / private-DNS-zone wiring described below remains the
+> intended end state and is still authored by `main.network.tf`
+> for the rest of the fleet plane (tfstate SA, runners KV, ACR);
+> the runner Container App Environment, runner ACR, and runner LAW
+> simply do not consume it today. Re-enabling
+> `use_private_networking = true` is gated on F26 closing.
+
 - Pre-existing VNet in `rg-fleet-runners` (or in the hub
   connectivity subscription, peered to the fleet subscription)
   with two subnets: one delegated to `Microsoft.App/environments`
-  for the runner pool (`snet-runners` by convention), and one for
-  private endpoints (`snet-pe-fleet`). The runner subnet must
-  carry a UDR routing egress through the hub firewall; the module
-  callsite sets `nat_gateway_creation_enabled = false` and
-  `public_ip_creation_enabled = false`, so there is no runner-
-  local NAT or public IP.
+  for the runner pool (`snet-runners` by convention; **unused
+  while private networking is off** but still authored), and one
+  for private endpoints (`snet-pe-fleet`; consumed by the tfstate
+  SA, runners KV, and fleet ACR PEs). Once F26 closes and the
+  callsite flips back to `use_private_networking = true`, the
+  runner subnet must carry a UDR routing egress through the hub
+  firewall; even with private networking re-enabled the callsite
+  keeps `nat_gateway_creation_enabled = false` and
+  `public_ip_creation_enabled = false`, so there is no
+  runner-local NAT or public IP.
 - Central `privatelink.blob.core.windows.net` private DNS zone in
   the hub connectivity subscription (shared across the tenant).
   Referenced by resource id from
@@ -1131,7 +1146,11 @@ messages; the rest must be arranged out-of-band by the adopter org.
   hub/connectivity sub (shared with every other ACR PE in the
   tenant). Referenced by resource id from
   `_fleet.yaml.networking.runner.container_registry_private_dns_zone_id`.
-  The runner-pool module is invoked with
+  Currently unused by the runner ACR (private networking is off —
+  see F26); remains required because the **fleet ACR** in
+  `bootstrap/environment` env=mgmt and the **per-cluster ACRs**
+  consume it. When the runner pool's private networking is
+  re-enabled, the runner-pool module is invoked with
   `container_registry_private_dns_zone_creation_enabled = false`
   and only registers A-records into this zone via the PE's DNS
   zone group — no zone is ever created by this repo.

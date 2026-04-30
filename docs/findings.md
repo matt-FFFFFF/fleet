@@ -724,129 +724,140 @@ This mirrors the empty-artefact guard added to `tf-plan.yaml`'s
 `summarize` job (commit `16e0038` on PR #2): "the workflow ran" is
 not the same as "there is something to apply".
 
-## F26 — `bootstrap/fleet` LAW is silently unreachable when private networking is enabled
+## F26 — runner pool ships with public networking pending an NSP/AMPLS path for the runner LAW
 
-**Observation.** `bootstrap/fleet/main.runner.tf:142` passes
-`use_private_networking = true` to the vendored `cicd-runners`
-module. Inside the module, `main.log.analytics.workspace.tf:9-10`
-defaults `log_analytics_workspace_internet_ingestion_enabled` and
+**Observation.** The vendored `cicd-runners` module's
+`main.log.analytics.workspace.tf:9-10` defaults
+`log_analytics_workspace_internet_ingestion_enabled` and
 `log_analytics_workspace_internet_query_enabled` to **the negation
-of `use_private_networking`** — so both flip to `false`. The module
-does **not** author any private-link path for the workspace. The
-result on first apply is a LAW with both public flags off and no
-private endpoint, which means:
+of `use_private_networking`**, and the module does **not** author
+any private-link path (AMPLS or NSP) for the workspace it creates.
+Setting `use_private_networking = true` therefore produces a LAW
+with both public flags off and no private endpoint — silently
+unreachable for both ingestion and query. The Container App
+Environment's diagnostics setting points at this LAW, the runner
+pool comes up healthy by every other signal (KEDA, ACR pull, GH
+App registration), but `laws-fleet-runners` reports zero ingested
+rows and the portal returns "public network access disabled" on
+query attempts.
 
-- The ACA Job runners' DCR-driven ingestion to the LAW silently
-  fails. The runner pool comes up healthy by every other signal
-  (KEDA, ACR pull, GH App registration), but `laws-fleet-runners`
-  reports zero ingested rows.
-- An operator trying to query the workspace from the portal hits
-  a "public network access disabled" error too, so the failure
-  has no easy log-side post-mortem.
+**Current state.** `terraform/bootstrap/fleet/main.runner.tf`
+ships with `use_private_networking = false` so the runner pool
+works on first apply without an external AMPLS/NSP being already
+in place. Concretely this means:
 
-The Container App Environment's diagnostics setting points at this
-LAW; the ACR private DNS zone is wired correctly; tfstate / fleet KV
-/ ACR are all properly fronted by PEs in `snet-pe-fleet`. The LAW is
-the only resource on the fleet-private path with no PE.
+- The runner ACR is created with public network access enabled.
+- The Container App Environment runs on the ACA-platform-managed
+  VNet (no infrastructure subnet), bypassing the fleet-private
+  egress posture (UDR via hub firewall) for runner-initiated
+  traffic — runner ACR pulls, KEDA polls, and ACA control-plane
+  calls all egress over the public internet.
+- LAW ingestion + query traverse the public ingestion endpoint
+  with workspace-key auth.
 
-We hit this during the walkthrough and worked around it by manually
-flipping both flags back to `Enabled` via `az monitor log-analytics
-workspace update --ingestion-access Enabled --query-access Enabled`.
-That workaround is currently in effect on the adopter's LAW
-(`customerId 76fd7aed-5814-4365-87b6-dc835b86bd51`) and needs to be
-reverted before this finding closes.
+The fleet-plane subnets (`snet-pe-fleet`, `snet-runners`) and the
+central `privatelink.azurecr.io` PDZ remain authored by
+`main.network.tf` and `_fleet.yaml.networking` because the tfstate
+SA, runners KV, and fleet ACR (in `bootstrap/environment`
+env=mgmt) still consume them — only the runner Container App
+Environment, runner ACR, and runner LAW skip them today.
 
-**Risk.** Every adopter following the documented bootstrap path
-ships a LAW that cannot ingest from inside-the-perimeter sources.
-The failure is silent (no Terraform error, no health-probe surface);
-the only signal is "Log Analytics is empty" hours later. Adopters
-without prior private-link experience will likely either:
-
-1. Disable `use_private_networking` to make logs work, losing the
-   hub-firewall egress posture for ACR pulls and tfstate access; or
-2. Manually re-enable public LAW access (our workaround), losing the
-   private posture they explicitly asked for; or
-3. Roll a one-off AMPLS by hand and never land it in TF.
+**Risk.** The runner pool is the entry point for every
+tfstate-writing workflow in the fleet. Today its LAW captures
+runtime telemetry (job stdout/stderr, KEDA scale events, ACA
+revision health) over a public, key-authenticated ingestion path,
+and its ACR + control-plane traffic egresses without traversing
+the hub firewall — meaning runner-pool DNS, TLS, and IP
+reputation are platform-defaults, not the adopter's hub policy.
+For a fleet whose stated posture elsewhere is "everything
+private", this is the single largest deviation; closing this
+finding restores the runner pool to that posture.
 
 **Options.**
 
 - **Option A — Network Security Perimeter (NSP).** Author a
   `Microsoft.Network/networkSecurityPerimeters` resource in
-  `bootstrap/fleet`, associate the LAW (and the DCE once we ship one
-  for runners) to a profile under it, and add inbound rules that
-  permit traffic from the runner subnet's source IPs (or, when NSP
-  subnet-association support stabilises, from the runner subnet
-  directly). NSP replaces the AMPLS+PE+PDZ-quartet pattern with a
-  single perimeter resource and a small ruleset; the LAW does not
-  need a private endpoint, no privatelink PDZs are needed, and no
-  per-region duplication is required because NSP is regional but
-  rule-driven rather than topology-driven.
+  `bootstrap/fleet`, associate the LAW (and the DCE once we ship
+  one for runners) to a profile under it, and add inbound rules
+  that permit traffic from the runner subnet's source IPs (or,
+  when NSP subnet-association support stabilises, from the runner
+  subnet directly). NSP replaces the AMPLS+PE+PDZ-quartet pattern
+  with a single perimeter resource and a small ruleset; the LAW
+  does not need a private endpoint, no privatelink PDZs are
+  needed, and no per-region duplication is required because NSP
+  is regional but rule-driven rather than topology-driven.
 
   NSP is GA as of 2024 for Log Analytics workspaces and DCEs (the
   two resources we care about here). Caveats:
   - The `azapi` provider is the only first-class TF surface; the
     `azurerm` resources are still preview-grade. We already use
-    `azapi` heavily in `bootstrap/fleet` (state SA, KV, ACR, runner
-    UAMI), so this matches existing patterns.
+    `azapi` heavily in `bootstrap/fleet` (state SA, KV, ACR,
+    runner UAMI), so this matches existing patterns.
   - Some downstream PaaS resources may not yet honour NSP rules
     fully (the matrix shifts month-to-month). For our use case —
     LAW ingestion + LAW query + DCE → LAW — NSP is supported.
-  - NSP requires enabling `Microsoft.Network/AllowNSPInPublicPreview`
-    or its GA equivalent on the subscription if not already enabled;
-    `init/` could detect-and-prompt, or `bootstrap/fleet` could fail
-    fast with a guiding error.
+  - NSP requires enabling
+    `Microsoft.Network/AllowNSPInPublicPreview` or its GA
+    equivalent on the subscription if not already enabled;
+    `init/` could detect-and-prompt, or `bootstrap/fleet` could
+    fail fast with a guiding error.
 
 - **Option B — AMPLS + per-resource private endpoint.** The
-  traditional pattern: author a `Microsoft.Insights/privateLinkScopes`
-  resource, bind the LAW (and any DCE) as scoped resources, create a
-  PE for the AMPLS in `snet-pe-fleet`, and link four privatelink
-  PDZs (`privatelink.monitor.azure.com`,
+  traditional pattern: author a
+  `Microsoft.Insights/privateLinkScopes` resource, bind the LAW
+  (and any DCE) as scoped resources, create a PE for the AMPLS in
+  `snet-pe-fleet`, and link four privatelink PDZs
+  (`privatelink.monitor.azure.com`,
   `privatelink.oms.opinsights.azure.com`,
   `privatelink.ods.opinsights.azure.com`,
-  `privatelink.agentsvc.azure-automation.net`). Well-trodden, more TF
-  code, four extra PDZs the adopter must own (or we BYO in
+  `privatelink.agentsvc.azure-automation.net`). Well-trodden, more
+  TF code, four extra PDZs the adopter must own (or we BYO in
   `_fleet.yaml.networking.private_dns_zones`).
 
-- **Option C — keep LAW public ingestion enabled.** Override the
-  module default and pass `log_analytics_workspace_internet_ingestion_enabled
-  = true` while leaving `use_private_networking = true` for the rest.
-  Simple, ships now. Trades private posture for operational
-  simplicity. Ingestion goes over the public ingestion endpoint with
-  workspace-key auth; reasonable for a runner-only LAW that holds
-  no production telemetry, but inconsistent with the rest of the
-  fleet's "everything private" posture.
+- **Option C — keep public networking, add public-LAW guardrails.**
+  Stay where we are. Document that the runner LAW is a public
+  ingestion endpoint, scope its retention/cost knobs accordingly,
+  and treat runner-pool egress as out-of-scope for the
+  hub-firewall posture. Trades private posture for operational
+  simplicity; reasonable for a runner-only LAW that holds no
+  production telemetry, but inconsistent with the rest of the
+  fleet's posture.
 
 - **Option D — BYO AMPLS-fronted LAW.** Drop LAW creation from
   `bootstrap/fleet`; require adopters to pass an existing
   AMPLS-fronted LAW resource id via a new
   `networking.observability.law_resource_id` field, and set
-  `log_analytics_workspace_creation_enabled = false` in the runner
-  module. Smallest TF surface; pushes the AMPLS problem onto the
-  adopter, which most enterprises already solve.
+  `log_analytics_workspace_creation_enabled = false` in the
+  runner module. Smallest TF surface; pushes the AMPLS problem
+  onto the adopter, which most enterprises already solve.
 
 **Recommendation.** **Option A — NSP.** Despite NSP being newer,
 it's the right primitive for this exact use case: a small set of
 Azure Monitor resources (LAW, DCE) that need to be reachable only
 from a known internal source. It avoids the four-PDZ overhead of
-AMPLS, avoids the per-region PE replication that the AMPLS pattern
-forces under multi-region runner pools, and keeps the
+AMPLS, avoids the per-region PE replication that the AMPLS
+pattern forces under multi-region runner pools, and keeps the
 `bootstrap/fleet` networking story to a single perimeter resource
 that the adopter never has to think about. The `azapi` cost is
-small; the Microsoft.Network/AllowNSPInPublicPreview gate is a
-one-line `init/` precondition.
+small; the
+`Microsoft.Network/AllowNSPInPublicPreview` gate is a one-line
+`init/` precondition.
 
-Once Option A lands, the runner LAW's `publicIngest` /
-`publicQuery` flags can return to `Disabled`, and the manual
-workaround currently in effect on the adopter must be reverted in
-the same change.
+When this lands, the callsite flip is mechanical: re-enable
+`use_private_networking = true` and re-introduce the four
+networking inputs (`container_app_subnet_id`,
+`container_registry_private_endpoint_subnet_id`,
+`container_registry_private_dns_zone_creation_enabled = false`,
+`container_registry_dns_zone_id`) at
+`terraform/bootstrap/fleet/main.runner.tf` (see the comment block
+above the module call for the exact set; the local
+`runner_mgmt_region` it depends on must be reinstated too — see
+git blame on `main.runner.tf` for the prior shape).
 
 **Cross-references.**
-- `terraform/bootstrap/fleet/main.runner.tf:142` (use_private_networking).
-- `terraform/modules/cicd-runners/main.log.analytics.workspace.tf:9-10`
-  (the silent-default flip).
-- `clusters/_fleet.yaml.networking.private_dns_zones` (where AMPLS
-  PDZs would land if Option B were taken — useful comparison point).
-- PLAN §3.4 (mgmt subnets / PE landing pattern).
-- PLAN §10 (fleet observability scope — NSP would also be the
-  natural posture for the per-env LAWs published by
-  `bootstrap/environment`).
+
+- `terraform/bootstrap/fleet/main.runner.tf` — `use_private_networking = false` callsite + comment block describing the F26-gated re-enable contract.
+- `terraform/modules/cicd-runners/main.log.analytics.workspace.tf:9-10` — the silent-default flip that motivates this finding.
+- `clusters/_fleet.yaml.networking.private_dns_zones` — where AMPLS PDZs would land if Option B were taken (useful comparison point).
+- PLAN §1 row "Self-hosted CI runners" + PLAN §3.4 "Networking (Stage -1 runner pool + private tfstate SA)" — both reference this finding for the deferral.
+- PLAN §10 — fleet observability scope; NSP would also be the natural posture for the per-env LAWs published by `bootstrap/environment`.
