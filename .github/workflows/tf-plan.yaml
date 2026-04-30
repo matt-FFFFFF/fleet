@@ -67,7 +67,14 @@ jobs:
   # -------------------------------------------------------------------------
   detect:
     name: detect affected
-    runs-on: [self-hosted]
+    # Hosted runner: this job is the initialisation guard + matrix
+    # builder. It runs `git diff` and writes outputs; no Azure access
+    # and no private-network reach. Keeping it on `ubuntu-24.04` means
+    # template-repo PRs (no pool yet) and PRs filed during pool
+    # recovery still get a deterministic skip rather than a perpetual
+    # queue. The Azure-touching `cluster` matrix below stays on
+    # `[self-hosted]`.
+    runs-on: ubuntu-24.04
     outputs:
       clusters:    ${{ steps.detect.outputs.clusters }}
       any:         ${{ steps.detect.outputs.any }}
@@ -305,7 +312,10 @@ jobs:
     name: summarize plans
     needs: [detect, cluster]
     if: always() && needs.detect.outputs.initialized == 'true' && needs.detect.outputs.any == 'true'
-    runs-on: [self-hosted]
+    # Hosted runner: pure PR-comment formatter — downloads plan
+    # artefacts and posts a sticky comment via `github.token`. No
+    # Azure access; no reason to consume pool capacity.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 

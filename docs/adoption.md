@@ -478,35 +478,56 @@ in the tenant — the same role used at first apply.
 
 ### 5.4 CI runner placement
 
-After `bootstrap/fleet` lands the runner pool (the KEDA-scaled
-Container App Job under `rg-fleet-runners`), every workflow in
-`.github/workflows/` that ships in the adopter repo runs on
-`runs-on: [self-hosted]` against that pool. There is no
-GitHub-hosted fallback for adopter workflows — `validate.yaml`,
-`tf-plan.yaml`, `tf-apply.yaml`, `env-bootstrap.yaml`, and
-`team-bootstrap.yaml` all dispatch to the fleet pool.
+Workflows split runner placement by what each job touches.
 
-Why a single pool: the fleet tfstate SA, the runner-pool KV, and
-the mgmt cluster KV are private-only (PE-bound, public access
-disabled), so any tfstate-touching job must run on a runner inside
-the fleet VNet regardless. Keeping utility jobs (lint, fmt, change
-detection) on the same pool collapses the trust boundary to one
-image and one egress path. Cold-start cost (KEDA scale-from-zero,
-~1–2 min) is paid once per PR and amortises across the matrix.
+**Self-hosted (fleet runner pool, label `self-hosted`)** — every
+job that reads or writes a private Azure data plane:
 
-Consequence: when the runner pool is broken, *all* CI is broken —
-including lint and fmt. This is acceptable because the runner pool
-is bootstrap-laptop-applied (see §5.2). Recovery from a broken
-pool is `terraform apply` from the operator laptop against
-`terraform/bootstrap/fleet`, not "another CI workflow that needs
-the pool to be healthy." The two failure paths converge on the
-same recovery, so splitting them buys nothing.
+- `tf-plan.yaml` — the `cluster` matrix (reads private tfstate).
+- `tf-apply.yaml` — the `cluster` matrix (writes private tfstate).
+- `env-bootstrap.yaml` — the `bootstrap` job (reads runners KV +
+  writes env tfstate).
+- `team-bootstrap.yaml` — the `bootstrap` matrix (reads runners KV +
+  writes env tfstate).
 
-The two template-only workflows (`template-selftest.yaml`,
-`status-check.yaml`) stay on `ubuntu-24.04`. They run in the
-fleet template repo and on fresh forks before `init-fleet.sh`,
-where no fleet runner pool exists. `init-fleet.sh` deletes them
-during self-cleanup; they never appear in adopter-repo CI.
+The pool is created by `bootstrap/fleet` (the KEDA-scaled Container
+App Job under `rg-fleet-runners`) and is the only ingress path to
+those private endpoints from a GitHub-hosted control plane. The
+fleet tfstate SA, the runner-pool KV, and the mgmt cluster KV are
+PE-bound with `publicNetworkAccess = Disabled`, so any
+tfstate-touching or KV-touching job must run on a runner inside
+the fleet VNet regardless.
+
+**Hosted (`ubuntu-24.04`)** — every job that does not touch a
+private Azure data plane:
+
+- All of `validate.yaml` (terraform fmt, tflint, yamllint,
+  subnet-slots, naming-parity).
+- The initialisation-guard / `detect` / `discover` / `summarize`
+  jobs in `tf-plan.yaml`, `tf-apply.yaml`, `env-bootstrap.yaml`,
+  and `team-bootstrap.yaml`.
+- The two template-only workflows `template-selftest.yaml` and
+  `status-check.yaml`. (These run in the fleet template repo and
+  on fresh forks before `init-fleet.sh`; the script deletes them
+  during self-cleanup, so they never appear in adopter-repo CI.)
+
+Why hosted for these: the trust-boundary argument that motivates
+self-hosted (one image to harden, one egress path, one identity
+surface) only applies to jobs that actually use that egress path.
+Lint, formatting, marker-file checks, `git diff` matrix builders,
+and PR-comment formatters do not. Putting them on the pool would
+couple basic CI signal to a piece of infrastructure that is offline
+during pool recovery — exactly when being able to lint a fix is
+most valuable.
+
+Consequence: a broken runner pool still takes Azure-touching CI
+with it (`tf-plan` cluster matrix, `tf-apply` cluster matrix, both
+bootstrap workflows). This is acceptable because the runner pool
+is bootstrap-laptop-applied (see §5.2). Recovery is `terraform apply`
+from the operator laptop against `terraform/bootstrap/fleet`, not
+"another CI workflow that needs the pool to be healthy." Lint and
+fmt remain green through the recovery, so the fix PR can still be
+reviewed.
 
 ## Re-running `init-fleet.sh`
 

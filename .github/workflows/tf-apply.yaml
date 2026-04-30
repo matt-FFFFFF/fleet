@@ -74,7 +74,13 @@ defaults:
 jobs:
   discover:
     name: discover plan artefacts
-    runs-on: [self-hosted]
+    # Hosted runner: initialisation guard + plan-artefact discovery
+    # via the GitHub API. No Azure access, no private-network reach.
+    # Keeping this on `ubuntu-24.04` means apply runs on `main` after
+    # a merge to a template-repo or a recovering adopter still emit
+    # a clean skip instead of queueing forever. The Azure-touching
+    # `cluster` matrix below stays on `[self-hosted]`.
+    runs-on: ubuntu-24.04
     outputs:
       pr:           ${{ steps.find_pr.outputs.number }}
       clusters:     ${{ steps.collect.outputs.clusters }}

@@ -2520,34 +2520,44 @@ they like provided their namespaces start with `<team>-`.
 
 ### Runner selection
 
-Every adopter workflow runs on `runs-on: [self-hosted]` against the
-fleet runner pool created by `bootstrap/fleet` (§4 Stage -1, "Runner
-infrastructure"). This includes both tfstate-touching workflows
-(`env-bootstrap.yaml`, `team-bootstrap.yaml`, `tf-plan.yaml`,
-`tf-apply.yaml`, the deferred `fleet-bootstrap-rerun.yaml`) and
-utility workflows (`validate.yaml`).
+Adopter workflows split runner placement by what the job actually
+touches:
 
-Rationale: a single trust boundary. One image to harden, one egress
-path to audit, one identity surface (the fleet runner UAMI plus its
-federated credentials). The fleet tfstate SA, the runner-pool KV,
-and the mgmt cluster KV are private-only — Azure-touching jobs
-*must* run on `[self-hosted]` regardless. Running utility jobs on
-the same pool removes the second runner class without measurable
-benefit; cold-start cost is paid once per PR and amortises across
-the matrix.
+- **Self-hosted (fleet runner pool, label `self-hosted`)**: every
+  job that reads or writes private Azure data planes — fleet
+  tfstate SA, runner-pool KV, mgmt cluster KV, AKS API server when
+  it is private. In concrete terms: `tf-plan.yaml`'s `cluster`
+  matrix; `tf-apply.yaml`'s `cluster` matrix; `env-bootstrap.yaml`'s
+  `bootstrap` job; `team-bootstrap.yaml`'s `bootstrap` matrix; the
+  deferred `fleet-bootstrap-rerun.yaml`. The runner pool is
+  created by `bootstrap/fleet` (§4 Stage -1, "Runner infrastructure")
+  and is the only ingress path to those private endpoints from a
+  GitHub-hosted control plane.
 
-Trade-off: when the runner pool is broken, *all* CI is broken
-(including lint/fmt). This is acceptable because the runner pool is
-bootstrap-laptop-applied (§4 Stage -1) — recovery from a broken
-pool is laptop-apply, not "another CI workflow." A broken pool
-that takes lint with it is the same recovery path as a broken pool
-that takes apply with it.
+- **Hosted (`ubuntu-24.04`)**: every job that does not touch a
+  private Azure data plane. This includes all of `validate.yaml`
+  (terraform fmt, tflint, yamllint, subnet-slots, naming-parity);
+  the initialisation-guard / detect / discover / summarize jobs in
+  `tf-plan.yaml`, `tf-apply.yaml`, `env-bootstrap.yaml`, and
+  `team-bootstrap.yaml`; and the template-only `template-selftest.yaml`
+  + `status-check.yaml` workflows.
 
-Template-only workflows (`template-selftest.yaml`,
-`status-check.yaml`) stay on `runs-on: ubuntu-24.04`. They run in
-the template repo and on fresh forks before `init-fleet.sh`, where
-no fleet runner pool exists. They are deleted from adopter repos
-by `init-fleet.sh` and never reach the self-hosted contract.
+Rationale for the split: the trust-boundary argument that motivates
+self-hosted ("one image to harden, one egress path, one identity
+surface") only applies to jobs that actually use that egress path.
+Lint, formatting, marker-file checks, `git diff` matrix builders,
+and PR-comment formatters do not. Putting them on the pool would
+couple basic CI signal to a piece of infrastructure that does not
+yet exist in the template repo and is offline during pool recovery
+in adopter repos — the two scenarios where being able to lint a
+fix is most valuable.
+
+Trade-off accepted: a broken runner pool still takes Azure-touching
+CI with it (`tf-plan` cluster matrix, `tf-apply` cluster matrix,
+both bootstrap workflows). This is acceptable because the pool is
+bootstrap-laptop-applied (§4 Stage -1) — recovery is laptop-apply,
+not "another CI workflow." Crucially, lint and fmt remain green
+through the recovery, so the fix PR can still be reviewed.
 
 The Ubuntu version (`ubuntu-24.04`) and the Terraform version are
 both pinned for reproducibility — the latter via

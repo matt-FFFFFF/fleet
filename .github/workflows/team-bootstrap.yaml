@@ -46,7 +46,10 @@ defaults:
 jobs:
   detect:
     name: detect new teams
-    runs-on: [self-hosted]
+    # Hosted runner: `git diff` over team YAMLs + initialisation
+    # guard. No Azure access, no private-network reach. The Azure-
+    # touching `bootstrap` matrix below stays on `[self-hosted]`.
+    runs-on: ubuntu-24.04
     outputs:
       teams:       ${{ steps.detect.outputs.teams }}
       any:         ${{ steps.detect.outputs.any }}

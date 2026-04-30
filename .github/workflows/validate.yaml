@@ -1,11 +1,15 @@
 name: validate
 
 # Light-weight structural + syntactic checks on every PR. No Azure or
-# GitHub-App credentials needed, but runs on `[self-hosted]` per
-# PLAN §10 "Runner selection": all adopter workflows use the fleet
-# self-hosted runner pool. The lone exception is template-only
-# workflows (`template-selftest.yaml`, `status-check.yaml`), which are
-# deleted by `init-fleet.sh` and run before any pool exists.
+# GitHub-App credentials needed and no private-network reach required,
+# so every job runs on `ubuntu-24.04` rather than the fleet self-hosted
+# runner pool. Validate is the one workflow that must keep working in
+# the template repo (pre-init, where no pool exists) and in adopter
+# repos when the pool is unhealthy — coupling lint to the pool would
+# remove the only CI signal available during pool recovery. The pool
+# is reserved for jobs that touch tfstate / private KV / private
+# Azure data planes (see PLAN §10 "Runner selection"; tf-plan,
+# tf-apply, env-bootstrap, team-bootstrap).
 #
 # PLAN §10 lists many more checks under `validate.yaml` (JSON-schema for
 # cluster.yaml + teams/*.yaml, team-config linter, helm lint, kargo lint).
@@ -39,7 +43,7 @@ on:
 jobs:
   fmt:
     name: terraform fmt
-    runs-on: [self-hosted]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -66,7 +70,7 @@ jobs:
 
   tflint:
     name: tflint
-    runs-on: [self-hosted]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -127,7 +131,7 @@ jobs:
 
   yamllint:
     name: yamllint
-    runs-on: [self-hosted]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -143,7 +147,7 @@ jobs:
 
   subnet-slots:
     name: subnet slots
-    runs-on: [self-hosted]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -194,7 +198,7 @@ jobs:
 
   naming-parity:
     name: naming parity
-    runs-on: [self-hosted]
+    runs-on: ubuntu-24.04
     # Diffs `terraform/config-loader/load.sh` (shell) against
     # `terraform/modules/fleet-identity/` (HCL) over the shared
     # derivation surface (docs/naming.md). Per AGENTS.md rule 5 the two
